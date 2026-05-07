@@ -25,8 +25,21 @@ log() { printf '%s\n' "$*" >&2; }
 die() { log "ERROR: $*"; exit 1; }
 
 require_file() {
-    [[ -f "$1" ]] || die "missing $1 (run build-index.sh first)"
+    [[ -f "$1" ]] || die "missing $1 (the bootstrap may have failed)"
 }
 require_dir() {
-    [[ -d "$1" ]] || die "missing dir $1 (run update-vendor.sh first)"
+    [[ -d "$1" ]] || die "missing dir $1 (the bootstrap may have failed)"
+}
+
+# Auto-run bootstrap.sh if the vendored content or index is missing.
+# User-facing scripts (doc.sh, search.sh, show-example.sh) call this on entry.
+# bootstrap.sh and build-index.sh do NOT call it (they're the bootstrap itself).
+ensure_bootstrapped() {
+    if [[ ! -d "$DIOXUS/.git" ]] \
+       || [[ ! -d "$DOCSITE/.git" ]] \
+       || [[ ! -f "$INDEX/docs.tsv" ]]; then
+        log "[init] vendor or index missing — running one-time bootstrap (clones + index, ~30-60s)"
+        bash "$PLUGIN_ROOT/skills/dioxus-docs/scripts/bootstrap.sh" >&2 \
+            || die "bootstrap failed; run scripts/bootstrap.sh manually to see full output"
+    fi
 }

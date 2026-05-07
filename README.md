@@ -18,22 +18,15 @@ In a Claude Code session:
 /reload-plugins
 ```
 
-After install, run the plugin's first-time bootstrap script (it clones the
-upstream repos that are intentionally **not** committed to this marketplace):
+That's it. Plugins in this marketplace **self-bootstrap on first use** —
+the first time you invoke a skill or agent from a plugin, its scripts
+auto-clone the vendored upstream content and build any required indexes.
+No manual `bootstrap.sh` invocation is needed.
 
-```bash
-bash ~/.claude/plugins/cache/gaetans-claude-plugins/<plugin-name>/<latest-version>/skills/<skill-name>/scripts/update-vendor.sh
-```
-
-For the `dioxus` plugin specifically:
-
-```bash
-bash ~/.claude/plugins/cache/gaetans-claude-plugins/dioxus/*/skills/dioxus-docs/scripts/update-vendor.sh
-```
-
-This pulls `DioxusLabs/dioxus` (v0.7) and `DioxusLabs/docsite` into the
-plugin's `vendor/` dir, prunes binary asset dirs from the docsite, and
-rebuilds the index.
+> **Note**: on a brand-new install, MCP servers (e.g. Serena) that depend on
+> the vendored content may fail to start at session boot. After the first
+> agent/skill call triggers the bootstrap, run `/reload-plugins` once to bring
+> them up. Subsequent sessions are seamless.
 
 ## What's not in this repo
 

@@ -9,6 +9,7 @@
 
 # shellcheck source=_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+ensure_bootstrapped
 
 list_only=0
 pat=""

@@ -8,6 +8,7 @@
 
 # shellcheck source=_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+ensure_bootstrapped
 
 scope=all
 limit=50

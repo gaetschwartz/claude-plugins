@@ -41,9 +41,21 @@ Fall back to `search.sh --scope=src` only if Serena is unavailable.
 | "How do server functions work?" (concept)       | `doc.sh server_functions` or `search.sh "server functions" --scope=docs` |
 | "Show me a minimal router example"              | `show-example.sh router`            |
 | Free-text search across the world               | `search.sh "<phrase>"`              |
-| Refresh against upstream                        | `update-vendor.sh`                  |
+| Refresh / first-run setup                       | `bootstrap.sh` (auto-runs on first script invocation) |
 
 All scripts write **info to stderr** and **results to stdout**, so they pipe cleanly.
+
+## First-run / refresh — auto-bootstrap
+
+`doc.sh`, `search.sh`, and `show-example.sh` all auto-invoke `bootstrap.sh` the
+first time they run on a fresh install (or after `vendor/` is missing). You
+should never have to run anything manually before using the skill.
+
+> **Caveat for Serena MCP**: if `vendor/dioxus` didn't exist when Claude Code
+> started the plugin, the Serena MCP server failed to start at session boot.
+> After the first script call auto-bootstraps the workspace, run
+> `/reload-plugins` to bring Serena up. Subsequent sessions are fine because
+> `vendor/dioxus` is already there.
 
 ## Scripts
 
@@ -80,13 +92,16 @@ $ show-example.sh router
 vendor/dioxus/examples/06-routing/router.rs
 ```
 
-### `update-vendor.sh`
-`git pull --ff-only` on both clones, prunes docsite asset directories (binary
-images we don't need for text Q&A), and rebuilds the index.
+### `bootstrap.sh`
+Idempotent: clones `vendor/dioxus` (v0.7) and `vendor/docsite` if missing,
+otherwise `git pull --ff-only`. Prunes docsite binary asset directories,
+ensures `rust-analyzer` is installed (brew or rustup), warms `cargo metadata`,
+and rebuilds the index. **Auto-invoked by `doc.sh`/`search.sh`/`show-example.sh`
+on first run.** You can also run it directly to refresh against upstream.
 
 ### `build-index.sh`
-Rebuilds `index/{files,examples,docs}.tsv` from the current vendor
-contents. Run on first install and after any vendor change.
+Sub-step of `bootstrap.sh` that rebuilds `index/{files,examples,docs}.tsv`.
+Not normally invoked directly.
 
 ## Conventions for the agent
 

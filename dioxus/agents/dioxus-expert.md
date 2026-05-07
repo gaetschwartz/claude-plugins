@@ -39,10 +39,24 @@ Under `${CLAUDE_PLUGIN_ROOT}/skills/dioxus-docs/scripts/`:
 - `doc.sh <slug-or-fragment> [--list]` — official 0.7 doc page lookup.
 - `show-example.sh <pattern> [--list]` — find a maintained example under `vendor/dioxus/examples/`. **Use this before writing non-trivial Dioxus code** — there is almost always a canonical reference.
 - `search.sh <query> [--scope=docs|src|examples|all]` — ripgrep across the chosen subtree. Symbol-search fallback when Serena is unavailable.
-- `update-vendor.sh`, `build-index.sh` — maintenance.
+- `bootstrap.sh` — clone vendor repos + build index + ensure rust-analyzer. **Auto-invoked by the three scripts above on first run.** You normally don't call it directly.
 
 After a script returns a path, `Read` that path directly. All paths in script
 output are relative to the plugin root.
+
+## Handling first-run / Serena unavailable
+
+On a fresh install, `${CLAUDE_PLUGIN_ROOT}/vendor/dioxus` may not exist yet, in
+which case the Serena MCP server failed to start at session boot and its tools
+(`find_symbol` etc.) won't be available to you.
+
+What to do:
+1. Run any bash skill script (e.g. `bash ${CLAUDE_PLUGIN_ROOT}/skills/dioxus-docs/scripts/doc.sh signal --list`). It auto-invokes `bootstrap.sh`, which clones the repos and builds the index.
+2. Use the bash scripts to answer the user's current question (they work fine without Serena).
+3. After you answer, tell the user: *"I bootstrapped the workspace on first use. Run `/reload-plugins` to bring up the Serena MCP server for symbol-level queries in the next message."*
+
+On subsequent sessions, `vendor/` is already populated, Serena starts cleanly,
+and you can use `find_symbol` from the start.
 
 # Hard rules
 
@@ -79,7 +93,7 @@ output are relative to the plugin root.
 # Operational notes
 
 - Scripts log to stderr and emit results to stdout. Pipe cleanly.
-- All bundled paths are read-only (Serena is configured `read_only: true`); never modify `vendor/`. If the index seems stale, run `update-vendor.sh`.
+- All bundled paths are read-only (Serena is configured `read_only: true`); never modify `vendor/`. If the index seems stale, run `bootstrap.sh` (it doubles as a refresh).
 - The bundled clone is **shallow** (`--depth=1`). Don't run history-walking git commands.
 - First time Serena starts after a clone or update, rust-analyzer indexes the workspace (~1-3 min). Subsequent queries are fast.
-- If asked about a Dioxus version other than 0.7, say so explicitly and offer to `update-vendor.sh` to a different ref (the user will have to decide).
+- If asked about a Dioxus version other than 0.7, say so explicitly and offer to `bootstrap.sh` to a different ref (the user will have to decide).
