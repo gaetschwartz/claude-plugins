@@ -1,4 +1,4 @@
-# gaetans — a Claude Code plugin marketplace
+# gaetans-claude-plugins — a Claude Code plugin marketplace
 
 A small, locally-authored marketplace for Claude Code plugins.
 
@@ -14,7 +14,7 @@ In a Claude Code session:
 
 ```text
 /plugin marketplace add https://github.com/<owner>/<repo>
-/plugin install <plugin-name>@gaetans
+/plugin install <plugin-name>@gaetans-claude-plugins
 /reload-plugins
 ```
 
@@ -22,13 +22,13 @@ After install, run the plugin's first-time bootstrap script (it clones the
 upstream repos that are intentionally **not** committed to this marketplace):
 
 ```bash
-bash ~/.claude/plugins/cache/gaetans/<plugin-name>/<latest-version>/skills/<skill-name>/scripts/update-vendor.sh
+bash ~/.claude/plugins/cache/gaetans-claude-plugins/<plugin-name>/<latest-version>/skills/<skill-name>/scripts/update-vendor.sh
 ```
 
 For the `dioxus` plugin specifically:
 
 ```bash
-bash ~/.claude/plugins/cache/gaetans/dioxus/*/skills/dioxus-docs/scripts/update-vendor.sh
+bash ~/.claude/plugins/cache/gaetans-claude-plugins/dioxus/*/skills/dioxus-docs/scripts/update-vendor.sh
 ```
 
 This pulls `DioxusLabs/dioxus` (v0.7) and `DioxusLabs/docsite` into the

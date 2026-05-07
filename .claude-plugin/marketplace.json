@@ -1,6 +1,6 @@
 {
   "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
-  "name": "gaetans",
+  "name": "gaetans-claude-plugins",
   "description": "Gaetan's locally-authored Claude Code plugins.",
   "owner": {
     "name": "core"

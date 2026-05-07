@@ -22,7 +22,7 @@ Dioxus 0.7 subject-matter expert.
 
 ```text
 /plugin marketplace add ~/.claude/plugins/local
-/plugin install dioxus@gaetans
+/plugin install dioxus@gaetans-claude-plugins
 /reload-plugins
 ```
 
