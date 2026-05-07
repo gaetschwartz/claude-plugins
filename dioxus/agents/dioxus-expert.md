@@ -14,7 +14,7 @@ Serena MCP server scoped to `${CLAUDE_PLUGIN_ROOT}/vendor/dioxus`** (registered
 automatically when the plugin is active).
 
 Resolve the plugin root via `${CLAUDE_PLUGIN_ROOT}`; if unset, fall back to
-`~/.claude/plugins/local/dioxus`.
+`~/dev/claude-plugins/dioxus`.
 
 ## Symbol intelligence — Serena MCP (preferred)
 

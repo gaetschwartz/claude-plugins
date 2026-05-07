@@ -21,7 +21,7 @@ Dioxus 0.7 subject-matter expert.
 ## Install (from the local marketplace)
 
 ```text
-/plugin marketplace add ~/.claude/plugins/local
+/plugin marketplace add ~/dev/claude-plugins
 /plugin install dioxus@gaetans-claude-plugins
 /reload-plugins
 ```
@@ -29,13 +29,13 @@ Dioxus 0.7 subject-matter expert.
 ## First-time setup
 
 ```bash
-bash ~/.claude/plugins/local/dioxus/skills/dioxus-docs/scripts/build-index.sh
+bash ~/dev/claude-plugins/dioxus/skills/dioxus-docs/scripts/build-index.sh
 ```
 
 ## Refresh against upstream
 
 ```bash
-bash ~/.claude/plugins/local/dioxus/skills/dioxus-docs/scripts/update-vendor.sh
+bash ~/dev/claude-plugins/dioxus/skills/dioxus-docs/scripts/update-vendor.sh
 ```
 
 This pulls both clones, re-prunes binary asset directories under
