@@ -7,5 +7,3 @@ Claude Code plugin that turns a session into a Dioxus 0.7 expert. Bundles the up
 /plugin install dioxus@gaetans-claude-plugins
 /reload-plugins
 ```
-
-The plugin self-bootstraps on first use — no manual setup. After the first agent call on a fresh install, run `/reload-plugins` once to bring the Serena MCP server online.
