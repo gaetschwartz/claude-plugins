@@ -1,0 +1,17 @@
+# Vendored upstream content — re-cloned on demand by each plugin's update-vendor.sh
+*/vendor/
+
+# Generated index files (rebuilt by build-index.sh)
+*/index/
+
+# Rust compiler / rust-analyzer cache (created when Serena MCP runs)
+target/
+*/target/
+**/target/
+
+# Editor / OS noise
+.DS_Store
+*.swp
+*~
+.idea/
+.vscode/

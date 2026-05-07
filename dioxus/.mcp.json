@@ -1,0 +1,15 @@
+{
+  "serena": {
+    "command": "uvx",
+    "args": [
+      "--from",
+      "git+https://github.com/oraios/serena",
+      "serena",
+      "start-mcp-server",
+      "--project",
+      "${CLAUDE_PLUGIN_ROOT}/vendor/dioxus",
+      "--context",
+      "ide-assistant"
+    ]
+  }
+}

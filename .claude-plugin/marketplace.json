@@ -1,0 +1,16 @@
+{
+  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "name": "gaetans",
+  "description": "Gaetan's locally-authored Claude Code plugins.",
+  "owner": {
+    "name": "core"
+  },
+  "plugins": [
+    {
+      "name": "dioxus",
+      "description": "Dioxus 0.7 SME: bundled DioxusLabs/dioxus + DioxusLabs/docsite clones, prebuilt doc/example index, Serena MCP for symbol intelligence, and a dioxus-expert subagent that cites vendor/<path>:<line> for Q&A, codegen, and code review.",
+      "category": "development",
+      "source": "./dioxus"
+    }
+  ]
+}
