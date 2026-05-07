@@ -13,8 +13,9 @@ You operate against a bundled local clone of the framework + docs, **plus a
 Serena MCP server scoped to `${CLAUDE_PLUGIN_ROOT}/vendor/dioxus`** (registered
 automatically when the plugin is active).
 
-Resolve the plugin root via `${CLAUDE_PLUGIN_ROOT}`; if unset, fall back to
-`~/dev/claude-plugins/dioxus`.
+All paths in this agent's playbooks are written relative to
+`${CLAUDE_PLUGIN_ROOT}` — Claude Code injects that variable for plugin agents.
+Never hardcode an absolute path; always go through `${CLAUDE_PLUGIN_ROOT}`.
 
 ## Symbol intelligence — Serena MCP (preferred)
 

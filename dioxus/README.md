@@ -18,25 +18,28 @@ Dioxus 0.7 subject-matter expert.
 - `rust-analyzer` — Serena's Rust language server. `update-vendor.sh` installs it via brew or rustup if missing.
 - ~1GB free disk inside `vendor/dioxus/target/` for rust-analyzer's analysis cache.
 
-## Install (from the local marketplace)
+## Install
 
 ```text
-/plugin marketplace add ~/dev/claude-plugins
+/plugin marketplace add https://github.com/gaetschwartz/claude-plugins
 /plugin install dioxus@gaetans-claude-plugins
 /reload-plugins
 ```
 
-## First-time setup
+## First-time bootstrap (clones vendor/ + builds index)
+
+After install, run the bootstrap script from the installed cache:
 
 ```bash
-bash ~/dev/claude-plugins/dioxus/skills/dioxus-docs/scripts/build-index.sh
+bash "$(ls -d ~/.claude/plugins/cache/gaetans-claude-plugins/dioxus/*/ | tail -1)skills/dioxus-docs/scripts/update-vendor.sh"
 ```
+
+The `update-vendor.sh` script is idempotent: clones from scratch on first run,
+`git pull`s on subsequent runs.
 
 ## Refresh against upstream
 
-```bash
-bash ~/dev/claude-plugins/dioxus/skills/dioxus-docs/scripts/update-vendor.sh
-```
+Re-run the same script — same idempotent behavior.
 
 This pulls both clones, re-prunes binary asset directories under
 `docsite/packages/*/assets/`, ensures `rust-analyzer` is installed, and
