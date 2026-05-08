@@ -10,7 +10,7 @@ description: >
 user-invocable: true
 effort: high
 paths: "**/*.rs"
-argument-hint: "search <q> | read <slug> | example <pattern> | load <topic>"
+argument-hint: "search <q> | read <slug> | example <pattern> | load <topic> | rag <verb>"
 ---
 
 !`${CLAUDE_PLUGIN_ROOT}/skills/dioxus-docs/scripts/dispatch.sh $ARGUMENTS`
@@ -41,6 +41,7 @@ human use, or `bash ${CLAUDE_PLUGIN_ROOT}/skills/dioxus-docs/scripts/dispatch.sh
 | `read <slug-or-fragment> [--list]` | Print a doc page from the Dioxus 0.7 book (~179 pages). Multiple matches → list; `--list` always lists. |
 | `example <pattern> [--list]`      | Find a maintained reference example (~145 apps under `vendor/dioxus/examples/`). |
 | `load <topic>`                    | Load a curated bundle of doc pages. Topics: `state`, `ui`, `fullstack`, `router`, `all`. |
+| `rag <verb> [args]`               | Semantic search over an opt-in vector index. See **RAG (optional)** below. Disabled by default. |
 
 Output convention: progress goes to **stderr**, results to **stdout** — pipes cleanly.
 
@@ -69,6 +70,32 @@ If Serena is unavailable, fall back to `search --scope=src`.
 | "Show me a minimal router example"        | `example router`                    |
 | Free-text search across the world         | `search "<phrase>"`                 |
 | Front-load a curated topic before coding  | `load <topic>`                      |
+| Lexical search misses (paraphrase, concept) | `rag query "<phrase>"` (if enabled) |
+
+## RAG (optional)
+
+Disabled by default. RAG complements lexical `search` with semantic similarity —
+helpful when the user's question paraphrases the docs ("how do I tear down an
+effect?" vs the doc's heading "cleanup functions"), but not necessary for
+exact-term lookups.
+
+**Setup is a user action.** Enabling RAG creates a Python venv, downloads an
+embedding model (~600 MB for `qwen3-embedding:0.6b`), and indexes a book —
+~30 sec for `docs`, a few minutes for `src`. The agent must NOT invoke
+`rag enable | disable | rebuild`; only `rag query | status`.
+
+| Verb                                       | Who | What |
+|--------------------------------------------|-----|------|
+| `rag enable <book> [--model=<tag>]`        | user | Set up venv, pull model, build index for `<book>` (`docs`, `src`, `examples`). |
+| `rag disable <book>`                       | user | Drop the index for `<book>`. |
+| `rag rebuild <book>`                       | user | Re-index `<book>` with the previously-recorded model. |
+| `rag status`                               | both | List enabled books, model, indexed_at. |
+| `rag query <text> [--book=...] [--top-k=N]` | both | Top-k similarity. Output: `path:line<TAB>distance<TAB>snippet`. |
+
+Default model: `qwen3-embedding:0.6b` (Ollama tag). Falls back to
+`sentence-transformers` (HuggingFace download) when Ollama is unreachable on
+`localhost:11434`. Override with `--model=nomic-embed-text` (or any tag your
+Ollama server has pulled / any HF model id) on `rag enable`.
 
 ## First-run / refresh
 

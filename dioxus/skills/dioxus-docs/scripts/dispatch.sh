@@ -23,6 +23,9 @@ Subcommands:
                           Find a maintained example under vendor/dioxus/examples/.
   load <topic>            Load a curated bundle of doc pages for a topic.
                           Topics: state, ui, fullstack, router, all.
+  rag <verb> [args]       Semantic search over an opt-in vector index.
+                          Verbs: enable, disable, rebuild, status, query.
+                          Disabled by default; enable with `rag enable <book>`.
 EOF
 }
 
@@ -39,6 +42,7 @@ case "$cmd" in
     read)           exec bash "$script_dir/doc.sh"           "$@" ;;
     example)        exec bash "$script_dir/show-example.sh"  "$@" ;;
     load)           exec bash "$script_dir/load.sh"          "$@" ;;
+    rag)            exec bash "$script_dir/rag.sh"           "$@" ;;
     -h|--help|help) usage; exit 0 ;;
     *)              log "unknown subcommand: $cmd"; usage; exit 1 ;;
 esac

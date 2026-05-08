@@ -47,6 +47,8 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/dioxus-docs/scripts/dispatch.sh <subcommand> [
 | `read <slug-or-fragment> [--list]`                                  | Print a Dioxus 0.7 doc page. Multiple matches → list; pick a more specific slug. |
 | `example <pattern> [--list]`                                        | Find a maintained reference example. **Run this before writing non-trivial Dioxus code** — there is almost always a canonical reference. |
 | `load <topic>`                                                      | Front-load a curated bundle of doc pages for a topic (`state`, `ui`, `fullstack`, `router`, `all`). |
+| `rag query <text> [--book=docs\|src\|examples\|all] [--top-k=N]`    | **Semantic** search over an opt-in vector index. Use when lexical `search` misses (paraphrased question, conceptual phrasing). Output: `path:line\tdistance\tsnippet`. Returns "no books indexed" if the user hasn't enabled RAG; in that case **do not** enable it yourself — see hard rule 5. |
+| `rag status`                                                        | Read-only: which books are indexed, which model, when. |
 
 After a subcommand returns a path, `Read` that path directly. All paths in
 output are relative to the plugin root. The dispatcher auto-bootstraps the
@@ -73,6 +75,7 @@ and you can use `find_symbol` from the start.
 2. **Never invent an API.** If Serena's `find_symbol` (or the ripgrep fallback) finds no match, that symbol does not exist in Dioxus 0.7. Tell the user; do not fabricate.
 3. **Prefer Serena for Rust questions.** It gives real type/reference info that ripgrep can't. Use ripgrep only when the question is conceptual / free-text or when Serena is offline.
 4. **Versioned answers only.** Everything you say is pinned to the v0.7 branch and the docsite `0.7/src` book. Don't pull in 0.5/0.6 patterns from memory unless the user explicitly asks about migration.
+5. **`rag enable | disable | rebuild` are USER-ONLY.** They install Python deps, download embedding models (~600 MB), and (re)build indexes — all heavyweight side effects. Never invoke them. If `rag query` returns "no books indexed", tell the user they can run e.g. `/dioxus-docs rag enable docs` to enable semantic search; do not enable it on their behalf. `rag query` and `rag status` are fine to use.
 
 # Per-task playbooks
 
@@ -81,7 +84,8 @@ and you can use `find_symbol` from the start.
 2. For each named symbol → Serena `find_symbol`. `Read` the matching file at the returned location. If you also need callers/usages, follow up with `find_referencing_symbols`.
 3. For concepts → `read <closest-slug> --list` to find the page, then `read <slug>` to fetch it. For a curated bundle of pages on a topic, `load <topic>`.
 4. If a symbol query comes up empty in Serena, retry with `search <name> --scope=src`. If the concept query is empty, broaden to `search "<phrase>" --scope=all`.
-5. Answer in your own words. Cite at least one `vendor/<path>:<line>` per claim.
+5. If lexical `search` misses (the user is paraphrasing, asking about a concept by an unfamiliar name, or the docs use different vocabulary), try `rag query "<phrase>"`. It returns the same `path:line` format — `Read` the top hits to verify before citing. Skip if `rag status` shows no books enabled.
+6. Answer in your own words. Cite at least one `vendor/<path>:<line>` per claim.
 
 ## Writing Dioxus code
 1. Find the closest existing example: `example <topic>`. If 0 matches, broaden (e.g. "router" → "routing"). If still 0, `search "<topic>" --scope=examples`.
