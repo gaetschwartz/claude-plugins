@@ -41,7 +41,7 @@ human use, or `bash ${CLAUDE_PLUGIN_ROOT}/skills/dioxus-docs/scripts/dispatch.sh
 | `read <slug-or-fragment> [--list]` | Print a doc page from the Dioxus 0.7 book (~179 pages). Multiple matches → list; `--list` always lists. |
 | `example <pattern> [--list]`      | Find a maintained reference example (~145 apps under `vendor/dioxus/examples/`). |
 | `load <topic>`                    | Load a curated bundle of doc pages. Topics: `state`, `ui`, `fullstack`, `router`, `all`. |
-| `rag <verb> [args]`               | Semantic search over an opt-in vector index. See **RAG (optional)** below. Disabled by default. |
+| `rag <verb> [args]`               | Semantic search over an opt-in vector index. See **RAG (optional)** below. Disabled by default. Use `rag config show` to see what's available + get tailored setup prompts. |
 
 Output convention: progress goes to **stderr**, results to **stdout** — pipes cleanly.
 
@@ -91,11 +91,35 @@ embedding model (~600 MB for `qwen3-embedding:0.6b`), and indexes a book —
 | `rag rebuild <book>`                       | user | Re-index `<book>` with the previously-recorded model. |
 | `rag status`                               | both | List enabled books, model, indexed_at. |
 | `rag query <text> [--book=...] [--top-k=N]` | both | Top-k similarity. Output: `path:line<TAB>distance<TAB>snippet`. |
+| `rag config show`                          | both | Print current backend + model + indexed books + dynamic agent guidance. |
+| `rag config set-backend <name>`            | user | `ollama` \| `openai` \| `sentence-transformers`. Resets the model to the backend's default. |
+| `rag config set-model <name>`              | user | Free-form model id (Ollama tag, OpenAI model name, or HF id). |
+| `rag config set-openai-base <url>`         | user | OpenAI-compatible endpoint (Azure, OpenRouter, vLLM, llama.cpp). |
+| `rag config set-openai-key <KEY>`          | user | Store key in `.rag-config-secrets` (gitignored, chmod 600). `$OPENAI_API_KEY` takes precedence if set. |
+| `rag config reset`                         | user | Restore defaults. |
 
-Default model: `qwen3-embedding:0.6b` (Ollama tag). Falls back to
-`sentence-transformers` (HuggingFace download) when Ollama is unreachable on
-`localhost:11434`. Override with `--model=nomic-embed-text` (or any tag your
-Ollama server has pulled / any HF model id) on `rag enable`.
+### Backends
+
+| Backend                | Default model                | Notes |
+|------------------------|------------------------------|-------|
+| `ollama`               | `qwen3-embedding:0.6b`       | Local. Auto-falls back to sentence-transformers if Ollama isn't reachable. |
+| `openai`               | `text-embedding-3-small`     | Any OpenAI-compatible endpoint via `openai_base_url`. Needs API key. |
+| `sentence-transformers` | `Qwen/Qwen3-Embedding-0.6B` | Pure local, runs in plugin venv (~1 GB on first model). |
+
+### Configuration
+
+`rag config show` is the agent's entry point: it prints the current
+backend/model, probes each backend's readiness (Ollama running? OpenAI key set?
+ST venv ready?), lists indexed books, and emits an **Agent instructions** block
+with verbatim prompts to show the user and the exact commands to run for each
+possible response. The agent should call this *before* asking the user about
+RAG setup — it removes guesswork from the conversation.
+
+Per-book metadata records `{backend, model}` at index time. Queries against an
+older book use its recorded backend, not the current default. This is why
+changing `set-backend` doesn't invalidate existing indexes — but it does mean
+that to migrate a book to a new backend, you must `rag disable <book>` then
+`rag enable <book>`.
 
 ## First-run / refresh
 

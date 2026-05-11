@@ -37,13 +37,15 @@ def main() -> None:
     pooled: list[dict] = []
 
     for book in books:
-        model = books_state[book]["model"]
+        info = books_state[book]
+        model = info["model"]
+        backend = info.get("backend", "ollama")  # back-compat: pre-config-feature books default to ollama
         try:
             coll = client.get_collection(f"book_{book}")
         except Exception as e:
             print(f"[rag-query] WARN: skipping {book}: {e}", file=sys.stderr)
             continue
-        q_emb = embed(model, [args.query])[0]
+        q_emb = embed(model, [args.query], backend=backend, plugin_root=plugin_root)[0]
         res = coll.query(query_embeddings=[q_emb], n_results=args.top_k)
         for i in range(len(res["ids"][0])):
             pooled.append({

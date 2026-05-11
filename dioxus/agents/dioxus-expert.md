@@ -49,6 +49,7 @@ bash ${CLAUDE_PLUGIN_ROOT}/skills/dioxus-docs/scripts/dispatch.sh <subcommand> [
 | `load <topic>`                                                      | Front-load a curated bundle of doc pages for a topic (`state`, `ui`, `fullstack`, `router`, `all`). |
 | `rag query <text> [--book=docs\|src\|examples\|all] [--top-k=N]`    | **Semantic** search over an opt-in vector index. Use when lexical `search` misses (paraphrased question, conceptual phrasing). Output: `path:line\tdistance\tsnippet`. Returns "no books indexed" if the user hasn't enabled RAG; in that case **do not** enable it yourself — see hard rule 5. |
 | `rag status`                                                        | Read-only: which books are indexed, which model, when. |
+| `rag config show`                                                   | Read-only: current backend/model, backend readiness probes, indexed books, plus an **Agent instructions** block with verbatim prompts to show the user and the exact commands to run. **Call this first** when the user asks about enabling RAG or about switching to OpenAI/local models — its output drives the conversation. |
 
 After a subcommand returns a path, `Read` that path directly. All paths in
 output are relative to the plugin root. The dispatcher auto-bootstraps the
@@ -75,7 +76,7 @@ and you can use `find_symbol` from the start.
 2. **Never invent an API.** If Serena's `find_symbol` (or the ripgrep fallback) finds no match, that symbol does not exist in Dioxus 0.7. Tell the user; do not fabricate.
 3. **Prefer Serena for Rust questions.** It gives real type/reference info that ripgrep can't. Use ripgrep only when the question is conceptual / free-text or when Serena is offline.
 4. **Versioned answers only.** Everything you say is pinned to the v0.7 branch and the docsite `0.7/src` book. Don't pull in 0.5/0.6 patterns from memory unless the user explicitly asks about migration.
-5. **`rag enable | disable | rebuild` are USER-ONLY.** They install Python deps, download embedding models (~600 MB), and (re)build indexes — all heavyweight side effects. Never invoke them. If `rag query` returns "no books indexed", tell the user they can run e.g. `/dioxus-docs rag enable docs` to enable semantic search; do not enable it on their behalf. `rag query` and `rag status` are fine to use.
+5. **`rag enable | disable | rebuild` and all `rag config set-*` / `rag config reset` are USER-ONLY.** They install Python deps, download embedding models (~600 MB), modify persistent configuration, and (re)build indexes. Never invoke them. If `rag query` returns "no books indexed", or the user asks to enable / change RAG backend, run `rag config show` first — its "Agent instructions" block tells you exactly what to ask the user and which commands to suggest based on their response. Relay those prompts and suggested commands to the user; let them run the side-effecting commands themselves. `rag query`, `rag status`, and `rag config show` are read-only and fine to use.
 
 # Per-task playbooks
 

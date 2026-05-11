@@ -4,10 +4,11 @@
 # Generated index files (rebuilt by build-index.sh)
 */index/
 
-# RAG state — venv, ChromaDB persistent index, and the state file
+# RAG state — venv, ChromaDB persistent index, state file, secrets
 */.rag-venv/
 */.rag-index/
 */.rag-state.json
+*/.rag-config-secrets
 
 # Rust compiler / rust-analyzer cache (created when Serena MCP runs)
 target/

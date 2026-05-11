@@ -1,11 +1,21 @@
 """Shared RAG utilities for the dioxus-docs skill.
 
 Embedding backends:
-  - Ollama (preferred): HTTP API on localhost:11434.
-  - sentence-transformers (fallback): pure-Python, downloads HF model on first use.
+  - Ollama:                HTTP API on localhost:11434 (or $OLLAMA_URL).
+  - OpenAI:                /v1/embeddings against any OpenAI-compatible endpoint
+                           (api.openai.com, Azure, OpenRouter, vLLM, llama.cpp).
+  - sentence-transformers: pure-Python, downloads HF model on first use.
+
+The active backend per-call is selected by `embed(model, texts, backend, plugin_root)`.
+For Ollama specifically: if the user explicitly configured Ollama but it's
+unreachable at call time, we fall back to sentence-transformers automatically
+(rationale: Ollama is the "local default"; ST is its symmetric local fallback).
+For OpenAI: no auto-fallback — the user opted into a remote API, errors are
+explicit.
 
 Vector store: ChromaDB persistent client at $PLUGIN_ROOT/.rag-index/.
-State:        $PLUGIN_ROOT/.rag-state.json (which books are enabled, model used).
+State:        $PLUGIN_ROOT/.rag-state.json — `{config, books}`.
+Secrets:      $PLUGIN_ROOT/.rag-config-secrets — gitignored, chmod 600.
 """
 
 import json
@@ -24,6 +34,44 @@ HF_ALIAS = {
     "nomic-embed-text": "nomic-ai/nomic-embed-text-v1.5",
 }
 
+
+# --- config & secrets (mirror of rag_config_io.py — kept in sync) ----------
+
+def _default_config() -> dict:
+    return {
+        "backend": "ollama",
+        "model": "qwen3-embedding:0.6b",
+        "openai_base_url": "https://api.openai.com/v1",
+        "openai_api_key_env": "OPENAI_API_KEY",
+    }
+
+
+def load_config(plugin_root: Path) -> dict:
+    state = load_state(plugin_root)
+    cfg = _default_config()
+    cfg.update(state.get("config", {}))
+    return cfg
+
+
+def save_config(plugin_root: Path, **updates) -> None:
+    state = load_state(plugin_root)
+    cfg = state.get("config") or _default_config()
+    cfg.update({k: v for k, v in updates.items() if v is not None})
+    state["config"] = cfg
+    save_state(plugin_root, state)
+
+
+def read_secrets(plugin_root: Path) -> dict:
+    p = plugin_root / ".rag-config-secrets"
+    if not p.exists():
+        return {}
+    try:
+        return json.loads(p.read_text())
+    except json.JSONDecodeError:
+        return {}
+
+
+# --- Ollama -----------------------------------------------------------------
 
 def ollama_alive() -> bool:
     try:
@@ -59,6 +107,38 @@ def ollama_embed(model: str, texts: list[str]) -> list[list[float]]:
     return r.json()["embeddings"]
 
 
+# --- OpenAI / OpenAI-compatible ---------------------------------------------
+
+def _openai_api_key(plugin_root: Path, cfg: dict) -> str:
+    key_env = cfg.get("openai_api_key_env", "OPENAI_API_KEY")
+    key = os.environ.get(key_env) or read_secrets(plugin_root).get(key_env)
+    if not key:
+        sys.exit(
+            f"OpenAI backend selected but no API key found.\n"
+            f"  Either: export {key_env}=sk-...\n"
+            f"  Or run: /dioxus-docs rag config set-openai-key <KEY>"
+        )
+    return key
+
+
+def openai_embed(model: str, texts: list[str], plugin_root: Path) -> list[list[float]]:
+    cfg = load_config(plugin_root)
+    base = cfg.get("openai_base_url", "https://api.openai.com/v1")
+    key = _openai_api_key(plugin_root, cfg)
+    r = requests.post(
+        f"{base.rstrip('/')}/embeddings",
+        headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+        json={"model": model, "input": texts},
+        timeout=300,
+    )
+    if r.status_code != 200:
+        sys.exit(f"OpenAI embed failed ({r.status_code}): {r.text[:500]}")
+    body = r.json()
+    return [item["embedding"] for item in body["data"]]
+
+
+# --- sentence-transformers --------------------------------------------------
+
 _st_cache: dict[str, object] = {}
 
 
@@ -67,7 +147,7 @@ def st_embed(model: str, texts: list[str]) -> list[list[float]]:
         from sentence_transformers import SentenceTransformer  # type: ignore
     except ImportError as e:
         sys.exit(
-            f"sentence-transformers fallback unavailable ({e}). "
+            f"sentence-transformers unavailable ({e}). "
             "Install Ollama (https://ollama.com), or `pip install sentence-transformers` in the venv."
         )
     if model not in _st_cache:
@@ -77,12 +157,34 @@ def st_embed(model: str, texts: list[str]) -> list[list[float]]:
     return _st_cache[model].encode(texts, convert_to_numpy=True).tolist()  # type: ignore[attr-defined]
 
 
-def embed(model: str, texts: list[str]) -> list[list[float]]:
-    """Embed via Ollama if reachable, else fall back to sentence-transformers."""
-    if ollama_alive():
-        return ollama_embed(model, texts)
-    return st_embed(model, texts)
+# --- dispatch ---------------------------------------------------------------
 
+def embed(model: str, texts: list[str], backend: str = "ollama", plugin_root: Path | None = None) -> list[list[float]]:
+    """Embed `texts` with `model` using the named backend.
+
+    Backends:
+      - "ollama": HTTP to OLLAMA_URL. Auto-falls back to sentence-transformers
+        when Ollama is unreachable (preserves the original Ollama+ST fallback
+        UX even when the user has explicitly configured backend=ollama).
+      - "openai": /v1/embeddings against `cfg.openai_base_url` with the API
+        key from $cfg.openai_api_key_env (or the secrets file). No auto-fallback.
+      - "sentence-transformers": local HF model in the plugin venv.
+    """
+    if backend == "ollama":
+        if ollama_alive():
+            return ollama_embed(model, texts)
+        print(f"[rag] Ollama unreachable at {OLLAMA_URL}; falling back to sentence-transformers", file=sys.stderr)
+        return st_embed(model, texts)
+    if backend == "openai":
+        if plugin_root is None:
+            sys.exit("openai backend requires plugin_root (internal error: caller did not pass it)")
+        return openai_embed(model, texts, plugin_root)
+    if backend == "sentence-transformers":
+        return st_embed(model, texts)
+    sys.exit(f"unknown backend: {backend} (valid: ollama, openai, sentence-transformers)")
+
+
+# --- chunking ---------------------------------------------------------------
 
 def chunk_text(text: str, target_chars: int = 1500, overlap_lines: int = 4) -> list[tuple[int, str]]:
     """Split text into overlapping chunks, returning (start_line, chunk_text) tuples.
@@ -108,10 +210,14 @@ def chunk_text(text: str, target_chars: int = 1500, overlap_lines: int = 4) -> l
     return out
 
 
+# --- vector store -----------------------------------------------------------
+
 def chroma_client(plugin_root: Path):
     import chromadb  # lazy import: avoid penalty for non-RAG calls
     return chromadb.PersistentClient(path=str(plugin_root / ".rag-index"))
 
+
+# --- state ------------------------------------------------------------------
 
 def state_path(plugin_root: Path) -> Path:
     return plugin_root / ".rag-state.json"
@@ -125,7 +231,7 @@ def load_state(plugin_root: Path) -> dict:
 
 
 def save_state(plugin_root: Path, state: dict) -> None:
-    state_path(plugin_root).write_text(json.dumps(state, indent=2))
+    state_path(plugin_root).write_text(json.dumps(state, indent=2) + "\n")
 
 
 def now_iso() -> str:
