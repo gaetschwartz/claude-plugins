@@ -1,6 +1,6 @@
 {
   "name": "dioxus",
-  "version": "0.1.0",
-  "description": "Dioxus 0.7 SME: bundled source + docsite + Serena MCP for symbols + dioxus-docs skill (doc/example lookup) + dioxus-expert subagent (Q&A, codegen, review).",
+  "version": "0.2.0",
+  "description": "Dioxus 0.7 SME: bundled source + docsite + Serena MCP for symbols + dioxus-docs skill (doc/example/topic-load + opt-in RAG with Ollama/OpenAI/sentence-transformers backends) + dioxus-expert subagent (Q&A, codegen, review).",
   "keywords": ["dioxus", "rust", "rsx", "ui", "wasm", "fullstack"]
 }
