@@ -18,11 +18,16 @@
 # a mutating op, not a read-only one.
 
 # shellcheck source=_lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 ensure_bootstrapped
 
 RAG_VENV="$PLUGIN_ROOT/.rag-venv"
-SCRIPT_DIR="$(dirname "${BASH_SOURCE[0]}")"
+COMMANDS_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+SCRIPTS_DIR="$(cd "$COMMANDS_DIR/.." && pwd)"
+RAG_DIR="$SCRIPTS_DIR/rag"      # called either with $SYSTEM_PY (config.py,
+                                # stdlib only) or with $RAG_VENV/bin/python
+                                # (lib.py / index.py / query.py, venv-only).
+SETUP_DIR="$SCRIPTS_DIR/setup"
 SYSTEM_PY="$(command -v python3 || true)"
 
 usage() {
@@ -69,10 +74,10 @@ run_in_venv() {
     "$RAG_VENV/bin/python" "$@"
 }
 
-# Read a config field via the stdlib-only config IO script (no venv needed).
+# Read a config field via config.py (stdlib only — no venv needed).
 config_get() {
     [[ -n "$SYSTEM_PY" ]] || die "python3 not found in PATH"
-    "$SYSTEM_PY" "$SCRIPT_DIR/rag_config_io.py" --plugin-root "$PLUGIN_ROOT" get "$1"
+    "$SYSTEM_PY" "$RAG_DIR/config.py" --plugin-root "$PLUGIN_ROOT" get "$1"
 }
 
 # Extract --backend=<v> --model=<v> from argv, leaving the rest in OUT_ARGS.
@@ -105,9 +110,9 @@ case "$verb" in
         set -- "${OUT_ARGS[@]}"
         book="${1:?usage: rag enable <book> [--backend=...] [--model=...]}"
         path="$(book_path "$book")"
-        bash "$SCRIPT_DIR/setup-rag-venv.sh" || die "venv setup failed"
+        bash "$SETUP_DIR/rag-venv.sh" || die "venv setup failed"
         log "[rag] indexing book='$book' from '$path' with backend='$BACKEND' model='$MODEL'"
-        run_in_venv "$SCRIPT_DIR/rag_index.py" \
+        run_in_venv "$RAG_DIR/index.py" \
             --action index \
             --book "$book" \
             --source-dir "$path" \
@@ -118,7 +123,7 @@ case "$verb" in
     disable)
         note_side_effects disable
         book="${1:?usage: rag disable <book>}"
-        run_in_venv "$SCRIPT_DIR/rag_index.py" \
+        run_in_venv "$RAG_DIR/index.py" \
             --action disable \
             --book "$book" \
             --plugin-root "$PLUGIN_ROOT"
@@ -129,12 +134,12 @@ case "$verb" in
         path="$(book_path "$book")"
         # Reuse the backend+model recorded for this book at index time.
         # Fall back to current config defaults if the book isn't in state.
-        recorded_backend=$("$SYSTEM_PY" "$SCRIPT_DIR/rag_config_io.py" --plugin-root "$PLUGIN_ROOT" get-book "$book" backend)
-        recorded_model=$("$SYSTEM_PY"   "$SCRIPT_DIR/rag_config_io.py" --plugin-root "$PLUGIN_ROOT" get-book "$book" model)
+        recorded_backend=$("$SYSTEM_PY" "$RAG_DIR/config.py" --plugin-root "$PLUGIN_ROOT" get-book "$book" backend)
+        recorded_model=$("$SYSTEM_PY"   "$RAG_DIR/config.py" --plugin-root "$PLUGIN_ROOT" get-book "$book" model)
         [[ -n "$recorded_backend" ]] || recorded_backend="$(config_get backend)"
         [[ -n "$recorded_model"   ]] || recorded_model="$(config_get model)"
         log "[rag] rebuilding '$book' from '$path' with backend='$recorded_backend' model='$recorded_model'"
-        run_in_venv "$SCRIPT_DIR/rag_index.py" \
+        run_in_venv "$RAG_DIR/index.py" \
             --action rebuild \
             --book "$book" \
             --source-dir "$path" \
@@ -147,13 +152,13 @@ case "$verb" in
             log "[rag] disabled (no venv yet — run 'rag enable <book>')"
             exit 0
         fi
-        run_in_venv "$SCRIPT_DIR/rag_index.py" \
+        run_in_venv "$RAG_DIR/index.py" \
             --action status \
             --plugin-root "$PLUGIN_ROOT"
         ;;
     query)
         text="${1:?usage: rag query <text> [--book=...] [--top-k=N]}"; shift
-        run_in_venv "$SCRIPT_DIR/rag_query.py" \
+        run_in_venv "$RAG_DIR/query.py" \
             --plugin-root "$PLUGIN_ROOT" \
             --query "$text" \
             "$@"
@@ -164,11 +169,11 @@ case "$verb" in
         [[ $# -gt 0 ]] && shift
         case "$sub" in
             show|"")
-                exec "$SYSTEM_PY" "$SCRIPT_DIR/rag_config_io.py" --plugin-root "$PLUGIN_ROOT" show
+                exec "$SYSTEM_PY" "$RAG_DIR/config.py" --plugin-root "$PLUGIN_ROOT" show
                 ;;
             set-backend|set-model|set-openai-base|set-openai-key|reset)
                 note_side_effects "config $sub"
-                exec "$SYSTEM_PY" "$SCRIPT_DIR/rag_config_io.py" --plugin-root "$PLUGIN_ROOT" "$sub" "$@"
+                exec "$SYSTEM_PY" "$RAG_DIR/config.py" --plugin-root "$PLUGIN_ROOT" "$sub" "$@"
                 ;;
             -h|--help|help)
                 cat >&2 <<'EOF'

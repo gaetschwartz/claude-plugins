@@ -35,7 +35,7 @@ HF_ALIAS = {
 }
 
 
-# --- config & secrets (mirror of rag_config_io.py — kept in sync) ----------
+# --- config & secrets (mirror of rag/config.py — kept in sync) ------------
 
 def _default_config() -> dict:
     return {

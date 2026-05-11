@@ -1,18 +1,29 @@
 #!/usr/bin/env bash
 # Shared helpers for dioxus-docs skill scripts.
-# Sourced by every script in this dir.
+# Sourced (via `source ../_lib.sh` etc.) by every command and setup script.
 
 set -euo pipefail
 
-# Resolve the plugin root, regardless of cwd.
-# Prefer the env var Claude Code injects; fall back to walking up from $0.
+# Capture this file's directory once, so siblings can reference each other
+# regardless of which script sourced us or what cwd was when the chain started.
+# (Symlink-safe: `cd` resolves to the physical path.)
+_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+# Resolve the plugin root. Prefer the env var Claude Code injects at plugin
+# load. Fall back to walking up from _lib.sh until we find the `.claude-plugin`
+# marker dir — robust against future re-organizations (depth-independent).
 if [[ -n "${CLAUDE_PLUGIN_ROOT:-}" ]]; then
     PLUGIN_ROOT="$CLAUDE_PLUGIN_ROOT"
 else
-    _self="${BASH_SOURCE[1]:-${BASH_SOURCE[0]}}"
-    _dir="$(cd "$(dirname "$_self")" && pwd)"
-    # scripts/ -> skills/dioxus-docs/ -> skills/ -> plugin root
-    PLUGIN_ROOT="$(cd "$_dir/../../.." && pwd)"
+    _walk="$_LIB_DIR"
+    while [[ "$_walk" != "/" && ! -d "$_walk/.claude-plugin" ]]; do
+        _walk="$(dirname "$_walk")"
+    done
+    [[ "$_walk" != "/" ]] || {
+        printf 'ERROR: could not find plugin root (no .claude-plugin in any ancestor of %s)\n' "$_LIB_DIR" >&2
+        exit 1
+    }
+    PLUGIN_ROOT="$_walk"
 fi
 
 VENDOR="$PLUGIN_ROOT/vendor"
@@ -31,15 +42,15 @@ require_dir() {
     [[ -d "$1" ]] || die "missing dir $1 (the bootstrap may have failed)"
 }
 
-# Auto-run bootstrap.sh if the vendored content or index is missing.
-# User-facing scripts (doc.sh, search.sh, show-example.sh) call this on entry.
-# bootstrap.sh and build-index.sh do NOT call it (they're the bootstrap itself).
+# Auto-run setup/bootstrap.sh if the vendored content or index is missing.
+# Called by every command script on entry. The bootstrap and build-index
+# scripts themselves do NOT call this — they ARE the bootstrap.
 ensure_bootstrapped() {
     if [[ ! -d "$DIOXUS/.git" ]] \
        || [[ ! -d "$DOCSITE/.git" ]] \
        || [[ ! -f "$INDEX/docs.tsv" ]]; then
         log "[init] vendor or index missing — running one-time bootstrap (clones + index, ~30-60s)"
-        bash "$PLUGIN_ROOT/skills/dioxus-docs/scripts/bootstrap.sh" >&2 \
-            || die "bootstrap failed; run scripts/bootstrap.sh manually to see full output"
+        bash "$_LIB_DIR/setup/bootstrap.sh" >&2 \
+            || die "bootstrap failed; run scripts/setup/bootstrap.sh manually to see full output"
     fi
 }

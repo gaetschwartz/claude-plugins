@@ -3,7 +3,7 @@
 
 Pure stdlib (urllib, json, os, pathlib). Does NOT need the plugin's venv,
 so it runs even before the user has set RAG up. The venv is only needed
-for actually building/querying indexes (handled by rag_index.py / rag_query.py).
+for actually building/querying indexes (handled by index.py / query.py).
 
 Output for `show` is markdown with an "Agent instructions" section that
 tells the calling agent what to ask the user and how to interpret the
@@ -328,7 +328,7 @@ def cmd_reset(plugin_root: Path) -> None:
 # --- main -------------------------------------------------------------------
 
 def main() -> None:
-    ap = argparse.ArgumentParser(prog="rag_config_io.py")
+    ap = argparse.ArgumentParser(prog="rag/config.py")
     ap.add_argument("--plugin-root", required=True)
     sub = ap.add_subparsers(dest="cmd", required=True)
 

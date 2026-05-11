@@ -5,7 +5,7 @@
 # Usage: build-index.sh
 
 # shellcheck source=_lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
 require_dir "$DIOXUS"
 require_dir "$DOCSITE"

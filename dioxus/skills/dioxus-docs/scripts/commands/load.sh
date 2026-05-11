@@ -8,7 +8,7 @@
 # for front-loading into agent context before writing or reviewing Dioxus code.
 
 # shellcheck source=_lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 ensure_bootstrapped
 
 topic="${1:-all}"

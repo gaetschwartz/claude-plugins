@@ -38,11 +38,10 @@ cmd=$1; shift
 script_dir="$(dirname "${BASH_SOURCE[0]}")"
 
 case "$cmd" in
-    search)         exec bash "$script_dir/search.sh"        "$@" ;;
-    read)           exec bash "$script_dir/doc.sh"           "$@" ;;
-    example)        exec bash "$script_dir/show-example.sh"  "$@" ;;
-    load)           exec bash "$script_dir/load.sh"          "$@" ;;
-    rag)            exec bash "$script_dir/rag.sh"           "$@" ;;
-    -h|--help|help) usage; exit 0 ;;
-    *)              log "unknown subcommand: $cmd"; usage; exit 1 ;;
+    search|read|example|load|rag)
+        exec bash "$script_dir/commands/$cmd.sh" "$@" ;;
+    -h|--help|help)
+        usage; exit 0 ;;
+    *)
+        log "unknown subcommand: $cmd"; usage; exit 1 ;;
 esac

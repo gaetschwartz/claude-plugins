@@ -12,7 +12,7 @@
 # against upstream.
 
 # shellcheck source=_lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
 mkdir -p "$VENDOR"
 
@@ -68,7 +68,7 @@ log "[bootstrap] recording refs"
 } > "$VENDOR/.ref"
 
 log "[bootstrap] rebuilding index"
-bash "$PLUGIN_ROOT/skills/dioxus-docs/scripts/build-index.sh"
+bash "$(dirname "${BASH_SOURCE[0]}")/build-index.sh"
 
 #
 # Ensure rust-analyzer is available for Serena MCP.

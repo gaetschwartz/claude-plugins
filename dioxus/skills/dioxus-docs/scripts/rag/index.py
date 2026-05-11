@@ -11,7 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from rag_lib import (
+from lib import (
     chroma_client, embed, load_state, save_state, ollama_alive, ollama_pull,
     chunk_text, now_iso,
 )

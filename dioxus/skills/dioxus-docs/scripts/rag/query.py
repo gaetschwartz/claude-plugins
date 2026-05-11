@@ -9,7 +9,7 @@ import argparse
 import sys
 from pathlib import Path
 
-from rag_lib import chroma_client, embed, load_state
+from lib import chroma_client, embed, load_state
 
 
 def main() -> None:

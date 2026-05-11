@@ -10,7 +10,7 @@
 # To force a clean reinstall: rm -rf .rag-venv
 
 # shellcheck source=_lib.sh
-source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
+source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
 RAG_VENV="$PLUGIN_ROOT/.rag-venv"
 MARKER="$RAG_VENV/.deps-installed"
