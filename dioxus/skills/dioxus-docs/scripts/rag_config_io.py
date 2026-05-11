@@ -202,13 +202,23 @@ def render_show(plugin_root: Path) -> str:
 
 
 def _agent_instructions(*, backend: str, model: str, ollama_ok: bool, openai_ok: bool, st_ok: bool, books: dict, key_env: str) -> list[str]:
+    """Render the state-dependent guidance block.
+
+    Policy: **the agent drives the conversation and runs the commands itself.**
+    Ask the user for inputs (backend choice, API key, model, base URL); then
+    run `rag config set-*` and `rag enable` directly via Bash — don't hand
+    a list of slash commands back for the user to type. Only run `set-*`
+    with values the user explicitly provided in this conversation; never
+    fabricate keys / model names / URLs. Confirm intent before destructive
+    operations (`rag disable`, `rag rebuild`).
+    """
     out = []
 
     if not books:
         # State 1: nothing indexed yet
-        out.append("RAG is not set up. To enable, the user picks a backend and a book.")
+        out.append("**RAG is not set up. You drive setup; the user provides inputs.**")
         out.append("")
-        out.append("If the user hasn't expressed a preference, ask them this verbatim:")
+        out.append("Ask the user this verbatim:")
         out.append("")
         out.append("> Want to enable semantic search over the Dioxus docs? Three options:")
         out.append(">")
@@ -218,26 +228,39 @@ def _agent_instructions(*, backend: str, model: str, ollama_ok: bool, openai_ok:
         out.append(">")
         out.append("> Which would you like?")
         out.append("")
-        out.append("Response handling:")
+        out.append("Then gather inputs and run the commands yourself (do not hand them back to the user):")
         out.append("")
         out.append("- **ollama** →")
         if ollama_ok:
-            out.append("    `/dioxus-docs rag config set-backend ollama` then `/dioxus-docs rag enable docs`.")
+            out.append("    Run: `/dioxus-docs rag config set-backend ollama`")
+            out.append("    Run: `/dioxus-docs rag enable docs`")
+            out.append("    Report when indexing finishes.")
         else:
-            out.append("    Tell user to run `ollama serve` first. Then:")
-            out.append("    `/dioxus-docs rag config set-backend ollama` then `/dioxus-docs rag enable docs`.")
+            out.append("    Ollama is unreachable. Ask the user: \"Please start `ollama serve` in another terminal, then say 'ready'.\"")
+            out.append("    Wait for their confirmation, then:")
+            out.append("    Run: `/dioxus-docs rag config set-backend ollama`")
+            out.append("    Run: `/dioxus-docs rag enable docs`")
+            out.append("    Report when indexing finishes.")
         out.append("- **openai** →")
-        out.append(f"    Check ${key_env}. If unset, ask: \"Set ${key_env} in your shell, or run `/dioxus-docs rag config set-openai-key <KEY>` to store it (gitignored).\"")
-        out.append("    Ask: \"Which model? Default `text-embedding-3-small`. Alternatives: `text-embedding-3-large`.\"")
-        out.append("    Ask if they need a custom base URL (Azure, OpenRouter, vLLM, llama.cpp, etc.).")
-        out.append("    Run: `/dioxus-docs rag config set-backend openai`")
-        out.append("    Then: `/dioxus-docs rag config set-model <model>`")
-        out.append("    Then (if needed): `/dioxus-docs rag config set-openai-base <url>`")
-        out.append("    Then: `/dioxus-docs rag enable docs`")
+        out.append(f"    Ask the user for: (a) API key, unless ${key_env} is already in their environment;")
+        out.append("    (b) model — default `text-embedding-3-small`, alternative `text-embedding-3-large`;")
+        out.append("    (c) custom base URL — only if they're using Azure / OpenRouter / vLLM / llama.cpp etc.")
+        out.append("    Then run, in order, with the values they gave you:")
+        out.append("    `/dioxus-docs rag config set-backend openai`")
+        out.append("    `/dioxus-docs rag config set-openai-key <KEY>`     (skip if env var is already set)")
+        out.append("    `/dioxus-docs rag config set-model <model>`        (skip if default)")
+        out.append("    `/dioxus-docs rag config set-openai-base <url>`    (skip if default)")
+        out.append("    `/dioxus-docs rag enable docs`")
+        out.append("    Report when indexing finishes.")
         out.append("- **sentence-transformers** →")
-        out.append("    Confirm the ~1 GB torch+model download is acceptable.")
-        out.append("    Run: `/dioxus-docs rag config set-backend sentence-transformers`")
-        out.append("    Then: `/dioxus-docs rag enable docs`")
+        out.append("    Confirm the ~1 GB torch+model download is acceptable. Then run:")
+        out.append("    `/dioxus-docs rag config set-backend sentence-transformers`")
+        out.append("    `/dioxus-docs rag enable docs`")
+        out.append("    Report when indexing finishes.")
+        out.append("")
+        out.append("**Rules**:")
+        out.append("- Only run `set-*` with values the user explicitly gave you in this conversation. No fabricated keys, URLs, or model names.")
+        out.append("- State each command before running it (so the user can audit), but don't ask permission for each one once they've consented to the backend.")
         return out
 
     # State 2: at least one book indexed
@@ -252,10 +275,10 @@ def _agent_instructions(*, backend: str, model: str, ollama_ok: bool, openai_ok:
         out.append(f"RAG is configured and working: backend=`{backend}`, model=`{model}`.")
         out.append("")
         out.append("If the user wants to:")
-        out.append("- **add another book**: `/dioxus-docs rag enable src` or `… enable examples` (uses current config).")
-        out.append("- **change backend or model**: `disable` each book → `set-backend` / `set-model` → re-`enable`.")
-        out.append("  (Each book's embeddings are tied to its backend+model — dimensions don't match across.)")
-        out.append("- **refresh content** (after vendor pull): `/dioxus-docs rag rebuild <book>`.")
+        out.append("- **add another book** (`src` / `examples`): ask which, then run `/dioxus-docs rag enable <book>` yourself.")
+        out.append("- **change backend or model**: ask for the new values, confirm migration intent, then run `disable` + `set-*` + `enable` yourself.")
+        out.append("  (Each book's embeddings are tied to its recorded backend+model — dimensions don't match across.)")
+        out.append("- **refresh content** (after a vendor `git pull`): confirm intent, then run `/dioxus-docs rag rebuild <book>` yourself.")
         return out
 
     # State 3: drift — config doesn't match indexed books
@@ -265,7 +288,7 @@ def _agent_instructions(*, backend: str, model: str, ollama_ok: bool, openai_ok:
     out.append("")
     out.append("Queries still work against each book using its recorded backend+model (this is intentional).")
     out.append("")
-    out.append("If the user wants to migrate `<book>` to the current config:")
+    out.append("If the user wants to migrate `<book>` to the current config, confirm intent then run yourself:")
     out.append("  `/dioxus-docs rag disable <book>` then `/dioxus-docs rag enable <book>`")
     return out
 

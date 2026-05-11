@@ -2,19 +2,20 @@
 # RAG sub-dispatcher for the dioxus-docs skill.
 #
 # Verbs:
-#   enable <book>    USER-ONLY. Set up venv, pull model, build index.
-#   disable <book>   USER-ONLY. Drop the index for a book.
-#   rebuild <book>   USER-ONLY. Re-index a book in place.
-#   status           Print enabled books and metadata.
-#   query <q>        Top-k semantic search across enabled books.
-#   config <verb>    Inspect or change the RAG configuration. `show` is agent-
-#                    callable and returns a self-describing block (state +
-#                    suggested user prompt + response handling). set-* are
-#                    USER-ONLY.
+#   enable <book>    Set up venv, pull model, build index. Side effects.
+#   disable <book>   Drop the index for a book. Destructive.
+#   rebuild <book>   Re-index a book in place. Side effects.
+#   status           Print enabled books and metadata. Read-only.
+#   query <q>        Top-k semantic search across enabled books. Read-only.
+#   config <verb>    Inspect or change the RAG configuration.
+#                      show:         read-only, self-describing
+#                      set-* / reset: writes persistent config
 #
-# enable/disable/rebuild perform heavyweight side effects (model download,
-# Python venv install). They MUST only be invoked by the user; the agent's
-# system prompt forbids calling them. The warning printed below is a soft gate.
+# Policy: the agent drives RAG setup conversations (asks the user, runs the
+# commands itself). The agent's system prompt requires explicit user consent
+# before any side-effecting / destructive verb. The note printed below is
+# informational — it tells whoever's reading the stderr stream that this is
+# a mutating op, not a read-only one.
 
 # shellcheck source=_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
@@ -29,24 +30,24 @@ usage() {
 Usage: /dioxus-docs rag <verb> [args]
 
 Verbs:
-  enable <book> [--backend=...] [--model=...]   USER-ONLY
+  enable <book> [--backend=...] [--model=...]   side-effects
                           Set up the RAG venv, pull the embedding model, and
                           build a semantic index for <book>.
                           Books: docs, src, examples.
                           --backend and --model default to the current config
                           (see `rag config show`).
-  disable <book>          USER-ONLY. Drop the index for <book>.
-  rebuild <book>          USER-ONLY. Re-index <book> with the recorded backend+model.
-  status                  List enabled books and metadata.
+  disable <book>          destructive. Drop the index for <book>.
+  rebuild <book>          side-effects. Re-index <book> with the recorded backend+model.
+  status                  read-only. List enabled books and metadata.
   query <text> [--book=docs|src|examples|all] [--top-k=N]
-                          Semantic top-k search. Default --book=all, --top-k=8.
+                          read-only. Semantic top-k search. Default --book=all, --top-k=8.
   config <sub-verb> [args]
-                          show                       — print full config + agent guidance
-                          set-backend <name>         USER-ONLY
-                          set-model <name>           USER-ONLY
-                          set-openai-base <url>      USER-ONLY
-                          set-openai-key <KEY>       USER-ONLY (stored in .rag-config-secrets, chmod 600)
-                          reset                      USER-ONLY
+                          show                       read-only. Full config + agent guidance.
+                          set-backend <name>         writes config
+                          set-model <name>           writes config
+                          set-openai-base <url>      writes config
+                          set-openai-key <KEY>       writes config (stored in .rag-config-secrets, chmod 600)
+                          reset                      writes config
 EOF
 }
 
@@ -59,12 +60,8 @@ book_path() {
     esac
 }
 
-warn_user_only() {
-    log
-    log "[rag] '$1' is a USER-ONLY operation."
-    log "[rag] If an agent triggered this, abort and ask the user."
-    log "[rag] (changes persistent config / installs deps / indexes content)"
-    log
+note_side_effects() {
+    log "[rag] '$1' has side effects (modifies persistent state / installs deps / indexes content)."
 }
 
 run_in_venv() {
@@ -103,7 +100,7 @@ verb=$1; shift
 
 case "$verb" in
     enable)
-        warn_user_only enable
+        note_side_effects enable
         parse_enable_flags "$@"
         set -- "${OUT_ARGS[@]}"
         book="${1:?usage: rag enable <book> [--backend=...] [--model=...]}"
@@ -119,7 +116,7 @@ case "$verb" in
             --model "$MODEL"
         ;;
     disable)
-        warn_user_only disable
+        note_side_effects disable
         book="${1:?usage: rag disable <book>}"
         run_in_venv "$SCRIPT_DIR/rag_index.py" \
             --action disable \
@@ -127,7 +124,7 @@ case "$verb" in
             --plugin-root "$PLUGIN_ROOT"
         ;;
     rebuild)
-        warn_user_only rebuild
+        note_side_effects rebuild
         book="${1:?usage: rag rebuild <book>}"
         path="$(book_path "$book")"
         # Reuse the backend+model recorded for this book at index time.
@@ -170,26 +167,27 @@ case "$verb" in
                 exec "$SYSTEM_PY" "$SCRIPT_DIR/rag_config_io.py" --plugin-root "$PLUGIN_ROOT" show
                 ;;
             set-backend|set-model|set-openai-base|set-openai-key|reset)
-                warn_user_only "config $sub"
+                note_side_effects "config $sub"
                 exec "$SYSTEM_PY" "$SCRIPT_DIR/rag_config_io.py" --plugin-root "$PLUGIN_ROOT" "$sub" "$@"
                 ;;
             -h|--help|help)
                 cat >&2 <<'EOF'
 Usage: rag config <sub-verb> [args]
 
-  show                          Print current config, backend readiness, indexed books,
-                                and an "Agent instructions" block tailored to the state.
-  set-backend <name>            USER-ONLY. ollama | openai | sentence-transformers.
+  show                          read-only. Print current config, backend readiness,
+                                indexed books, and an "Agent instructions" block tailored
+                                to the state.
+  set-backend <name>            writes config. ollama | openai | sentence-transformers.
                                 Resets the model to the backend's default.
-  set-model <name>              USER-ONLY. Free-form model identifier:
+  set-model <name>              writes config. Free-form model identifier:
                                   - ollama tag (e.g. qwen3-embedding:0.6b)
                                   - OpenAI model (e.g. text-embedding-3-small)
                                   - HuggingFace id (e.g. Qwen/Qwen3-Embedding-0.6B)
-  set-openai-base <url>         USER-ONLY. OpenAI-compatible endpoint
+  set-openai-base <url>         writes config. OpenAI-compatible endpoint
                                 (api.openai.com / Azure / OpenRouter / vLLM / llama.cpp).
-  set-openai-key <KEY>          USER-ONLY. Stored in .rag-config-secrets (gitignored, chmod 600).
+  set-openai-key <KEY>          writes config. Stored in .rag-config-secrets (gitignored, chmod 600).
                                 Env var $OPENAI_API_KEY takes precedence if set.
-  reset                         USER-ONLY. Restore defaults.
+  reset                         writes config. Restore defaults.
 EOF
                 ;;
             *)

@@ -79,24 +79,26 @@ helpful when the user's question paraphrases the docs ("how do I tear down an
 effect?" vs the doc's heading "cleanup functions"), but not necessary for
 exact-term lookups.
 
-**Setup is a user action.** Enabling RAG creates a Python venv, downloads an
-embedding model (~600 MB for `qwen3-embedding:0.6b`), and indexes a book —
-~30 sec for `docs`, a few minutes for `src`. The agent must NOT invoke
-`rag enable | disable | rebuild`; only `rag query | status`.
+**Setup is a guided conversation.** Enabling RAG creates a Python venv,
+downloads an embedding model (~600 MB for `qwen3-embedding:0.6b`), and indexes
+a book — ~30 sec for `docs`, a few minutes for `src`. The agent drives the
+conversation: it asks the user for backend choice + inputs, then runs `set-*`
+and `enable` itself. Confirmation is required before destructive verbs
+(`rag disable`, `rag rebuild`).
 
-| Verb                                       | Who | What |
-|--------------------------------------------|-----|------|
-| `rag enable <book> [--model=<tag>]`        | user | Set up venv, pull model, build index for `<book>` (`docs`, `src`, `examples`). |
-| `rag disable <book>`                       | user | Drop the index for `<book>`. |
-| `rag rebuild <book>`                       | user | Re-index `<book>` with the previously-recorded model. |
-| `rag status`                               | both | List enabled books, model, indexed_at. |
-| `rag query <text> [--book=...] [--top-k=N]` | both | Top-k similarity. Output: `path:line<TAB>distance<TAB>snippet`. |
-| `rag config show`                          | both | Print current backend + model + indexed books + dynamic agent guidance. |
-| `rag config set-backend <name>`            | user | `ollama` \| `openai` \| `sentence-transformers`. Resets the model to the backend's default. |
-| `rag config set-model <name>`              | user | Free-form model id (Ollama tag, OpenAI model name, or HF id). |
-| `rag config set-openai-base <url>`         | user | OpenAI-compatible endpoint (Azure, OpenRouter, vLLM, llama.cpp). |
-| `rag config set-openai-key <KEY>`          | user | Store key in `.rag-config-secrets` (gitignored, chmod 600). `$OPENAI_API_KEY` takes precedence if set. |
-| `rag config reset`                         | user | Restore defaults. |
+| Verb                                       | Type          | What |
+|--------------------------------------------|---------------|------|
+| `rag enable <book> [...]`                  | side-effects  | Set up venv, pull model, build index for `<book>` (`docs`, `src`, `examples`). |
+| `rag disable <book>`                       | destructive   | Drop the index for `<book>`. |
+| `rag rebuild <book>`                       | side-effects  | Re-index `<book>` with the recorded backend+model. |
+| `rag status`                               | read-only     | List enabled books, model, indexed_at. |
+| `rag query <text> [--book=...] [--top-k=N]` | read-only    | Top-k similarity. Output: `path:line<TAB>distance<TAB>snippet`. |
+| `rag config show`                          | read-only     | Print current backend + model + indexed books + dynamic agent guidance. |
+| `rag config set-backend <name>`            | writes config | `ollama` \| `openai` \| `sentence-transformers`. Resets the model to the backend's default. |
+| `rag config set-model <name>`              | writes config | Free-form model id (Ollama tag, OpenAI model name, or HF id). |
+| `rag config set-openai-base <url>`         | writes config | OpenAI-compatible endpoint (Azure, OpenRouter, vLLM, llama.cpp). |
+| `rag config set-openai-key <KEY>`          | writes config | Store key in `.rag-config-secrets` (gitignored, chmod 600). `$OPENAI_API_KEY` takes precedence if set. |
+| `rag config reset`                         | writes config | Restore defaults. |
 
 ### Backends
 
@@ -112,8 +114,12 @@ embedding model (~600 MB for `qwen3-embedding:0.6b`), and indexes a book —
 backend/model, probes each backend's readiness (Ollama running? OpenAI key set?
 ST venv ready?), lists indexed books, and emits an **Agent instructions** block
 with verbatim prompts to show the user and the exact commands to run for each
-possible response. The agent should call this *before* asking the user about
-RAG setup — it removes guesswork from the conversation.
+possible response. The agent calls this *before* asking the user about RAG
+setup, then asks the user the verbatim prompt, collects the inputs, and runs
+the `set-*` + `enable` commands itself — the user never types slash commands
+during setup. Confirmation is still required before destructive verbs
+(`rag disable`, `rag rebuild`); the agent must also never run `set-*` with
+fabricated values (no invented keys, model names, or URLs).
 
 Per-book metadata records `{backend, model}` at index time. Queries against an
 older book use its recorded backend, not the current default. This is why
