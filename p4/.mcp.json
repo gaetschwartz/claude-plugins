@@ -1,0 +1,9 @@
+{
+  "p4-knowledge-rag": {
+    "command": "${CLAUDE_PLUGIN_ROOT}/skills/knowledge/scripts/toolkit.sh",
+    "args": ["serve"],
+    "env": {
+      "KNOWLEDGE_RAG_DIR": "${CLAUDE_PLUGIN_ROOT}/knowledge-rag"
+    }
+  }
+}

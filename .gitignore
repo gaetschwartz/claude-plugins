@@ -10,6 +10,12 @@
 */.rag-state.json
 */.rag-config-secrets
 
+# p4 knowledge-rag: regenerable artifacts (rebuilt by scripts/bootstrap.sh) and
+# non-redistributable vendor docs (re-added per machine via the agent)
+p4/knowledge-rag/data/
+p4/knowledge-rag/models_cache
+p4/knowledge-rag/documents/local/
+
 # Rust compiler / rust-analyzer cache (created when Serena MCP runs)
 target/
 */target/
