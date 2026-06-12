@@ -69,7 +69,8 @@ cmd_bootstrap() {
 import sys
 from mcp_server.server import reindex_documents
 result = reindex_documents(full_rebuild=True)
-print(result)
+if result:
+    print(result)
 sys.exit(0 if result else 1)
 PY
   mkdir -p "$(dirname "$MARKER")"
