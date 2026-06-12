@@ -1,0 +1,282 @@
+# ╔══════════════════════════════════════════════════════════════════════════════╗
+# ║                                                                              ║
+# ║              P4 KNOWLEDGE RAG — Specialized configuration                    ║
+# ║                                                                              ║
+# ╚══════════════════════════════════════════════════════════════════════════════╝
+#
+# Optimized for: P4_16 / P4_14 language, P4Runtime, Tofino / bmv2 targets,
+#                bf-sde (open-p4studio), p4c compiler internals, SDN papers.
+#
+# Note: .p4 source files are NOT indexed — knowledge-rag's parser dispatch is
+# hardcoded and rejects unknown extensions. Index P4 documentation (markdown,
+# PDFs, READMEs, control-plane Python, driver C/C++) instead. To index .p4
+# source as plain text, rename or symlink to .txt.
+
+
+# ============================================================================
+# PATHS
+# ============================================================================
+
+paths:
+  documents_dir: "./documents"
+  data_dir: "./data"
+  models_cache_dir: "./models_cache"
+
+
+# ============================================================================
+# DOCUMENTS
+# ============================================================================
+
+documents:
+  supported_formats:
+    - .md        # READMEs, design docs, P4 tutorials
+    - .txt       # Release notes, plain-text P4 spec exports
+    - .pdf       # P4_16 language spec, Tofino datasheets, SIGCOMM papers
+    - .docx      # Vendor docs occasionally distributed as Word
+    - .py        # Control-plane scripts, P4Runtime clients, p4c test harnesses
+    - .c         # Driver code, p4c runtime, bf_switchd internals
+    - .h         # Headers (bf-driver, PI, p4c IR)
+    - .cpp       # p4c internals, simple_switch, bf-p4c
+    - .json      # P4Info, runtime configs, build manifests
+    - .xml       # bf-rt schemas, build descriptors
+
+  exclude_patterns:
+    - ".git"
+    - "build"
+    - "install"
+    - "__pycache__"
+    - ".venv"
+    - "node_modules"
+    - "*.tmp"
+
+  # Larger chunks for dense technical specs (P4 spec, Tofino docs).
+  chunking:
+    chunk_size: 1500
+    chunk_overlap: 300
+
+
+# ============================================================================
+# MODELS
+# ============================================================================
+
+models:
+  embedding:
+    model: "BAAI/bge-small-en-v1.5"
+    dimensions: 384
+    gpu: false
+
+  reranker:
+    enabled: true
+    model: "Xenova/ms-marco-MiniLM-L-6-v2"
+    top_k_multiplier: 3
+
+
+# ============================================================================
+# SEARCH
+# ============================================================================
+
+search:
+  default_results: 5
+  max_results: 20
+  collection_name: "p4_knowledge_base"
+
+
+# ============================================================================
+# CATEGORIES
+# ============================================================================
+# Suggested folder layout under documents/:
+#   documents/
+#   ├── language/        → P4_14 / P4_16 spec, syntax, tutorials
+#   ├── architecture/    → PSA, PNA, TNA, V1Model
+#   ├── compiler/        → p4c, bf-p4c, IR, midend/frontend passes
+#   ├── runtime/         → P4Runtime, P4Info, BF-RT, gRPC, PI, ONOS, Stratum
+#   ├── targets/         → Tofino, Tofino2, bmv2, simple_switch, IPDK
+#   ├── sde/             → bf-sde, open-p4studio, bf_switchd, drivers
+#   ├── examples/        → Sample programs, tutorials, reference designs
+#   └── papers/          → Academic papers, RFCs, whitepapers
+
+category_mappings:
+  "language": "language"
+  "architecture": "architecture"
+  "compiler": "compiler"
+  "runtime": "runtime"
+  "targets": "targets"
+  "sde": "sde"
+  "examples": "examples"
+  "papers": "papers"
+
+
+# ============================================================================
+# KEYWORD ROUTING
+# ============================================================================
+# Bias query results toward a category when these terms appear.
+
+keyword_routes:
+
+  language:
+    - p4_14
+    - p4_16
+    - parser
+    - deparser
+    - control block
+    - match-action
+    - header type
+    - extern
+    - intrinsic metadata
+    - pragma
+    - register
+    - counter
+    - meter
+    - hash
+    - checksum
+    - select
+    - transition
+    - emit
+    - apply
+
+  architecture:
+    - psa
+    - portable switch architecture
+    - pna
+    - portable nic architecture
+    - tna
+    - tofino native architecture
+    - v1model
+    - architecture model
+
+  compiler:
+    - p4c
+    - bf-p4c
+    - p4test
+    - midend
+    - frontend
+    - ir
+    - compiler pass
+    - p4-spec
+    - compilation
+    - code generation
+    - resource allocation
+    - pa.json
+
+  runtime:
+    - p4runtime
+    - p4info
+    - bf-rt
+    - bfrt
+    - grpc
+    - pi
+    - protocol independent
+    - onos
+    - stratum
+    - control plane
+    - table entry
+    - sdn
+
+  targets:
+    - tofino
+    - tofino2
+    - tofino3
+    - bmv2
+    - simple_switch
+    - simple_switch_grpc
+    - barefoot
+    - intel ipdk
+    - smartnic
+    - dpu
+    - asic
+
+  sde:
+    - bf-sde
+    - open-p4studio
+    - bf_switchd
+    - switchd
+    - bf-driver
+    - mau
+    - phv
+    - tcam
+    - sram
+    - traffic manager
+    - parde
+    - parser deparser
+    - clot
+
+  examples:
+    - sample
+    - example program
+    - tutorial
+    - reference design
+    - demo
+
+  papers:
+    - paper
+    - rfc
+    - sigcomm
+    - nsdi
+    - hotnets
+    - ancs
+    - whitepaper
+
+
+# ============================================================================
+# QUERY EXPANSION
+# ============================================================================
+
+query_expansions:
+
+  # --- Core P4 ---
+  p4:                   ["p4", "programming protocol-independent packet processors"]
+  p4_14:                ["p4_14", "p4-14", "p4 14"]
+  p4_16:                ["p4_16", "p4-16", "p4 16"]
+
+  # --- Architectures ---
+  psa:                  ["portable switch architecture", "psa"]
+  pna:                  ["portable nic architecture", "pna"]
+  tna:                  ["tofino native architecture", "tna"]
+  v1model:              ["v1model", "v1 model"]
+
+  # --- Targets ---
+  bmv2:                 ["bmv2", "behavioral model v2", "simple_switch"]
+  tofino:               ["tofino", "barefoot", "intel tofino"]
+  tofino2:              ["tofino2", "tofino 2"]
+  ipdk:                 ["ipdk", "infrastructure programmer development kit"]
+  smartnic:             ["smartnic", "smart nic", "dpu"]
+
+  # --- SDE / drivers ---
+  sde:                  ["sde", "bf-sde", "open-p4studio", "barefoot sde"]
+  bfrt:                 ["bf-rt", "bfrt", "barefoot runtime"]
+  switchd:              ["bf_switchd", "switchd"]
+
+  # --- Compilers ---
+  p4c:                  ["p4c", "p4 compiler"]
+  bf-p4c:               ["bf-p4c", "barefoot compiler"]
+
+  # --- Runtime / control plane ---
+  p4runtime:            ["p4runtime", "p4-runtime", "p4 runtime"]
+  pi:                   ["pi", "protocol independent", "p4 pi"]
+  p4info:               ["p4info", "p4 info"]
+
+  # --- Hardware concepts ---
+  phv:                  ["phv", "packet header vector"]
+  mau:                  ["mau", "match-action unit"]
+  tcam:                 ["tcam", "ternary cam", "ternary content-addressable memory"]
+  sram:                 ["sram", "static ram"]
+  tm:                   ["traffic manager", "tm"]
+  parde:                ["parde", "parser deparser"]
+  clot:                 ["clot", "chunked length offset"]
+
+  # --- Networking domain ---
+  ipsec:                ["ipsec", "ip security"]
+  vxlan:                ["vxlan", "virtual extensible lan"]
+  vlan:                 ["vlan", "virtual lan"]
+  ecmp:                 ["ecmp", "equal-cost multi-path"]
+  acl:                  ["acl", "access control list"]
+  qos:                  ["qos", "quality of service"]
+  l2:                   ["l2", "layer 2"]
+  l3:                   ["l3", "layer 3"]
+  l4:                   ["l4", "layer 4"]
+  nat:                  ["nat", "network address translation"]
+
+  # --- SDN ecosystem ---
+  stratum:              ["stratum", "onf stratum"]
+  onos:                 ["onos", "open network operating system"]
+  ebpf:                 ["ebpf", "extended berkeley packet filter"]

@@ -1,0 +1,8 @@
+{
+  "p4-knowledge-rag": {
+    "command": "${CLAUDE_PLUGIN_ROOT}/scripts/mcp-launch.sh",
+    "env": {
+      "KNOWLEDGE_RAG_DIR": "${CLAUDE_PLUGIN_ROOT}/knowledge-rag"
+    }
+  }
+}
