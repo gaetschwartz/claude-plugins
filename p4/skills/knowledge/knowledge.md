@@ -13,11 +13,11 @@ paper over them.
    plugin under `knowledge-rag/documents/`, queried via the
    `mcp__p4-knowledge-rag__*` tools. Spec/guides are authoritative for *what
    should happen*.
-2. **The user's checked-out source.** `/Users/gaetan/dev/p4/open-p4studio`
-   (bf-sde / open-p4studio) and `/Volumes/T7/dev/p4/` (other P4 projects, incl.
-   `magnetite`). Read with `Grep`/`Glob`/`Read` for driver internals, p4c passes,
-   SDK behaviour not in the corpus. Source is authoritative for *what the code
-   currently does*.
+2. **The user's checked-out source.** If an `open-p4studio` / `bf-sde` clone or
+   other P4 project tree is available (the user's environment or CLAUDE.md gives
+   the path — it is not hardcoded here), read it with `Grep`/`Glob`/`Read` for
+   driver internals, p4c passes, or SDK behaviour not in the corpus. Source is
+   authoritative for *what the code currently does*.
 3. **External fallback.** `WebFetch`/`WebSearch` for material absent from corpus
    and disk: spec errata, p4lang issues, ONOS/Stratum docs, papers. Lowest
    trust; cite the URL.
@@ -46,8 +46,9 @@ section. If the question is answerable purely from the user's phrasing
    `BfRt::TableEntry`): default `hybrid_alpha: 0.3` (keyword-heavy).
 3. **Conceptual / how-to queries** ("how does packet replication work on
    Tofino"): `hybrid_alpha: 0.6` (semantic-heavy).
-4. Narrow with `category` when the domain is known: `language`, `architecture`,
-   `compiler`, `runtime`, `targets`, `sde`, `examples`, `papers`.
+4. Narrow with `category` when the domain is known. Populated in the committed
+   corpus: `language`, `architecture`, `runtime`, `sde`, `examples`. Also valid
+   but currently empty: `compiler`, `targets`, `papers`.
 5. **Cite inline** using the returned `source` + `chunk_index`:
    `[CAP-UG27-005_Bf-Runtime-Guide.pdf §3.2]` or
    `[P4-16-spec-v1.2.5.md "Header types"]`.
