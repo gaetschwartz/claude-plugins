@@ -17,6 +17,12 @@
       "description": "P4 / Tofino SDE SME: bundled source-grounded P4 corpus (P4_16 spec, TNA, BF-Runtime, SDE guides, tutorials) served via a knowledge-rag MCP, and a p4-expert subagent that cites every answer for Q&A, codegen, and review across the full P4 stack (p4c/bf-p4c, P4Runtime/BF-RT, open-p4studio, bmv2/Tofino).",
       "category": "development",
       "source": "./plugins/p4"
+    },
+    {
+      "name": "language-tutor",
+      "category": "education",
+      "source": "./plugins/language-tutor",
+      "description": "Learn a new language with a Claude-powered tutor. The tutor can help you practice reading, writing, and speaking in your target language, and provide feedback on your progress."
     }
   ]
 }
