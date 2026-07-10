@@ -1,0 +1,5 @@
+# knowledge-rag: regenerable artifacts (rebuilt by the knowledge skill's toolkit)
+# and non-redistributable vendor docs (re-added per machine via the agent)
+/knowledge-rag/data/
+/knowledge-rag/models_cache
+/knowledge-rag/documents/local/

@@ -1,0 +1,11 @@
+# Vendored upstream content — re-cloned on demand by setup/bootstrap.sh
+/vendor/
+
+# Generated index files (rebuilt by build-index.sh)
+/index/
+
+# RAG state — venv, ChromaDB persistent index, state file, secrets
+/.rag-venv/
+/.rag-index/
+/.rag-state.json
+/.rag-config-secrets

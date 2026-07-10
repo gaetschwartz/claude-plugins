@@ -1,24 +1,4 @@
-# Vendored upstream content — re-cloned on demand by each plugin's update-vendor.sh
-*/vendor/
-
-# Generated index files (rebuilt by build-index.sh)
-*/index/
-
-# RAG state — venv, ChromaDB persistent index, state file, secrets
-*/.rag-venv/
-*/.rag-index/
-*/.rag-state.json
-*/.rag-config-secrets
-
-# p4 knowledge-rag: regenerable artifacts (rebuilt by scripts/bootstrap.sh) and
-# non-redistributable vendor docs (re-added per machine via the agent)
-p4/knowledge-rag/data/
-p4/knowledge-rag/models_cache
-p4/knowledge-rag/documents/local/
-
 # Rust compiler / rust-analyzer cache (created when Serena MCP runs)
-target/
-*/target/
 **/target/
 
 # Editor / OS noise

@@ -10,13 +10,13 @@
       "name": "dioxus",
       "description": "Dioxus 0.7 SME: bundled DioxusLabs/dioxus + DioxusLabs/docsite clones, prebuilt doc/example index, Serena MCP for symbol intelligence, and a dioxus-expert subagent that cites vendor/<path>:<line> for Q&A, codegen, and code review.",
       "category": "development",
-      "source": "./dioxus"
+      "source": "./plugins/dioxus"
     },
     {
       "name": "p4",
       "description": "P4 / Tofino SDE SME: bundled source-grounded P4 corpus (P4_16 spec, TNA, BF-Runtime, SDE guides, tutorials) served via a knowledge-rag MCP, and a p4-expert subagent that cites every answer for Q&A, codegen, and review across the full P4 stack (p4c/bf-p4c, P4Runtime/BF-RT, open-p4studio, bmv2/Tofino).",
       "category": "development",
-      "source": "./p4"
+      "source": "./plugins/p4"
     }
   ]
 }
