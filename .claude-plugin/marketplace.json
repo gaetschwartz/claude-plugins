@@ -1,9 +1,10 @@
 {
-  "$schema": "https://anthropic.com/claude-code/marketplace.schema.json",
+  "$schema": "https://json.schemastore.org/claude-code-marketplace.json",
   "name": "gaetans-claude-plugins",
+  "version": "1.0.0",
   "description": "Gaetan's locally-authored Claude Code plugins.",
   "owner": {
-    "name": "core"
+    "name": "Gaëtan Schwartz"
   },
   "plugins": [
     {

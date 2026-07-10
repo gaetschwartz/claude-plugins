@@ -1,6 +1,16 @@
 {
   "name": "dioxus",
   "version": "0.3.1",
+  "author": {
+    "name": "Gaëtan Schwartz"
+  },
   "description": "Dioxus 0.7 SME: bundled source + docsite + Serena MCP for symbols + dioxus-docs skill (doc/example/topic-load + opt-in RAG with Ollama/OpenAI/sentence-transformers backends) + dioxus-expert subagent (Q&A, codegen, review).",
-  "keywords": ["dioxus", "rust", "rsx", "ui", "wasm", "fullstack"]
+  "keywords": [
+    "dioxus",
+    "rust",
+    "rsx",
+    "ui",
+    "wasm",
+    "fullstack"
+  ]
 }

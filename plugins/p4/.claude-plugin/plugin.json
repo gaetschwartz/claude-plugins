@@ -1,6 +1,20 @@
 {
   "name": "p4",
   "version": "0.1.0",
+  "author": {
+    "name": "Gaëtan Schwartz"
+  },
   "description": "P4 / Tofino SDE expert: a knowledge-rag MCP server over a bundled, source-grounded P4 corpus (P4_16 spec, TNA, BF-Runtime, SDE guides, tutorials) plus a p4-expert subagent for Q&A, codegen, and review that cites every answer.",
-  "keywords": ["p4", "p4_16", "tofino", "bf-sde", "open-p4studio", "p4runtime", "bfrt", "bmv2", "networking", "rag"]
+  "keywords": [
+    "p4",
+    "p4_16",
+    "tofino",
+    "bf-sde",
+    "open-p4studio",
+    "p4runtime",
+    "bfrt",
+    "bmv2",
+    "networking",
+    "rag"
+  ]
 }

@@ -1,0 +1,9 @@
+{
+  "name": "language-tutor",
+  "version": "0.1.0",
+  "author": {
+    "name": "Gaëtan Schwartz"
+  },
+  "description": "Personal language tutor that teaches any language in the learner's own language, with curriculum, lessons, and spaced-repetition vocabulary, storing all progress in the learner's Notion workspace.",
+  "keywords": ["language", "learning", "tutor", "notion", "vocabulary", "spaced-repetition", "education"]
+}
