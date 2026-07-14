@@ -18,9 +18,22 @@ scripts/sbb.py board  <stop> [options]    # live departures / arrivals
 scripts/sbb.py route  <from> <to> [opts]  # connections A -> B
 ```
 
-Run it with the plugin-relative path, e.g.
-`python3 "$CLAUDE_PLUGIN_ROOT/skills/swiss-transport/scripts/sbb.py" route Bern Zürich`.
-`python3` with the standard library is all it needs.
+The script lives at `scripts/sbb.py` **inside this skill's own directory**, and
+`python3` with the standard library is all it needs. Resolve its absolute path from
+wherever this SKILL.md was loaded — the surface dictates how:
+
+- **Claude Code (plugin):** `"$CLAUDE_PLUGIN_ROOT/skills/swiss-transport/scripts/sbb.py"`.
+- **claude.ai / Claude Desktop / API skills:** `$CLAUDE_PLUGIN_ROOT` does NOT exist
+  there; use the skill's base directory (the path announced when this skill loaded)
+  and append `/scripts/sbb.py`.
+
+If you're unsure of the path on any surface, discover it once and reuse it:
+
+```bash
+SBB=$(find "${CLAUDE_PLUGIN_ROOT:-.}" "$HOME/.claude" /mnt/skills /mnt/user-data . \
+  -name sbb.py -path '*swiss-transport*' 2>/dev/null | head -n1)
+python3 "$SBB" route Bern "Zürich HB"
+```
 
 API text (weekday names, the route header, "stop not found" notices) defaults to
 **English**. Switzerland is multilingual — if the user is writing in French,
