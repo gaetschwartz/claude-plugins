@@ -7,8 +7,9 @@ https://timetable.search.ch/api/<endpoint>.json?<params>
 ```
 
 Only header that matters: `accept-language` (e.g. `de`, `fr`, `it`, `en`) changes
-the language of `description`/message text. Covers all of Switzerland plus
-cross-border links. Read this file only when you need a field the `sbb.py`
+the language of `description`/message text — **omit it and the API answers in
+German**. `sbb.py` sends it for you (`--lang`, default `en`). Covers all of
+Switzerland plus cross-border links. Read this file only when you need a field the `sbb.py`
 output doesn't surface, or when calling the endpoints by hand.
 
 Three endpoints, one per task:

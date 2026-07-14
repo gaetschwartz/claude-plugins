@@ -20,12 +20,20 @@ from datetime import datetime
 BASE = "https://timetable.search.ch/api"
 UA = "claude-swiss-transport-skill/1.0 (+https://timetable.search.ch)"
 
+# Language of the API's localized strings (`description`, "not found" messages,
+# weekday names). Without it search.ch defaults to German. Set from --lang.
+LANG = "en"
+
 
 def _get(endpoint, params):
     # search.ch drops null/empty params server-side; strip them here for tidy URLs.
     query = urllib.parse.urlencode({k: v for k, v in params.items() if v not in (None, "")})
     url = f"{BASE}/{endpoint}.json?{query}"
-    req = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": UA})
+    req = urllib.request.Request(url, headers={
+        "Accept": "application/json",
+        "Accept-Language": LANG,
+        "User-Agent": UA,
+    })
     try:
         with urllib.request.urlopen(req, timeout=20) as resp:
             data = json.loads(resp.read().decode("utf-8"))
@@ -166,16 +174,26 @@ def cmd_route(args):
 
 
 def main():
-    p = argparse.ArgumentParser(description="Query the public search.ch Swiss timetable API.")
-    p.add_argument("--json", action="store_true", help="print raw upstream JSON")
+    # Shared options accepted either before or after the subcommand, so both
+    # `sbb.py --lang fr route ...` and `sbb.py route ... --lang fr` work.
+    # SUPPRESS defaults so a value given before the subcommand isn't clobbered by
+    # the subparser copy's default (argparse writes both into one namespace).
+    common = argparse.ArgumentParser(add_help=False)
+    common.add_argument("--json", action="store_true", default=argparse.SUPPRESS,
+                        help="print raw upstream JSON")
+    common.add_argument("--lang", metavar="L", default=argparse.SUPPRESS,
+                        help="language for API text (en/de/fr/it); default en")
+
+    p = argparse.ArgumentParser(description="Query the public search.ch Swiss timetable API.",
+                                parents=[common])
     sub = p.add_subparsers(dest="cmd", required=True)
 
-    s = sub.add_parser("search", help="resolve a place name to stop id(s)")
+    s = sub.add_parser("search", parents=[common], help="resolve a place name to stop id(s)")
     s.add_argument("term")
     s.add_argument("--limit", type=int, default=8)
     s.set_defaults(func=cmd_search)
 
-    b = sub.add_parser("board", help="live departures/arrivals for a stop")
+    b = sub.add_parser("board", parents=[common], help="live departures/arrivals for a stop")
     b.add_argument("stop", help="stop name or id")
     b.add_argument("--arrivals", action="store_true", help="show arrivals instead of departures")
     b.add_argument("--limit", type=int, default=12)
@@ -183,7 +201,7 @@ def main():
                    help="filter: train tram bus ship cableway")
     b.set_defaults(func=cmd_board)
 
-    r = sub.add_parser("route", help="connections from A to B")
+    r = sub.add_parser("route", parents=[common], help="connections from A to B")
     r.add_argument("origin")
     r.add_argument("destination")
     r.add_argument("--date", help="travel date, format M/D/YYYY (e.g. 7/14/2026)")
@@ -194,6 +212,9 @@ def main():
     r.set_defaults(func=cmd_route)
 
     args = p.parse_args()
+    global LANG
+    LANG = getattr(args, "lang", "en")
+    args.json = getattr(args, "json", False)
     args.func(args)
 
 

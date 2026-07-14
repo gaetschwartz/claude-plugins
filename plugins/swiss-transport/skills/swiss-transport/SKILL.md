@@ -22,6 +22,10 @@ Run it with the plugin-relative path, e.g.
 `python3 "$CLAUDE_PLUGIN_ROOT/skills/swiss-transport/scripts/sbb.py" route Bern Zürich`.
 `python3` with the standard library is all it needs.
 
+API text (weekday names, the route header, "stop not found" notices) defaults to
+**English**. Switzerland is multilingual — if the user is writing in French,
+German, or Italian, pass `--lang fr|de|it` so those strings match their language.
+
 ## Choosing the task
 
 - **"When's the next … / departures from X / what leaves X"** → `board`.
