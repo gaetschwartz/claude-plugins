@@ -18,8 +18,8 @@ scripts/sbb.py board  <stop> [options]    # live departures / arrivals
 scripts/sbb.py route  <from> <to> [opts]  # connections A -> B
 ```
 
-The script is `scripts/sbb.py` in this skill's directory; run it with `python3`
-(standard library only), e.g. `python3 scripts/sbb.py route Bern "Zürich HB"`.
+The script is `scripts/sbb.py` in this skill's directory, e.g.
+`python3 scripts/sbb.py route Bern "Zürich HB"`.
 
 API text (weekday names, the route header, "stop not found" notices) defaults to
 **English**. Switzerland is multilingual — if the user is writing in French,
