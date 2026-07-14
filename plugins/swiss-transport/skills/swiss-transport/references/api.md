@@ -111,7 +111,7 @@ Response:
 
 ```json
 {"count":1,"min_duration":3360,"max_duration":3360,
- "description":"Von Bern nach Zürich HB am Dienstag 14.07.2026",
+ "description":"From Bern to Zürich HB on Tuesday 07/14/2026",
  "connections":[ ... ],
  "points":[{"id":"8507000","text":"Bern", ...}, ...]}
 ```
@@ -150,7 +150,7 @@ doesn't print (intermediate `stops`, colours, coordinates, occupancy).
 - No documented key or hard rate limit, but it is a courtesy-use public API:
   keep calls modest, `search` once to get an id, then reuse the id.
 - Errors: a bad stop yields `200` with a `messages`/`connections:[]` payload
-  (e.g. `"Haltestelle X nicht gefunden."`), not an HTTP error — check for empty
+  (e.g. `"Stop X not found."`), not an HTTP error — check for empty
   `connections`.
 - This is the same backend behind `fahrplan.search.ch`; each route response even
   includes a shareable `url` to the human page.
