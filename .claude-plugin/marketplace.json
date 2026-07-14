@@ -24,6 +24,12 @@
       "category": "education",
       "source": "./plugins/language-tutor",
       "description": "Learn a new language with a Claude-powered tutor. The tutor can help you practice reading, writing, and speaking in your target language, and provide feedback on your progress."
+    },
+    {
+      "name": "swiss-transport",
+      "category": "productivity",
+      "source": "./plugins/swiss-transport",
+      "description": "Accurate Swiss public-transport lookups — train/bus/tram/boat connections, live departure & arrival boards, and station search — via the keyless public search.ch timetable API."
     }
   ]
 }

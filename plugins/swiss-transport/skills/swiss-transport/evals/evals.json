@@ -1,0 +1,26 @@
+{
+  "skill_name": "swiss-transport",
+  "evals": [
+    {
+      "id": 0,
+      "name": "next-train-now",
+      "prompt": "When's the next train from Bern to Zürich HB?",
+      "expected_output": "The next real departure(s) Bern -> Zürich HB from live data: departure time, arrival time, duration, line, any delay. Should come from the search.ch API, not invented from memory.",
+      "files": []
+    },
+    {
+      "id": 1,
+      "name": "departures-board",
+      "prompt": "What are the next few departures from Lausanne gare?",
+      "expected_output": "A live stationboard for Lausanne: several upcoming departures with time, line, destination, and platform. Real API data, not a made-up schedule.",
+      "files": []
+    },
+    {
+      "id": 2,
+      "name": "arrive-by-future-date",
+      "prompt": "I'm in Genève and need to get to Locarno next Monday, arriving before noon. What should I take?",
+      "expected_output": "A connection Genève -> Locarno for next Monday (2026-07-20) that arrives before 12:00, with departure/arrival times, changes, and lines. Must resolve 'next Monday' to a concrete date and use the API's arrival-time mode / a date param, not invent a timetable.",
+      "files": []
+    }
+  ]
+}

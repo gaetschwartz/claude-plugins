@@ -1,0 +1,9 @@
+{
+  "name": "swiss-transport",
+  "version": "0.1.0",
+  "author": {
+    "name": "Gaëtan Schwartz"
+  },
+  "description": "Accurate Swiss public-transport lookups — train/bus/tram/boat connections, live departure & arrival boards, and station search — via the keyless public search.ch timetable API.",
+  "keywords": ["switzerland", "public-transport", "sbb", "cff", "timetable", "search.ch", "trains", "departures"]
+}
