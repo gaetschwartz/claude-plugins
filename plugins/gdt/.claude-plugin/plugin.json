@@ -1,0 +1,9 @@
+{
+  "name": "gdt",
+  "version": "0.1.0",
+  "author": {
+    "name": "Gaëtan Schwartz"
+  },
+  "description": "Gaëtan's dev tooling — a growing collection of personal development-workflow skills. Currently: sdd, an autonomous spec-driven-development pipeline (worktree → specs → plan → adversarial review → subagent-driven execution).",
+  "keywords": ["gdt", "dev-tools", "tooling", "workflow", "sdd", "spec-driven-development", "superpowers", "autonomous"]
+}

@@ -30,6 +30,12 @@
       "category": "productivity",
       "source": "./plugins/swiss-transport",
       "description": "Accurate Swiss public-transport lookups — train/bus/tram/boat connections, live departure & arrival boards, and station search — via the keyless public search.ch timetable API."
+    },
+    {
+      "name": "gdt",
+      "category": "development",
+      "source": "./plugins/gdt",
+      "description": "Gaëtan's dev tooling — a growing collection of personal development-workflow skills. Includes sdd: an autonomous spec-driven-development pipeline (worktree → specs → plan → adversarial review → subagent-driven execution)."
     }
   ]
 }
