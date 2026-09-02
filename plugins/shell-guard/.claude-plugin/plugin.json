@@ -1,0 +1,6 @@
+{
+  "name": "shell-guard",
+  "version": "0.1.0",
+  "description": "PreToolUse guard for Bash: a real shell tokeniser plus small per-command rules. Ships pkill (deny, use kill <pid>), find (deny, use fd) and grep -r (deny, use rg) with a once-per-context cheat sheet; each rule can be toggled with /shell-guard:configure.",
+  "keywords": ["hooks", "bash", "fd", "ripgrep", "pkill", "guardrails"]
+}

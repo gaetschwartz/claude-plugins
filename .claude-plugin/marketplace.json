@@ -36,6 +36,12 @@
       "category": "development",
       "source": "./plugins/gdt",
       "description": "Gaëtan's dev tooling — a growing collection of personal development-workflow skills. Includes sdd: an autonomous spec-driven-development pipeline (worktree → specs → plan → adversarial review → subagent-driven execution)."
+    },
+    {
+      "name": "shell-guard",
+      "category": "productivity",
+      "source": "./plugins/shell-guard",
+      "description": "PreToolUse guard for Bash: shell-lexer-based rules that deny pkill (use kill <pid>), find (use fd) and grep -r (use rg) with a once-per-context cheat sheet; toggle rules with /shell-guard:configure."
     }
   ]
 }

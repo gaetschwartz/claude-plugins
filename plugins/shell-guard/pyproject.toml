@@ -1,0 +1,13 @@
+[project]
+name = "shell-guard"
+version = "0.1.0"
+description = "Claude Code PreToolUse guard for Bash (hook + configure skill); no runtime dependencies"
+requires-python = ">=3.9"
+
+[tool.ruff]
+line-length = 120
+target-version = "py39"
+
+[tool.ty.environment]
+python-version = "3.9"
+extra-paths = ["hooks"]

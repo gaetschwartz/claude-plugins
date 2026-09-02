@@ -1,0 +1,17 @@
+{
+  "description": "shell-guard: rule-based deny/steer for Bash commands",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/shell-guard.sh\"",
+            "timeout": 5
+          }
+        ]
+      }
+    ]
+  }
+}

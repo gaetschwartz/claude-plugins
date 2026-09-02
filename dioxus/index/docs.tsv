@@ -1,0 +1,179 @@
+SUMMARY	Summary	vendor/docsite/docs-src/0.7/src/SUMMARY.md
+beyond/contributing	Contributing	vendor/docsite/docs-src/0.7/src/beyond/contributing.md
+beyond/governance		vendor/docsite/docs-src/0.7/src/beyond/governance.md
+beyond/guiding_principles	Overall Goals	vendor/docsite/docs-src/0.7/src/beyond/guiding_principles.md
+beyond/index	Beyond	vendor/docsite/docs-src/0.7/src/beyond/index.md
+beyond/project_structure	Project Structure	vendor/docsite/docs-src/0.7/src/beyond/project_structure.md
+beyond/walkthrough_readme	Walkthrough of the Hello World Example Internals	vendor/docsite/docs-src/0.7/src/beyond/walkthrough_readme.md
+essentials/advanced/breaking_out	Breaking Out of Dioxus	vendor/docsite/docs-src/0.7/src/essentials/advanced/breaking_out.md
+essentials/advanced/custom_hooks	Custom Hooks	vendor/docsite/docs-src/0.7/src/essentials/advanced/custom_hooks.md
+essentials/advanced/effects		vendor/docsite/docs-src/0.7/src/essentials/advanced/effects.md
+essentials/advanced/essential		vendor/docsite/docs-src/0.7/src/essentials/advanced/essential.md
+essentials/advanced/futures		vendor/docsite/docs-src/0.7/src/essentials/advanced/futures.md
+essentials/advanced/global_state		vendor/docsite/docs-src/0.7/src/essentials/advanced/global_state.md
+essentials/advanced/index	Advanced Topics	vendor/docsite/docs-src/0.7/src/essentials/advanced/index.md
+essentials/advanced/lifecycle	Component Lifecycle	vendor/docsite/docs-src/0.7/src/essentials/advanced/lifecycle.md
+essentials/advanced/memoization		vendor/docsite/docs-src/0.7/src/essentials/advanced/memoization.md
+essentials/advanced/optimization		vendor/docsite/docs-src/0.7/src/essentials/advanced/optimization.md
+essentials/advanced/passing		vendor/docsite/docs-src/0.7/src/essentials/advanced/passing.md
+essentials/advanced/purity		vendor/docsite/docs-src/0.7/src/essentials/advanced/purity.md
+essentials/advanced/reactivity		vendor/docsite/docs-src/0.7/src/essentials/advanced/reactivity.md
+essentials/advanced/routing		vendor/docsite/docs-src/0.7/src/essentials/advanced/routing.md
+essentials/advanced/state		vendor/docsite/docs-src/0.7/src/essentials/advanced/state.md
+essentials/basics/async	Async and Futures	vendor/docsite/docs-src/0.7/src/essentials/basics/async.md
+essentials/basics/collections	Reactive Stores and Collections	vendor/docsite/docs-src/0.7/src/essentials/basics/collections.md
+essentials/basics/context	Global Context	vendor/docsite/docs-src/0.7/src/essentials/basics/context.md
+essentials/basics/effects	Effects and Memos	vendor/docsite/docs-src/0.7/src/essentials/basics/effects.md
+essentials/basics/error_handling	Error handling	vendor/docsite/docs-src/0.7/src/essentials/basics/error_handling.md
+essentials/basics/event_handlers	Handling User Input	vendor/docsite/docs-src/0.7/src/essentials/basics/event_handlers.md
+essentials/basics/external	Working with External State	vendor/docsite/docs-src/0.7/src/essentials/basics/external.md
+essentials/basics/foundations	Foundational Items	vendor/docsite/docs-src/0.7/src/essentials/basics/foundations.md
+essentials/basics/hoisting	Hoisting State	vendor/docsite/docs-src/0.7/src/essentials/basics/hoisting.md
+essentials/basics/hooks	Hooks	vendor/docsite/docs-src/0.7/src/essentials/basics/hooks.md
+essentials/basics/index	The Basics of State	vendor/docsite/docs-src/0.7/src/essentials/basics/index.md
+essentials/basics/reactivity	Intro to Reactivity	vendor/docsite/docs-src/0.7/src/essentials/basics/reactivity.md
+essentials/basics/resources	Data Fetching	vendor/docsite/docs-src/0.7/src/essentials/basics/resources.md
+essentials/basics/signals	Reactive Signals	vendor/docsite/docs-src/0.7/src/essentials/basics/signals.md
+essentials/basics/suspense	Suspense	vendor/docsite/docs-src/0.7/src/essentials/basics/suspense.md
+essentials/fullstack/authentication	Authentication	vendor/docsite/docs-src/0.7/src/essentials/fullstack/authentication.md
+essentials/fullstack/axum	Axum Router	vendor/docsite/docs-src/0.7/src/essentials/fullstack/axum.md
+essentials/fullstack/errors	Fullstack Error Handling	vendor/docsite/docs-src/0.7/src/essentials/fullstack/errors.md
+essentials/fullstack/forms	Forms and Multipart	vendor/docsite/docs-src/0.7/src/essentials/fullstack/forms.md
+essentials/fullstack/headers	Headers and Status	vendor/docsite/docs-src/0.7/src/essentials/fullstack/headers.md
+essentials/fullstack/index	Dioxus Fullstack	vendor/docsite/docs-src/0.7/src/essentials/fullstack/index.md
+essentials/fullstack/loading		vendor/docsite/docs-src/0.7/src/essentials/fullstack/loading.md
+essentials/fullstack/middleware	Middleware	vendor/docsite/docs-src/0.7/src/essentials/fullstack/middleware.md
+essentials/fullstack/native	Native Clients	vendor/docsite/docs-src/0.7/src/essentials/fullstack/native.md
+essentials/fullstack/project_setup	Project Setup	vendor/docsite/docs-src/0.7/src/essentials/fullstack/project_setup.md
+essentials/fullstack/publishing	...	vendor/docsite/docs-src/0.7/src/essentials/fullstack/publishing.md
+essentials/fullstack/routes		vendor/docsite/docs-src/0.7/src/essentials/fullstack/routes.md
+essentials/fullstack/routing	Routing	vendor/docsite/docs-src/0.7/src/essentials/fullstack/routing.md
+essentials/fullstack/server_functions	Server Functions	vendor/docsite/docs-src/0.7/src/essentials/fullstack/server_functions.md
+essentials/fullstack/ssr	Server Side Rendering	vendor/docsite/docs-src/0.7/src/essentials/fullstack/ssr.md
+essentials/fullstack/static_site_generation	Static Site Generation	vendor/docsite/docs-src/0.7/src/essentials/fullstack/static_site_generation.md
+essentials/fullstack/streaming	Streaming	vendor/docsite/docs-src/0.7/src/essentials/fullstack/streaming.md
+essentials/fullstack/streams	Streams and SSE	vendor/docsite/docs-src/0.7/src/essentials/fullstack/streams.md
+essentials/fullstack/websockets	Websockets	vendor/docsite/docs-src/0.7/src/essentials/fullstack/websockets.md
+essentials/index	Core Concepts	vendor/docsite/docs-src/0.7/src/essentials/index.md
+essentials/overview	Core Concepts	vendor/docsite/docs-src/0.7/src/essentials/overview.md
+essentials/router/components		vendor/docsite/docs-src/0.7/src/essentials/router/components.md
+essentials/router/history-buttons		vendor/docsite/docs-src/0.7/src/essentials/router/history-buttons.md
+essentials/router/history-providers		vendor/docsite/docs-src/0.7/src/essentials/router/history-providers.md
+essentials/router/index	Introduction	vendor/docsite/docs-src/0.7/src/essentials/router/index.md
+essentials/router/introduction	Introduction	vendor/docsite/docs-src/0.7/src/essentials/router/introduction.md
+essentials/router/layouts	Layouts	vendor/docsite/docs-src/0.7/src/essentials/router/layouts.md
+essentials/router/navigation	Links & Navigation	vendor/docsite/docs-src/0.7/src/essentials/router/navigation.md
+essentials/router/nested	Nested Routes	vendor/docsite/docs-src/0.7/src/essentials/router/nested.md
+essentials/router/nested-routes		vendor/docsite/docs-src/0.7/src/essentials/router/nested-routes.md
+essentials/router/overview		vendor/docsite/docs-src/0.7/src/essentials/router/overview.md
+essentials/router/redirects	Redirects	vendor/docsite/docs-src/0.7/src/essentials/router/redirects.md
+essentials/router/routes	Defining Routes	vendor/docsite/docs-src/0.7/src/essentials/router/routes.md
+essentials/router/routing-update-callback		vendor/docsite/docs-src/0.7/src/essentials/router/routing-update-callback.md
+essentials/router/static-generation	Static Generation	vendor/docsite/docs-src/0.7/src/essentials/router/static-generation.md
+essentials/setup/configuration		vendor/docsite/docs-src/0.7/src/essentials/setup/configuration.md
+essentials/setup/devserver		vendor/docsite/docs-src/0.7/src/essentials/setup/devserver.md
+essentials/setup/index	Project Setup	vendor/docsite/docs-src/0.7/src/essentials/setup/index.md
+essentials/setup/structure		vendor/docsite/docs-src/0.7/src/essentials/setup/structure.md
+essentials/setup/tooling		vendor/docsite/docs-src/0.7/src/essentials/setup/tooling.md
+essentials/ui/assets	Assets	vendor/docsite/docs-src/0.7/src/essentials/ui/assets.md
+essentials/ui/attributes	Attributes	vendor/docsite/docs-src/0.7/src/essentials/ui/attributes.md
+essentials/ui/children		vendor/docsite/docs-src/0.7/src/essentials/ui/children.md
+essentials/ui/components	Components and Properties	vendor/docsite/docs-src/0.7/src/essentials/ui/components.md
+essentials/ui/conditional	Conditional Rendering	vendor/docsite/docs-src/0.7/src/essentials/ui/conditional.md
+essentials/ui/elements	Elements and Text	vendor/docsite/docs-src/0.7/src/essentials/ui/elements.md
+essentials/ui/escape	Escaping RSX	vendor/docsite/docs-src/0.7/src/essentials/ui/escape.md
+essentials/ui/hotreload	Dioxus Hot-Reloading Reference	vendor/docsite/docs-src/0.7/src/essentials/ui/hotreload.md
+essentials/ui/index	Building User Interfaces	vendor/docsite/docs-src/0.7/src/essentials/ui/index.md
+essentials/ui/iteration	Rendering Lists	vendor/docsite/docs-src/0.7/src/essentials/ui/iteration.md
+essentials/ui/render	Reconciliation: How Components Render	vendor/docsite/docs-src/0.7/src/essentials/ui/render.md
+essentials/ui/rsx	Introducing RSX	vendor/docsite/docs-src/0.7/src/essentials/ui/rsx.md
+essentials/ui/styling	Styling your app	vendor/docsite/docs-src/0.7/src/essentials/ui/styling.md
+getting_started/index	Getting Started	vendor/docsite/docs-src/0.7/src/getting_started/index.md
+getting_started/welcome	Introduction	vendor/docsite/docs-src/0.7/src/getting_started/welcome.md
+guides/apis/components		vendor/docsite/docs-src/0.7/src/guides/apis/components.md
+guides/apis/desktop		vendor/docsite/docs-src/0.7/src/guides/apis/desktop.md
+guides/apis/document		vendor/docsite/docs-src/0.7/src/guides/apis/document.md
+guides/apis/features		vendor/docsite/docs-src/0.7/src/guides/apis/features.md
+guides/apis/history		vendor/docsite/docs-src/0.7/src/guides/apis/history.md
+guides/apis/index		vendor/docsite/docs-src/0.7/src/guides/apis/index.md
+guides/apis/native		vendor/docsite/docs-src/0.7/src/guides/apis/native.md
+guides/apis/sdk		vendor/docsite/docs-src/0.7/src/guides/apis/sdk.md
+guides/apis/window		vendor/docsite/docs-src/0.7/src/guides/apis/window.md
+guides/deploy/android		vendor/docsite/docs-src/0.7/src/guides/deploy/android.md
+guides/deploy/config		vendor/docsite/docs-src/0.7/src/guides/deploy/config.md
+guides/deploy/index	Publishing	vendor/docsite/docs-src/0.7/src/guides/deploy/index.md
+guides/deploy/ios		vendor/docsite/docs-src/0.7/src/guides/deploy/ios.md
+guides/deploy/linux		vendor/docsite/docs-src/0.7/src/guides/deploy/linux.md
+guides/deploy/macos		vendor/docsite/docs-src/0.7/src/guides/deploy/macos.md
+guides/deploy/ssg		vendor/docsite/docs-src/0.7/src/guides/deploy/ssg.md
+guides/deploy/web		vendor/docsite/docs-src/0.7/src/guides/deploy/web.md
+guides/deploy/windows		vendor/docsite/docs-src/0.7/src/guides/deploy/windows.md
+guides/depth/assets		vendor/docsite/docs-src/0.7/src/guides/depth/assets.md
+guides/depth/custom_renderer	Custom Renderer	vendor/docsite/docs-src/0.7/src/guides/depth/custom_renderer.md
+guides/depth/index		vendor/docsite/docs-src/0.7/src/guides/depth/index.md
+guides/index	Dioxus Guides	vendor/docsite/docs-src/0.7/src/guides/index.md
+guides/libraries/index		vendor/docsite/docs-src/0.7/src/guides/libraries/index.md
+guides/organization/index		vendor/docsite/docs-src/0.7/src/guides/organization/index.md
+guides/organization/shared		vendor/docsite/docs-src/0.7/src/guides/organization/shared.md
+guides/organization/single		vendor/docsite/docs-src/0.7/src/guides/organization/single.md
+guides/organization/workspaces		vendor/docsite/docs-src/0.7/src/guides/organization/workspaces.md
+guides/platforms/desktop	Desktop	vendor/docsite/docs-src/0.7/src/guides/platforms/desktop.md
+guides/platforms/index	Platform Support	vendor/docsite/docs-src/0.7/src/guides/platforms/index.md
+guides/platforms/liveview	Liveview	vendor/docsite/docs-src/0.7/src/guides/platforms/liveview.md
+guides/platforms/mobile	Mobile App	vendor/docsite/docs-src/0.7/src/guides/platforms/mobile.md
+guides/platforms/web	Web	vendor/docsite/docs-src/0.7/src/guides/platforms/web.md
+guides/testing/ci		vendor/docsite/docs-src/0.7/src/guides/testing/ci.md
+guides/testing/debugging	Debugging	vendor/docsite/docs-src/0.7/src/guides/testing/debugging.md
+guides/testing/desktop		vendor/docsite/docs-src/0.7/src/guides/testing/desktop.md
+guides/testing/docker		vendor/docsite/docs-src/0.7/src/guides/testing/docker.md
+guides/testing/index	Testing and Debugging	vendor/docsite/docs-src/0.7/src/guides/testing/index.md
+guides/testing/web	Testing	vendor/docsite/docs-src/0.7/src/guides/testing/web.md
+guides/tips/antipatterns	Antipatterns	vendor/docsite/docs-src/0.7/src/guides/tips/antipatterns.md
+guides/tips/index		vendor/docsite/docs-src/0.7/src/guides/tips/index.md
+guides/tips/optimizing	Optimizing	vendor/docsite/docs-src/0.7/src/guides/tips/optimizing.md
+guides/tools/android		vendor/docsite/docs-src/0.7/src/guides/tools/android.md
+guides/tools/bundle		vendor/docsite/docs-src/0.7/src/guides/tools/bundle.md
+guides/tools/configure	Configure Project	vendor/docsite/docs-src/0.7/src/guides/tools/configure.md
+guides/tools/creating	Create a Project	vendor/docsite/docs-src/0.7/src/guides/tools/creating.md
+guides/tools/index	Tools	vendor/docsite/docs-src/0.7/src/guides/tools/index.md
+guides/tools/ios		vendor/docsite/docs-src/0.7/src/guides/tools/ios.md
+guides/tools/serve		vendor/docsite/docs-src/0.7/src/guides/tools/serve.md
+guides/tools/translate	Translating existing HTML	vendor/docsite/docs-src/0.7/src/guides/tools/translate.md
+guides/tools/vscode		vendor/docsite/docs-src/0.7/src/guides/tools/vscode.md
+guides/utilities/index	Utilities	vendor/docsite/docs-src/0.7/src/guides/utilities/index.md
+guides/utilities/internationalization	Internationalization	vendor/docsite/docs-src/0.7/src/guides/utilities/internationalization.md
+guides/utilities/logging	Logging	vendor/docsite/docs-src/0.7/src/guides/utilities/logging.md
+guides/utilities/ssr	Server-Side Rendering	vendor/docsite/docs-src/0.7/src/guides/utilities/ssr.md
+guides/utilities/tailwind	Tailwind	vendor/docsite/docs-src/0.7/src/guides/utilities/tailwind.md
+index	Introduction	vendor/docsite/docs-src/0.7/src/index.md
+introduction/resources	Helpful resources	vendor/docsite/docs-src/0.7/src/introduction/resources.md
+introduction/roadmap	Roadmap	vendor/docsite/docs-src/0.7/src/introduction/roadmap.md
+migration/index	Migration Guides	vendor/docsite/docs-src/0.7/src/migration/index.md
+migration/to_05/fermi	Fermi	vendor/docsite/docs-src/0.7/src/migration/to_05/fermi.md
+migration/to_05/hooks	Hooks	vendor/docsite/docs-src/0.7/src/migration/to_05/hooks.md
+migration/to_05/index	How to Upgrade to Dioxus 0.5	vendor/docsite/docs-src/0.7/src/migration/to_05/index.md
+migration/to_05/props	Props Migration	vendor/docsite/docs-src/0.7/src/migration/to_05/props.md
+migration/to_05/state	State Migration	vendor/docsite/docs-src/0.7/src/migration/to_05/state.md
+migration/to_06	How to Upgrade to Dioxus 0.6	vendor/docsite/docs-src/0.7/src/migration/to_06.md
+migration/to_07	How to Upgrade to Dioxus 0.7	vendor/docsite/docs-src/0.7/src/migration/to_07.md
+router-example/building-a-nest	Building a Nest	vendor/docsite/docs-src/0.7/src/router-example/building-a-nest.md
+router-example/first-route	Creating Our First Route	vendor/docsite/docs-src/0.7/src/router-example/first-route.md
+router-example/full-code	Full Code	vendor/docsite/docs-src/0.7/src/router-example/full-code.md
+router-example/index	Overview	vendor/docsite/docs-src/0.7/src/router-example/index.md
+router-example/navigation-targets	Navigation Targets	vendor/docsite/docs-src/0.7/src/router-example/navigation-targets.md
+router-example/redirection-perfection	Redirection Perfection	vendor/docsite/docs-src/0.7/src/router-example/redirection-perfection.md
+tutorial/assets	Styling and Assets	vendor/docsite/docs-src/0.7/src/tutorial/assets.md
+tutorial/backend	Adding a Backend	vendor/docsite/docs-src/0.7/src/tutorial/backend.md
+tutorial/bundle	Bundling	vendor/docsite/docs-src/0.7/src/tutorial/bundle.md
+tutorial/component	Your First Component	vendor/docsite/docs-src/0.7/src/tutorial/component.md
+tutorial/data_fetching	Fetching Data	vendor/docsite/docs-src/0.7/src/tutorial/data_fetching.md
+tutorial/databases	Working with Databases	vendor/docsite/docs-src/0.7/src/tutorial/databases.md
+tutorial/deploy	Deploying	vendor/docsite/docs-src/0.7/src/tutorial/deploy.md
+tutorial/index	Dioxus Tutorial	vendor/docsite/docs-src/0.7/src/tutorial/index.md
+tutorial/new_app	Creating a new project	vendor/docsite/docs-src/0.7/src/tutorial/new_app.md
+tutorial/next_steps	Wrapping Up	vendor/docsite/docs-src/0.7/src/tutorial/next_steps.md
+tutorial/overview	Dioxus Tutorial	vendor/docsite/docs-src/0.7/src/tutorial/overview.md
+tutorial/routing	Adding More Routes	vendor/docsite/docs-src/0.7/src/tutorial/routing.md
+tutorial/rsx	Describing the UI	vendor/docsite/docs-src/0.7/src/tutorial/rsx.md
+tutorial/state	Interactivity	vendor/docsite/docs-src/0.7/src/tutorial/state.md
+tutorial/tooling	Setting up Tooling	vendor/docsite/docs-src/0.7/src/tutorial/tooling.md

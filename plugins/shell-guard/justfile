@@ -1,0 +1,13 @@
+# Run the hook/skill test suite
+test:
+    python3 tests/test_shell_guard.py
+
+# Lint + type-check (ty needs the hooks dir on its search path)
+check:
+    uvx ruff check .
+    uvx ty check --extra-search-path hooks .
+
+# Validate the plugin manifest and skill frontmatter with Claude Code
+validate:
+    claude plugin validate .
+    claude plugin validate skills

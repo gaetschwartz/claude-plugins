@@ -1,0 +1,145 @@
+api	01-app-demos	vendor/dioxus/examples/01-app-demos/ecommerce-site/src/api.rs	
+backend	01-app-demos	vendor/dioxus/examples/01-app-demos/hotdog/src/backend.rs	
+calculator	01-app-demos	vendor/dioxus/examples/01-app-demos/calculator.rs	Calculator
+calculator_mutable	01-app-demos	vendor/dioxus/examples/01-app-demos/calculator_mutable.rs	This example showcases a simple calculator using an approach to state management where the state is composed of only
+counters	01-app-demos	vendor/dioxus/examples/01-app-demos/counters.rs	A simple counters example that stores a list of items in a vec and then iterates over them.
+crm	01-app-demos	vendor/dioxus/examples/01-app-demos/crm.rs	Tiny CRM - A simple CRM app using the Router component and global signals
+dog_app	01-app-demos	vendor/dioxus/examples/01-app-demos/dog_app.rs	This example demonstrates a simple app that fetches a list of dog breeds and displays a random dog.
+error	01-app-demos	vendor/dioxus/examples/01-app-demos/ecommerce-site/src/components/error.rs	
+error	01-app-demos	vendor/dioxus/examples/01-app-demos/geolocation-native-plugin/src/plugin/error.rs	
+frontend	01-app-demos	vendor/dioxus/examples/01-app-demos/hotdog/src/frontend.rs	
+hello_world	01-app-demos	vendor/dioxus/examples/01-app-demos/hello_world.rs	The simplest example of a Dioxus app.
+home	01-app-demos	vendor/dioxus/examples/01-app-demos/ecommerce-site/src/components/home.rs	
+image_generator_openai	01-app-demos	vendor/dioxus/examples/01-app-demos/image_generator_openai.rs	
+loading	01-app-demos	vendor/dioxus/examples/01-app-demos/ecommerce-site/src/components/loading.rs	
+main	01-app-demos	vendor/dioxus/examples/01-app-demos/bluetooth-scanner/src/main.rs	
+main	01-app-demos	vendor/dioxus/examples/01-app-demos/ecommerce-site/src/main.rs	
+main	01-app-demos	vendor/dioxus/examples/01-app-demos/file-explorer/src/main.rs	Example: File Explorer
+main	01-app-demos	vendor/dioxus/examples/01-app-demos/geolocation-native-plugin/src/main.rs	A simple Dioxus app demonstrating how to build a native plugin using manganis.
+main	01-app-demos	vendor/dioxus/examples/01-app-demos/hackernews/src/main.rs	
+main	01-app-demos	vendor/dioxus/examples/01-app-demos/hotdog/src/main.rs	
+mod	01-app-demos	vendor/dioxus/examples/01-app-demos/geolocation-native-plugin/src/plugin/mod.rs	Dioxus Geolocation Plugin
+models	01-app-demos	vendor/dioxus/examples/01-app-demos/geolocation-native-plugin/src/plugin/models.rs	
+nav	01-app-demos	vendor/dioxus/examples/01-app-demos/ecommerce-site/src/components/nav.rs	
+product_item	01-app-demos	vendor/dioxus/examples/01-app-demos/ecommerce-site/src/components/product_item.rs	
+product_page	01-app-demos	vendor/dioxus/examples/01-app-demos/ecommerce-site/src/components/product_page.rs	
+repo_readme	01-app-demos	vendor/dioxus/examples/01-app-demos/repo_readme.rs	The example from the readme!
+todomvc	01-app-demos	vendor/dioxus/examples/01-app-demos/todomvc.rs	The typical TodoMVC app, implemented in Dioxus.
+todomvc_store	01-app-demos	vendor/dioxus/examples/01-app-demos/todomvc_store.rs	The typical TodoMVC app, implemented in Dioxus with stores. Stores let us
+weather_app	01-app-demos	vendor/dioxus/examples/01-app-demos/weather_app.rs	
+websocket_chat	01-app-demos	vendor/dioxus/examples/01-app-demos/websocket_chat.rs	A websocket chat demo using Dioxus' built-in websocket support.
+checkbox_radio	02-building-ui	vendor/dioxus/examples/02-building-ui/checkbox_radio.rs	Checkboxes and radio groups.
+children	02-building-ui	vendor/dioxus/examples/02-building-ui/children.rs	Accepting children on a component.
+components	02-building-ui	vendor/dioxus/examples/02-building-ui/components.rs	Defining and using components.
+conditional_rendering	02-building-ui	vendor/dioxus/examples/02-building-ui/conditional_rendering.rs	Conditional rendering.
+counter	02-building-ui	vendor/dioxus/examples/02-building-ui/counter.rs	The classic counter — the "hello world" of reactive UI.
+disabled	02-building-ui	vendor/dioxus/examples/02-building-ui/disabled.rs	A simple demonstration of how to set attributes on buttons to disable them.
+dynamic_classes	02-building-ui	vendor/dioxus/examples/02-building-ui/dynamic_classes.rs	Applying classes and styles based on state.
+event_handler_prop	02-building-ui	vendor/dioxus/examples/02-building-ui/event_handler_prop.rs	Passing event handlers as props.
+forms	02-building-ui	vendor/dioxus/examples/02-building-ui/forms.rs	Handling form submission and deserializing into a struct.
+inputs	02-building-ui	vendor/dioxus/examples/02-building-ui/inputs.rs	Controlled text inputs.
+lists	02-building-ui	vendor/dioxus/examples/02-building-ui/lists.rs	Rendering lists.
+nested_listeners	02-building-ui	vendor/dioxus/examples/02-building-ui/nested_listeners.rs	Nested Listeners
+svg	02-building-ui	vendor/dioxus/examples/02-building-ui/svg.rs	Thanks to @japsu and their project https://github.com/japsu/jatsi for the example!
+css_modules	03-assets-styling	vendor/dioxus/examples/03-assets-styling/css_modules.rs	This example shows how to use css modules with the `css_module` macro. Css modules convert css
+custom_assets	03-assets-styling	vendor/dioxus/examples/03-assets-styling/custom_assets.rs	A simple example on how to use assets loading from the filesystem.
+document_title	03-assets-styling	vendor/dioxus/examples/03-assets-styling/document_title.rs	Setting the page title.
+dynamic_assets	03-assets-styling	vendor/dioxus/examples/03-assets-styling/dynamic_assets.rs	This example shows how to load in custom assets with the use_asset_handler hook.
+dynamic_styles	03-assets-styling	vendor/dioxus/examples/03-assets-styling/dynamic_styles.rs	Styling driven by state.
+favicon	03-assets-styling	vendor/dioxus/examples/03-assets-styling/favicon.rs	Setting a favicon.
+fonts	03-assets-styling	vendor/dioxus/examples/03-assets-styling/fonts.rs	Loading fonts — from a CDN and bundled with the app.
+inline_styles	03-assets-styling	vendor/dioxus/examples/03-assets-styling/inline_styles.rs	Inline styles.
+meta	03-assets-styling	vendor/dioxus/examples/03-assets-styling/meta.rs	This example shows how to add metadata to the page with the Meta component
+script	03-assets-styling	vendor/dioxus/examples/03-assets-styling/script.rs	Adding a script to the document head.
+stylesheet	03-assets-styling	vendor/dioxus/examples/03-assets-styling/stylesheet.rs	Linking a CSS stylesheet.
+context_api	04-managing-state	vendor/dioxus/examples/04-managing-state/context_api.rs	Demonstrates cross-component state sharing using Dioxus' Context API
+custom_hook	04-managing-state	vendor/dioxus/examples/04-managing-state/custom_hook.rs	Writing your own hook.
+error_handling	04-managing-state	vendor/dioxus/examples/04-managing-state/error_handling.rs	This example showcases how to use the ErrorBoundary component to handle errors in your app.
+global	04-managing-state	vendor/dioxus/examples/04-managing-state/global.rs	Example: Global signals and memos
+lifting_state	04-managing-state	vendor/dioxus/examples/04-managing-state/lifting_state.rs	Sharing state between sibling components by lifting it up.
+memo_chain	04-managing-state	vendor/dioxus/examples/04-managing-state/memo_chain.rs	This example shows how you can chain memos together to create a tree of memoized values.
+read_signal	04-managing-state	vendor/dioxus/examples/04-managing-state/read_signal.rs	Passing a read-only signal to a child component.
+reducer	04-managing-state	vendor/dioxus/examples/04-managing-state/reducer.rs	Example: Reducer Pattern
+signals	04-managing-state	vendor/dioxus/examples/04-managing-state/signals.rs	A simple example demonstrating how to use signals to modify state from several different places.
+struct_signal	04-managing-state	vendor/dioxus/examples/04-managing-state/struct_signal.rs	A signal that holds a struct.
+use_effect	04-managing-state	vendor/dioxus/examples/04-managing-state/use_effect.rs	Running side effects when state changes.
+use_memo	04-managing-state	vendor/dioxus/examples/04-managing-state/use_memo.rs	Deriving values with `use_memo`.
+vec_signal	04-managing-state	vendor/dioxus/examples/04-managing-state/vec_signal.rs	Signals that hold a collection.
+backgrounded_futures	05-using-async	vendor/dioxus/examples/05-using-async/backgrounded_futures.rs	Backgrounded futures example
+clock	05-using-async	vendor/dioxus/examples/05-using-async/clock.rs	A simple little clock that updates the time every few milliseconds.
+future	05-using-async	vendor/dioxus/examples/05-using-async/future.rs	A simple example that shows how to use the use_future hook to run a background task.
+streams	05-using-async	vendor/dioxus/examples/05-using-async/streams.rs	Handle async streams using use_future and awaiting the next value.
+suspense	05-using-async	vendor/dioxus/examples/05-using-async/suspense.rs	Suspense in Dioxus
+flat_router	06-routing	vendor/dioxus/examples/06-routing/flat_router.rs	This example shows how to use the `Router` component to create a simple navigation system.
+hash_fragment_state	06-routing	vendor/dioxus/examples/06-routing/hash_fragment_state.rs	This example shows how to use the hash segment to store state in the url.
+link	06-routing	vendor/dioxus/examples/06-routing/link.rs	How to use links in Dioxus
+query_segment_search	06-routing	vendor/dioxus/examples/06-routing/query_segment_search.rs	This example shows how to access and use query segments present in an url on the web.
+router	06-routing	vendor/dioxus/examples/06-routing/router.rs	An advanced usage of the router with nested routes and redirects.
+router_resource	06-routing	vendor/dioxus/examples/06-routing/router_resource.rs	Example: Updating components with use_resource
+router_restore_scroll	06-routing	vendor/dioxus/examples/06-routing/router_restore_scroll.rs	
+simple_router	06-routing	vendor/dioxus/examples/06-routing/simple_router.rs	A simple example of a router with a few routes and a nav bar.
+auth	07-fullstack	vendor/dioxus/examples/07-fullstack/auth/src/auth.rs	The code here is pulled from the `axum-session-auth` crate examples, requiring little to no
+custom_axum_serve	07-fullstack	vendor/dioxus/examples/07-fullstack/custom_axum_serve.rs	This example demonstrates how to use `dioxus::serve` with a custom Axum router.
+custom_error_page	07-fullstack	vendor/dioxus/examples/07-fullstack/custom_error_page.rs	To render custom error pages, you can create a layout component that captures errors from routes
+dog_app_self_hosted	07-fullstack	vendor/dioxus/examples/07-fullstack/dog_app_self_hosted.rs	This example showcases a fullstack variant of the "dog app" demo, but with the loader and actions
+full_request_access	07-fullstack	vendor/dioxus/examples/07-fullstack/full_request_access.rs	This example shows how to get access to the full axum request in a handler.
+fullstack_hello_world	07-fullstack	vendor/dioxus/examples/07-fullstack/fullstack_hello_world.rs	A simple example using Dioxus Fullstack to call a server action.
+handling_errors	07-fullstack	vendor/dioxus/examples/07-fullstack/handling_errors.rs	An example of handling errors from server functions.
+header_map	07-fullstack	vendor/dioxus/examples/07-fullstack/header_map.rs	This example shows how you can extract a HeaderMap from requests to read custom headers.
+login_form	07-fullstack	vendor/dioxus/examples/07-fullstack/login_form.rs	This example demonstrates how to use types like `Form`, `SetHeader`, and `TypedHeader`
+main	07-fullstack	vendor/dioxus/examples/07-fullstack/auth/src/main.rs	This example showcases how to use the `axum-session-auth` crate with Dioxus fullstack.
+main	07-fullstack	vendor/dioxus/examples/07-fullstack/desktop/src/main.rs	
+main	07-fullstack	vendor/dioxus/examples/07-fullstack/hello-world/src/main.rs	A simple hello world example for Dioxus fullstack
+main	07-fullstack	vendor/dioxus/examples/07-fullstack/router/src/main.rs	Run with:
+main	07-fullstack	vendor/dioxus/examples/07-fullstack/ssr-only/src/main.rs	This example showcases how to use Fullstack in a server-side rendering only context.
+middleware	07-fullstack	vendor/dioxus/examples/07-fullstack/middleware.rs	This example shows how to use middleware in a fullstack Dioxus app.
+multipart_form	07-fullstack	vendor/dioxus/examples/07-fullstack/multipart_form.rs	This example showcases how to handle multipart form data uploads in Dioxus.
+query_params	07-fullstack	vendor/dioxus/examples/07-fullstack/query_params.rs	An example showcasing query parameters in Dioxus Fullstack server functions.
+redirect	07-fullstack	vendor/dioxus/examples/07-fullstack/redirect.rs	This example shows how to use the axum `Redirect` type to redirect the client to a different URL.
+server_functions	07-fullstack	vendor/dioxus/examples/07-fullstack/server_functions.rs	This example is a simple showcase of Dioxus Server Functions.
+server_sent_events	07-fullstack	vendor/dioxus/examples/07-fullstack/server_sent_events.rs	This example demonstrates server-sent events (SSE) using Dioxus Fullstack.
+server_state	07-fullstack	vendor/dioxus/examples/07-fullstack/server_state.rs	This example shows how to use global state to maintain state between server functions.
+streaming	07-fullstack	vendor/dioxus/examples/07-fullstack/streaming.rs	This example shows how to use the `Streaming<T, E>` type to send streaming responses from the
+streaming_file_upload	07-fullstack	vendor/dioxus/examples/07-fullstack/streaming_file_upload.rs	This example showcases how to upload files from the client to the server.
+through_reqwest	07-fullstack	vendor/dioxus/examples/07-fullstack/through_reqwest.rs	This example demonstrates that dioxus server functions can be called directly as a Rust
+websocket	07-fullstack	vendor/dioxus/examples/07-fullstack/websocket.rs	This example showcases the built-in websocket functionality in Dioxus Fullstack.
+control_focus	08-apis	vendor/dioxus/examples/08-apis/control_focus.rs	Managing focus
+custom_html	08-apis	vendor/dioxus/examples/08-apis/custom_html.rs	This example shows how to use a custom index.html and custom <HEAD> extensions
+custom_menu	08-apis	vendor/dioxus/examples/08-apis/custom_menu.rs	This example shows how to use a custom menu bar with Dioxus desktop.
+drag_and_drop	08-apis	vendor/dioxus/examples/08-apis/drag_and_drop.rs	This example shows how to implement a simple drag-and-drop kanban board using Dioxus.
+eval	08-apis	vendor/dioxus/examples/08-apis/eval.rs	This example shows how to use the `eval` function to run JavaScript code in the webview.
+file_upload	08-apis	vendor/dioxus/examples/08-apis/file_upload.rs	This example shows how to use the `file` methods on FormEvent and DragEvent to handle file uploads and drops.
+form	08-apis	vendor/dioxus/examples/08-apis/form.rs	Forms
+logging	08-apis	vendor/dioxus/examples/08-apis/logging.rs	Dioxus ships out-of-the-box with tracing hooks that integrate with the Dioxus-CLI.
+multiwindow	08-apis	vendor/dioxus/examples/08-apis/multiwindow.rs	Multiwindow example
+multiwindow_with_tray_icon	08-apis	vendor/dioxus/examples/08-apis/multiwindow_with_tray_icon.rs	Multiwindow with tray icon example
+on_resize	08-apis	vendor/dioxus/examples/08-apis/on_resize.rs	Run a callback
+on_visible	08-apis	vendor/dioxus/examples/08-apis/on_visible.rs	Port of the https://codepen.io/ryanfinni/pen/VwZeGxN example
+overlay	08-apis	vendor/dioxus/examples/08-apis/overlay.rs	This example demonstrates how to create an overlay window with dioxus.
+read_size	08-apis	vendor/dioxus/examples/08-apis/read_size.rs	Read the size of elements using the MountedData struct.
+scroll_to_offset	08-apis	vendor/dioxus/examples/08-apis/scroll_to_offset.rs	Scroll elements using their MountedData
+scroll_to_top	08-apis	vendor/dioxus/examples/08-apis/scroll_to_top.rs	Scroll elements using their MountedData
+shortcut	08-apis	vendor/dioxus/examples/08-apis/shortcut.rs	Add global shortcuts to your app while a component is active
+ssr	08-apis	vendor/dioxus/examples/08-apis/ssr.rs	Example: SSR
+title	08-apis	vendor/dioxus/examples/08-apis/title.rs	This example shows how to set the title of the page or window with the Title component
+video_stream	08-apis	vendor/dioxus/examples/08-apis/video_stream.rs	Using `wry`'s http module, we can stream a video file from the local file system.
+wgpu_child_window	08-apis	vendor/dioxus/examples/08-apis/wgpu_child_window.rs	Demonstrate how to use dioxus as a child window for use in alternative renderers like wgpu.
+window_event	08-apis	vendor/dioxus/examples/08-apis/window_event.rs	This example demonstrates how to handle window events and change window properties.
+window_focus	08-apis	vendor/dioxus/examples/08-apis/window_focus.rs	Listen for window focus events using a wry event handler
+window_popup	08-apis	vendor/dioxus/examples/08-apis/window_popup.rs	This example shows how to create a popup window and send data back to the parent window.
+window_zoom	08-apis	vendor/dioxus/examples/08-apis/window_zoom.rs	Adjust the zoom of a desktop app
+all_events	09-reference	vendor/dioxus/examples/09-reference/all_events.rs	This example shows how to listen to all events on a div and log them to the console.
+generic_component	09-reference	vendor/dioxus/examples/09-reference/generic_component.rs	This example demonstrates how to create a generic component in Dioxus.
+optional_props	09-reference	vendor/dioxus/examples/09-reference/optional_props.rs	Optional props
+rsx_usage	09-reference	vendor/dioxus/examples/09-reference/rsx_usage.rs	A tour of the rsx! macro
+shorthand	09-reference	vendor/dioxus/examples/09-reference/shorthand.rs	Dioxus supports shorthand syntax for creating elements and components.
+simple_list	09-reference	vendor/dioxus/examples/09-reference/simple_list.rs	A few ways of mapping elements into rsx! syntax
+spread	09-reference	vendor/dioxus/examples/09-reference/spread.rs	This example demonstrates how to use the spread operator to pass attributes to child components.
+web_component	09-reference	vendor/dioxus/examples/09-reference/web_component.rs	Dioxus allows webcomponents to be created with a simple syntax.
+xss_safety	09-reference	vendor/dioxus/examples/09-reference/xss_safety.rs	XSS Safety
+demo_renderer	10-integrations	vendor/dioxus/examples/10-integrations/wgpu-texture/src/demo_renderer.rs	
+main	10-integrations	vendor/dioxus/examples/10-integrations/native-headless/src/main.rs	A "sketch" of how to integrate a Dioxus Native app to into a wider application
+main	10-integrations	vendor/dioxus/examples/10-integrations/pwa/src/main.rs	
+main	10-integrations	vendor/dioxus/examples/10-integrations/tailwind/src/main.rs	
+main	10-integrations	vendor/dioxus/examples/10-integrations/wgpu-texture/src/main.rs	
+scrape_examples	scripts	vendor/dioxus/examples/scripts/scrape_examples.rs	
