@@ -4,6 +4,21 @@
   "author": {
     "name": "Gaëtan Schwartz"
   },
-  "description": "Gaëtan's dev tooling — a growing collection of personal development-workflow skills. Currently: sdd, an autonomous spec-driven-development pipeline (worktree → specs → plan → adversarial review → subagent-driven execution).",
-  "keywords": ["gdt", "dev-tools", "tooling", "workflow", "sdd", "spec-driven-development", "superpowers", "autonomous"]
+  "description": "Gaëtan's dev tooling — a growing collection of personal development-workflow skills. sdd: an autonomous spec-driven-development pipeline (worktree → specs → plan → adversarial review → subagent-driven execution). memory-optimization: a subagent fan-out that fact-checks a Claude Code memory store against the live system, then consolidates it and rebuilds MEMORY.md.",
+  "keywords": [
+    "autonomous",
+    "claude-memory",
+    "consolidation",
+    "dev-tools",
+    "fact-check",
+    "gdt",
+    "memory",
+    "memory-optimization",
+    "pruning",
+    "sdd",
+    "spec-driven-development",
+    "superpowers",
+    "tooling",
+    "workflow"
+  ]
 }

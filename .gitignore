@@ -8,3 +8,4 @@
 .idea/
 .vscode/
 __pycache__/
+.ruff_cache/

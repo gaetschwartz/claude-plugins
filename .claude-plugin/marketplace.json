@@ -35,7 +35,7 @@
       "name": "gdt",
       "category": "development",
       "source": "./plugins/gdt",
-      "description": "Gaëtan's dev tooling — a growing collection of personal development-workflow skills. Includes sdd: an autonomous spec-driven-development pipeline (worktree → specs → plan → adversarial review → subagent-driven execution)."
+      "description": "Gaëtan's dev tooling — personal development-workflow skills. sdd: autonomous spec-driven development (worktree → specs → plan → adversarial review → execution). memory-optimization: fan-out audit that fact-checks a Claude Code memory store against the live system, consolidates it, and rebuilds MEMORY.md."
     },
     {
       "name": "shell-guard",
