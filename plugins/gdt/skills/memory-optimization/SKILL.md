@@ -65,7 +65,7 @@ just set `mode`.
 ### 1. Back up first, always
 
 ```bash
-python3 scripts/memory_tools.py backup <memory-dir> --dest <session-scratchpad>
+uv run scripts/memory_tools.py backup <memory-dir> --dest <session-scratchpad>
 ```
 
 Writes a timestamped tarball plus an uncompressed *pristine* copy. `--dest` defaults
@@ -116,9 +116,9 @@ Save the workflow's tool result to a file — the next steps read it.
 ### 3. Repair links, rebuild the index, validate
 
 ```bash
-python3 scripts/memory_tools.py repair <memory-dir> --reports <result.json>
-python3 scripts/memory_tools.py rebuild-index <memory-dir> --reports <result.json>
-python3 scripts/memory_tools.py validate <memory-dir>
+uv run scripts/memory_tools.py repair <memory-dir> --reports <result.json>
+uv run scripts/memory_tools.py rebuild-index <memory-dir> --reports <result.json>
+uv run scripts/memory_tools.py validate <memory-dir> --pristine <pristine-dir>
 ```
 
 `repair` normalizes every `name:` slug, then repoints `[[links]]` whose targets were
@@ -127,6 +127,13 @@ that never existed are *reported, not deleted* — decide those by hand.
 `rebuild-index` regenerates `MEMORY.md` and refuses to write if the reports and disk
 disagree. `validate` is the final gate: frontmatter, slug/filename agreement,
 dangling links, index coverage.
+
+Pass `--pristine` to `validate` and it also reports frontmatter keys a file has
+lost. This catches a specific, silent failure: the memory subsystem writes
+provenance under `metadata:` (`node_type`, `originSessionId`, `modified`) that the
+format template does not mention, and an agent tidying a file toward the template
+will delete it. The briefs tell agents to preserve unrecognised metadata keys, but
+verify rather than trust — the loss is invisible in a diff of the prose.
 
 Run `validate` even after a `factcheck`-only run. Cross-batch link rot is invisible
 to individual agents by construction, so it is nearly always present and nearly
@@ -149,6 +156,9 @@ These live in the briefs inside `workflow.js`. Change them there, not here.
 - **The pristine copy predates the fact-check**, so a claim missing from a
   consolidated file may have been removed *because it was proven false*. Loss-check
   verifies against the live system before restoring anything.
+- **Metadata keys the template does not document are preserved verbatim.** They are
+  provenance written by the memory subsystem, not by the author, and cannot be
+  regenerated once dropped.
 
 ## Knowing when to stop
 
@@ -182,4 +192,5 @@ decisive.
 
 - `scripts/workflow.js` — planner + four stages, with all agent briefs
 - `scripts/memory_tools.py` — `backup`, `survey`, `repair`, `rebuild-index`, `validate`
-  (`survey` is for eyeballing the store yourself; the planner does its own listing)
+  (`survey` is for eyeballing the store yourself; the planner does its own listing).
+  Stdlib-only with a PEP 723 header, so `uv run scripts/memory_tools.py …` just works.

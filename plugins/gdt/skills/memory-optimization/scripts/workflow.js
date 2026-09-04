@@ -53,7 +53,14 @@ metadata:
 
 Type meanings — \`user\`: who the owner is. \`feedback\`: guidance on how Claude should
 work, with the why. \`project\`: ongoing work, goals or constraints not derivable from
-code or config; dates must be absolute. \`reference\`: durable external facts and pointers.`
+code or config; dates must be absolute. \`reference\`: durable external facts and pointers.
+
+**Preserve any other keys already under \`metadata:\` verbatim** — \`node_type\`,
+\`originSessionId\`, \`modified\` and anything else you do not recognise. The memory
+subsystem writes those, not the author; they are provenance, and deleting them
+because they are absent from the template above destroys data you cannot regenerate.
+\`type\` is the only metadata key you set. When you merge files, carry the surviving
+file's own metadata block forward.`
 
 const RULES = `## Hard constraints
 

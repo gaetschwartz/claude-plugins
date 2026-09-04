@@ -73,6 +73,11 @@ class Frontmatter:
     name: str | None
     description: str | None
     type: str | None
+    keys: frozenset[str]
+    """Every key present in the block, including provenance the memory subsystem
+    writes (node_type, originSessionId, modified). Agents that "normalize" a file
+    against the documented template tend to delete these, so they are tracked to
+    make that loss visible."""
 
     @classmethod
     def parse(cls, text: str) -> Self | None:
@@ -85,7 +90,10 @@ class Frontmatter:
             found = re.search(rf"(?m)^\s*{key}:\s*(.+)$", block)
             return found.group(1).strip() if found else None
 
-        return cls(field_value("name"), field_value("description"), field_value("type"))
+        keys = frozenset(re.findall(r"(?m)^\s*([A-Za-z_][\w-]*):", block))
+        return cls(
+            field_value("name"), field_value("description"), field_value("type"), keys
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -360,7 +368,29 @@ def validate_file(
     return problems
 
 
-def cmd_validate(directory: Path, keep: Iterable[str]) -> None:
+def frontmatter_losses(files: Sequence[MemoryFile], pristine: Path) -> list[str]:
+    """Keys a file used to carry and no longer does.
+
+    Provenance under `metadata:` is written by the memory subsystem and is absent
+    from the format template, so an agent tidying a file toward the template will
+    silently drop it. Only files still present in both are compared — a merged-away
+    file legitimately no longer exists.
+    """
+    problems: list[str] = []
+    for memo in files:
+        before = pristine / memo.name
+        if not before.is_file():
+            continue
+        old = Frontmatter.parse(before.read_text())
+        new = memo.frontmatter
+        if old is None or new is None:
+            continue
+        for key in sorted(old.keys - new.keys):
+            problems.append(f"FRONTMATTER KEY LOST: {memo.name} no longer has `{key}:`")
+    return problems
+
+
+def cmd_validate(directory: Path, keep: Iterable[str], pristine: Path | None) -> None:
     files = load_all(directory)
     live = frozenset(m.stem_slug for m in files)
     keep_set = frozenset(keep)
@@ -368,6 +398,8 @@ def cmd_validate(directory: Path, keep: Iterable[str]) -> None:
     problems: list[str] = []
     for memo in files:
         problems += validate_file(memo, live, keep_set)
+    if pristine is not None:
+        problems += frontmatter_losses(files, pristine.expanduser().resolve())
 
     index = directory / INDEX_NAME
     if index.exists():
@@ -445,6 +477,11 @@ def build_parser() -> argparse.ArgumentParser:
     validate.add_argument(
         "--keep", nargs="*", default=[], help="literal [[strings]] that are not links"
     )
+    validate.add_argument(
+        "--pristine",
+        type=Path,
+        help="the backup's pristine dir; also reports frontmatter keys a file has lost",
+    )
 
     return parser
 
@@ -465,7 +502,7 @@ def main() -> None:
         case "rebuild-index":
             cmd_rebuild_index(directory, args.reports, args.force)
         case "validate":
-            cmd_validate(directory, args.keep)
+            cmd_validate(directory, args.keep, args.pristine)
         case unknown:
             raise SystemExit(f"unknown command: {unknown}")
 
