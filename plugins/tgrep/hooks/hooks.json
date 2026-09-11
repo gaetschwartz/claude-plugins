@@ -1,0 +1,27 @@
+{
+  "description": "tgrep server keeper: on SessionStart, if the session runs inside a git repository, starts `tgrep serve <root>` unless `tgrep status` already reports a reachable server; on SessionEnd stops the server it started once no tracked session uses that root. Enabled by default; disable via the tgrep:hook skill or TGREP_SERVE_HOOK=0.",
+  "hooks": {
+    "SessionStart": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/tgrep-serve.py\"",
+            "timeout": 20
+          }
+        ]
+      }
+    ],
+    "SessionEnd": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/tgrep-serve.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

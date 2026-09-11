@@ -42,6 +42,12 @@
       "category": "productivity",
       "source": "./plugins/shell-guard",
       "description": "PreToolUse guard for Bash: shell-lexer-based rules that deny pkill (use kill <pid>), find (use fd) and grep -r (use rg) with a once-per-context cheat sheet; toggle rules with /shell-guard:configure."
+    },
+    {
+      "name": "tgrep",
+      "category": "development",
+      "source": "./plugins/tgrep",
+      "description": "Search with tgrep (Microsoft's trigram-indexed, ripgrep-compatible grep) instead of the Grep tool — a SessionStart hook keeps a tgrep server warm per repository without double-serving, a search skill that loads live index state and gets command shape, scoping and freshness right, and a hook skill to disable, exclude a repo, or stop a server."
     }
   ]
 }

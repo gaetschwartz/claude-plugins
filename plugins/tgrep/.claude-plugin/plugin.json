@@ -1,0 +1,23 @@
+{
+  "name": "tgrep",
+  "version": "0.1.0",
+  "author": {
+    "name": "Gaëtan Schwartz"
+  },
+  "description": "Search with tgrep (Microsoft's trigram-indexed, ripgrep-compatible grep) instead of the Grep tool: a SessionStart hook keeps a `tgrep serve` running for the repository (never double-serving, stopped when the last session leaves), a search skill that loads live index/server state and gets the command shape, scoping and freshness right, and a hook skill to disable, exclude a repo, or stop a server.",
+  "keywords": [
+    "tgrep",
+    "grep",
+    "ripgrep",
+    "rg",
+    "search",
+    "code-search",
+    "trigram",
+    "index",
+    "monorepo",
+    "large-repo",
+    "serve",
+    "session-start",
+    "hook"
+  ]
+}
