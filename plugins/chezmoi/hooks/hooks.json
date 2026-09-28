@@ -1,0 +1,41 @@
+{
+  "description": "chezmoi drift advisor: snapshots `chezmoi status` before and after each file-changing tool call and tells the agent which managed files that call left out of sync, with the correct command to persist them. Catches edits made by any means, including shell redirects and scripts. Enabled by default; disable via the chezmoi:hook skill or CHEZMOI_DRIFT_HOOK=0.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/chezmoi-drift.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "Bash|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/chezmoi-drift.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|Edit|Write|NotebookEdit",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/hooks/chezmoi-drift.py\"",
+            "timeout": 15
+          }
+        ]
+      }
+    ]
+  }
+}

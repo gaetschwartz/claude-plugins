@@ -1,0 +1,20 @@
+{
+  "name": "chezmoi",
+  "version": "0.2.0",
+  "author": {
+    "name": "Gaëtan Schwartz"
+  },
+  "description": "chezmoi dotfile-manager expertise — source-state attribute grammar, templating, scripts, externals, encryption and password-manager secrets — plus update/push skills that integrate remote changes and resolve conflicts autonomously, escalating only genuine design decisions, and a drift hook that flags when the source and destination states diverge.",
+  "keywords": [
+    "chezmoi",
+    "dotfiles",
+    "source-state",
+    "templates",
+    "age",
+    "gpg",
+    "secrets",
+    "config-management",
+    "sync",
+    "conflict-resolution"
+  ]
+}

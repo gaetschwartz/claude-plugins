@@ -44,6 +44,12 @@
       "description": "PreToolUse guard for Bash: shell-lexer-based rules that deny pkill (use kill <pid>), find (use fd) and grep -r (use rg) with a once-per-context cheat sheet; toggle rules with /shell-guard:configure."
     },
     {
+      "name": "chezmoi",
+      "category": "development",
+      "source": "./plugins/chezmoi",
+      "description": "chezmoi dotfile-manager expertise — source-state attribute grammar, templating, scripts, externals, encryption and secrets — plus update/push skills that resolve sync conflicts autonomously and a hook that flags source/destination drift."
+    },
+    {
       "name": "tgrep",
       "category": "development",
       "source": "./plugins/tgrep",
