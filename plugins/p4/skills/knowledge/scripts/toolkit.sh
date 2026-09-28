@@ -101,7 +101,7 @@ Run this with your Bash tool (installs the backend, downloads the embedder into
 the shared cache if absent, builds the index — ~60-90s the first time):
 
 \`\`\`
-$SELF/toolkit.sh bootstrap
+p4-knowledge bootstrap
 \`\`\`
 
 When it finishes, invoke \`/p4:knowledge\` again to load the knowledge manual.

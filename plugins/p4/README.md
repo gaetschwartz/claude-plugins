@@ -24,12 +24,12 @@ produced fresh each time:
 
 - **Env not initialized** (fresh checkout — index is gitignored) → the skill
   renders a one-liner pointing at `/p4:knowledge bootstrap`, which renders the
-  exact `toolkit.sh bootstrap` command for the agent to run via Bash.
+  exact `p4-knowledge bootstrap` command for the agent to run via Bash.
 - **Env ready** → the skill renders the full `knowledge.md` manual, after which
   the agent uses the `mcp__p4-knowledge-rag__*` tools directly.
 
 The slow index build never runs inside the shell-injection (which must stay
-fast) — only `toolkit.sh bootstrap`, invoked as a normal Bash call, does it.
+fast) — only `p4-knowledge bootstrap`, invoked as a normal Bash call, does it.
 
 ## Corpus layout
 
