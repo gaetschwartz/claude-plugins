@@ -1,6 +1,6 @@
 {
-  "name": "shell-guard",
-  "version": "0.1.0",
-  "description": "PreToolUse guard for Bash: a real shell tokeniser plus small per-command rules. Ships pkill (deny, use kill <pid>), find (deny, use fd) and grep -r (deny, use rg) with a once-per-context cheat sheet; each rule can be toggled with /shell-guard:configure.",
-  "keywords": ["hooks", "bash", "fd", "ripgrep", "pkill", "guardrails"]
+  "name": "guardrails",
+  "version": "0.2.0",
+  "description": "Data-driven guardrails for agent Bash commands: rules (deny or warn, per-command retry, session modes) live in global or per-project state and are enforced by one PreToolUse hook built on a real shell lexer. Nothing is active until you install presets with the setup skill.",
+  "keywords": ["hooks", "bash", "guardrails", "pretooluse", "rules", "fd", "ripgrep", "pkill"]
 }
