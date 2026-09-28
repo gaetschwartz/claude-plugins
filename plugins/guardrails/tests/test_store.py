@@ -23,11 +23,11 @@ class Paths(Isolated):
         self.assertEqual(store.global_state_path(), expected)
 
     def test_plugin_id_from_cache_location(self) -> None:
-        here = "/u/.claude/plugins/cache/my.market/guardrails/0.2.0/hooks"
+        here = "/u/.claude/plugins/cache/my.market/guardrails/0.2.0/lib"
         self.assertEqual(store.plugin_id(here), "guardrails-my-market")
 
     def test_plugin_id_outside_cache(self) -> None:
-        self.assertEqual(store.plugin_id("/src/claude-plugins/plugins/guardrails/hooks"),
+        self.assertEqual(store.plugin_id("/src/claude-plugins/plugins/guardrails/lib"),
                          "guardrails-gaetans-claude-plugins")
 
     def test_project_path_from_env(self) -> None:

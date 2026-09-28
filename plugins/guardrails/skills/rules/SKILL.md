@@ -9,7 +9,7 @@ allowed-tools: Bash(guardrails *)
 Rules are data, checked against every Bash command by a PreToolUse hook. Change them only through the `guardrails`
 command, never by editing state files.
 
-!`python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" status 2>&1 || echo "(could not read guardrails state)"`
+!`python3 "${CLAUDE_SKILL_DIR}/../../lib/guard.py" status 2>&1 || echo "(could not read guardrails state)"`
 
 ## Ground rules
 

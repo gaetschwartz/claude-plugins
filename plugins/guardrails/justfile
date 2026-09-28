@@ -2,10 +2,10 @@
 test:
     python3 -m unittest discover -s tests -v
 
-# Lint + type-check (ty needs the hooks dir on its search path)
+# Lint + type-check (ty needs the lib dir on its search path)
 check:
     uvx ruff check .
-    uvx ty check --extra-search-path hooks .
+    uvx ty check --extra-search-path lib .
 
 # Validate the plugin manifest and skill frontmatter with Claude Code
 validate:

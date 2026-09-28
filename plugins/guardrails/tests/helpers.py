@@ -16,7 +16,8 @@ from unittest import mock
 
 ROOT = Path(__file__).resolve().parent.parent
 HOOKS = ROOT / "hooks"
-sys.path.insert(0, str(HOOKS))
+LIB = ROOT / "lib"
+sys.path.insert(0, str(LIB))
 
 SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR")
 

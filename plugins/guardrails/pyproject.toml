@@ -10,4 +10,4 @@ target-version = "py39"
 
 [tool.ty.environment]
 python-version = "3.9"
-extra-paths = ["hooks"]
+extra-paths = ["lib"]

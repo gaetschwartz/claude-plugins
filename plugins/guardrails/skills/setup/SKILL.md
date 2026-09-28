@@ -11,11 +11,11 @@ below changes configuration on the user's behalf, so each one carries `--as-user
 
 ## Current state
 
-!`python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" status 2>&1 || echo "(could not read guardrails state)"`
+!`python3 "${CLAUDE_SKILL_DIR}/../../lib/guard.py" status 2>&1 || echo "(could not read guardrails state)"`
 
 ## Presets
 
-!`python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" preset list 2>&1`
+!`python3 "${CLAUDE_SKILL_DIR}/../../lib/guard.py" preset list 2>&1`
 
 ## Steps
 

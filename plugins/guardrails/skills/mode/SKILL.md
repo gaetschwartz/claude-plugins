@@ -11,7 +11,7 @@ rule is suspended by a mode you switched on.
 
 ## Current state
 
-!`python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" status 2>&1 || echo "(could not read guardrails state)"`
+!`python3 "${CLAUDE_SKILL_DIR}/../../lib/guard.py" status 2>&1 || echo "(could not read guardrails state)"`
 
 ## Switching a mode on
 
@@ -22,7 +22,7 @@ guardrails mode on <name> --reason "<the user's own words>"
 - Only when the user said, in this conversation, that the session is that kind of work. Quote them in `--reason`.
 - Exit 3 (refused) means the mode does not let agents switch it on, or a deny you hit already told you this. Give the
   user that exact command from the deny message, or if you only have the refusal:
-  `python3 <resolved ${CLAUDE_SKILL_DIR}/../../hooks/guard.py> mode on <name> --session-id <value of $CLAUDE_CODE_SESSION_ID>`
+  `python3 <resolved ${CLAUDE_SKILL_DIR}/../../lib/guard.py> mode on <name> --session-id <value of $CLAUDE_CODE_SESSION_ID>`
 - Exit 2 with "not declared" means no such mode exists. Declaring one is a configuration change for the
   guardrails:rules skill, and only if the user asks for it.
 

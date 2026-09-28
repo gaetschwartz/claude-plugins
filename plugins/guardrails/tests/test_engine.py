@@ -5,7 +5,7 @@ import os
 import unittest
 from typing import Any
 
-from helpers import HOOKS, Isolated
+from helpers import LIB, Isolated
 
 import store
 
@@ -62,7 +62,7 @@ class Hook(Isolated):
         text = reason(self.hook("strings /bin/ls"))
         self.assertIn("from their terminal", text)
         self.assertIn("mode on reverse-engineering --session-id s1", text)
-        self.assertIn(str(HOOKS / "guard.py"), text)
+        self.assertIn(str(LIB / "guard.py"), text)
         self.assertNotIn("guardrails:mode", text)
 
     def test_same_command_retry_is_per_command_and_session(self) -> None:

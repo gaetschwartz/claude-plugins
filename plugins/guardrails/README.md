@@ -50,8 +50,8 @@ after 7 days.
 
 ## CLI
 
-Without arguments `hooks/guard.py` is the hook. An agent runs the CLI as `guardrails <verb>` (the plugin's `bin/` is on
-the Bash tool's PATH); from your own terminal use `python3 <plugin dir>/hooks/guard.py <verb>` (`--help` for the full
+An agent runs the CLI as `guardrails <verb>` (the plugin's `bin/` is on the Bash tool's PATH); from your own terminal
+use `python3 <plugin dir>/lib/guard.py <verb>` (`--help` for the full
 list: `status`, `rule add|set|rm|test`, `mode declare|undeclare|on|off`, `preset list|show|install`,
 `enable|disable`). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
 `enable`/`disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample
@@ -71,3 +71,12 @@ There is no `FIND_OK=1 find …` or `GREP_OK=1 grep -r …` escape hatch any mor
 - `guardrails:mode`: switch a session mode on or off when you say the session is that kind of work.
 
 `just test` runs the suite, `just check` lints and type-checks, `just validate` runs `claude plugin validate`.
+
+## Layout
+
+| path | role |
+|---|---|
+| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `policy.py`, `store.py`, `cli.py`, `shellwords.py` |
+| `hooks/` | `hooks.json` and the `guardrails.sh` wrapper Claude Code runs on every Bash call |
+| `bin/guardrails` | the CLI wrapper on the Bash tool's PATH |
+| `presets/`, `skills/`, `tests/` | preset rule sets, the three skills, the unittest suite |
