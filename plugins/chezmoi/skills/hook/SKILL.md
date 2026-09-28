@@ -1,7 +1,7 @@
 ---
 name: hook
 description: Use when the user wants to turn the chezmoi drift advisor off or back on, asks why they keep getting chezmoi drift notices, says the chezmoi hook is noisy or annoying, asks whether the drift hook is enabled, or wants to check or reset its state.
-allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/../../hooks/chezmoi-drift.py *)
+allowed-tools: Bash(chezmoi-drift *)
 ---
 
 # Controlling the chezmoi drift hook
@@ -46,15 +46,15 @@ Next to it, the hook keeps working files it manages itself:
 
 ## Turning it off and on
 
-The hook script doubles as its own CLI. From the plugin directory:
+The hook script doubles as its own CLI, on the `PATH` as `chezmoi-drift`:
 
 ```bash
-python3 hooks/chezmoi-drift.py --status
-python3 hooks/chezmoi-drift.py --disable "reason goes here"
-python3 hooks/chezmoi-drift.py --enable
+chezmoi-drift --status
+chezmoi-drift --disable "reason goes here"
+chezmoi-drift --enable
 ```
 
-If you cannot resolve the plugin path, write the file directly — the schema above is the
+If `chezmoi-drift` isn't available, write the file directly — the schema above is the
 whole contract:
 
 ```bash
