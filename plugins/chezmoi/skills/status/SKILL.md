@@ -2,9 +2,14 @@
 name: status
 description: Use when the user asks about the state of their chezmoi dotfiles - "chezmoi status", "are my dotfiles in sync", "what's drifted", "do I have anything to push", "anything to pull", "did my dotfiles change", checking before a machine handover or reinstall, or diagnosing why an expected dotfile change has not appeared.
 allowed-tools: Bash(chezmoi:*)
+context: fork
+model: sonnet
+background: false
 ---
 
 # chezmoi status
+
+Report the state of the user's chezmoi dotfiles. Focus, if any: $ARGUMENTS
 
 The state below was captured when this skill loaded. **Read it before running anything** —
 in most cases it already answers the question and no further commands are needed.
@@ -67,11 +72,11 @@ commit and push.
 Report `R` entries explicitly — a pending script runs code on the next apply, and the user
 should know before it happens.
 
-Suggest, do not perform. `apply`, `re-add`, `add` and `destroy` all mutate state; propose the
-command and let the user decide, unless they already asked you to act.
+Never run a mutating command (`apply`, `re-add`, `add`, `destroy`, any `git` write). Name
+the command that would fix each issue; the caller decides whether to run it.
 
 ## Going further
 
-- `chezmoi:update` — pull and integrate remote changes.
-- `chezmoi:push` — capture, commit and publish local changes.
-- `chezmoi diff` for the actual content of a drift; `chezmoi doctor` if something looks broken.
+Where relevant, point the caller at `chezmoi:update` (pull and integrate remote changes)
+or `chezmoi:push` (capture, commit and publish local changes). Use `chezmoi diff <path>`
+yourself when the content of a drift matters to the answer.
