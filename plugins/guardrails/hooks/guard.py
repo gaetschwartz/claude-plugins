@@ -8,6 +8,7 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import cli  # noqa: E402
 import engine  # noqa: E402
 
 
@@ -19,8 +20,7 @@ def main(argv: list[str] | None = None) -> int:
         except Exception:
             pass
         return 0
-    print("usage: guard.py (no arguments: PreToolUse hook)", file=sys.stderr)
-    return 2
+    return cli.main(args)
 
 
 if __name__ == "__main__":
