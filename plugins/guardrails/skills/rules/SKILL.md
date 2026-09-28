@@ -47,17 +47,16 @@ only through `guard.py`. Never edit the state files by hand.
 ## Commands
 
 ```bash
-G="${CLAUDE_SKILL_DIR}/../../hooks/guard.py"
-python3 "$G" rule add no-telnet --as-user --reason "<user's words>" \
+python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" rule add no-telnet --as-user --reason "<user's words>" \
   --json '{"match": {"program": "telnet"}, "message": "Use nc or openssl s_client instead."}'
-python3 "$G" rule set no-strings action=warn --as-user --reason "<user's words>"
-python3 "$G" rule set no-pkill modes= --project --as-user --reason "<user's words>"
-python3 "$G" rule rm no-telnet --as-user --reason "<user's words>"
-python3 "$G" mode declare incident --description "Firefighting" [--agent-may-enable] --as-user
-python3 "$G" mode undeclare incident --as-user
-python3 "$G" mode on reverse-engineering --scope project --as-user   # persistent for this repo
-python3 "$G" preset list
-python3 "$G" status
+python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" rule set no-strings action=warn --as-user --reason "<user's words>"
+python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" rule set no-pkill modes= --project --as-user --reason "<user's words>"
+python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" rule rm no-telnet --as-user --reason "<user's words>"
+python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" mode declare incident --description "Firefighting" [--agent-may-enable] --as-user
+python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" mode undeclare incident --as-user
+python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" mode on reverse-engineering --scope project --as-user   # persistent for this repo
+python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" preset list
+python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" status
 ```
 
 `rule set` keys: action retry enabled modes message messageShort description program args builtin regex requires

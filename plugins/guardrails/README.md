@@ -21,8 +21,10 @@ A rule matches a command (`program`, `args`, `builtin`, raw `regex`) and says wh
 ## Modes
 
 Modes are declared with `agentMayEnable` (may an agent switch it on for a session when the user says so?) and can be
-on per session, for every session in a project, or globally. Agents can only switch session modes on, only for modes
-that allow it, and must quote the user; you get a notice when such a mode first suspends a rule.
+on per session, for every session in a project, or globally. Agents can switch *session* modes on by themselves, but
+only for modes that allow it, and only by quoting the user's own words; you get a notice when such a mode first
+suspends a rule. Activating a mode for a whole project or globally is a configuration change and needs the user's
+explicit request (`--as-user`).
 
 ## State
 
@@ -51,6 +53,13 @@ after 7 days.
 `hooks/guard.py` without arguments is the hook; with arguments it is the CLI (`python3 hooks/guard.py --help`):
 `status`, `rule add|set|rm`, `mode declare|undeclare|on|off`, `preset list|show|install`, `enable|disable`. When run
 by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and `enable`/`disable` are refused.
+
+## Migrating from shell-guard
+
+shell-guard is gone; its Bash rules live here as data instead of hard-coded Python. Uninstall shell-guard, install
+guardrails, then run the `guardrails:setup` skill — nothing is active until you do, exactly as after a fresh install.
+There is no `FIND_OK=1 find …` or `GREP_OK=1 grep -r …` escape hatch any more: for a rule with `retry: same-command`
+(the `find-fd` / `grep-rg` rules included), re-run the exact command unchanged instead.
 
 ## Skills
 

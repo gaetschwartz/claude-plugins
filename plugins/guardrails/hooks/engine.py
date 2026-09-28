@@ -152,18 +152,22 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         return
 
     sid = str(payload.get("session_id") or "nosession")
-    with store.locked(gpath):
-        gstate = store.load(gpath)
-        sessions_raw = gstate.get("sessions")
-        sessions = sessions_raw if isinstance(sessions_raw, dict) else {}
-        session_raw = sessions.get(sid)
-        session = session_raw if isinstance(session_raw, dict) else {}
-        output, changed = evaluate(command, policy.effective_rules(gstate, pstate),
-                                   policy.effective_modes(gstate, pstate), session, sid)
-        if changed:
-            session["seenAt"] = store.now()
-            sessions[sid] = session
-            gstate["sessions"] = sessions
-            store.write(gpath, gstate)
+    try:
+        with store.locked(gpath):
+            gstate = store.load(gpath)
+            sessions_raw = gstate.get("sessions")
+            sessions = sessions_raw if isinstance(sessions_raw, dict) else {}
+            session_raw = sessions.get(sid)
+            session = session_raw if isinstance(session_raw, dict) else {}
+            output, changed = evaluate(command, policy.effective_rules(gstate, pstate),
+                                       policy.effective_modes(gstate, pstate), session, sid)
+            if changed:
+                session["seenAt"] = store.now()
+                sessions[sid] = session
+                gstate["sessions"] = sessions
+                store.write(gpath, gstate)
+    except OSError:
+        output, _ = evaluate(command, policy.effective_rules(gstate, pstate),
+                             policy.effective_modes(gstate, pstate), {}, sid)
     if output:
         json.dump(output, stdout)

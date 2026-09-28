@@ -320,8 +320,9 @@ def set_persistent(args: Args, active: bool) -> int:
         if not isinstance(mode, dict):
             if not declared_elsewhere:
                 raise Invalid(f"mode '{args.name}' is not declared in {path}; declare it there first")
-            mode = modes[args.name] = {"setBy": stamp(args.reason)}
+            mode = modes[args.name] = {}
         mode["active"] = active
+        mode["setBy"] = stamp(args.reason)
 
     store.mutate(path, change)
     print(f"mode {args.name} {'on' if active else 'off'} for every session ({args.scope} scope)")
@@ -370,6 +371,7 @@ def set_enabled(args: Args, enabled: bool) -> int:
 
     def change(state: store.State) -> None:
         state["enabled"] = enabled
+        state["setBy"] = stamp(args.reason)
         if enabled:
             state.pop("disabledReason", None)
         else:

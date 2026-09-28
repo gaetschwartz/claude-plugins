@@ -92,6 +92,7 @@ class Gate(Isolated):
         self.assertEqual(self.cli("disable", "--reason", "noisy")[0], 0)
         state = self.get(self.gpath)
         self.assertEqual((state["enabled"], state["disabledReason"]), (False, "noisy"))
+        self.assertEqual(state["setBy"]["by"], "user")
         self.assertEqual(self.cli("enable")[0], 0)
         state = self.get(self.gpath)
         self.assertTrue(state["enabled"])
@@ -181,10 +182,12 @@ class ModeCommands(Isolated):
 
     def test_persistent_scope_project_stubs_a_globally_declared_mode(self) -> None:
         self.declare("--agent-may-enable")
-        self.assertEqual(self.cli("mode", "on", "reverse-engineering", "--scope", "project")[0], 0)
+        self.assertEqual(self.cli("mode", "on", "reverse-engineering", "--scope", "project", "--as-user",
+                                  agent=True)[0], 0)
         mode = self.get(self.ppath)["modes"]["reverse-engineering"]
         self.assertTrue(mode["active"])
         self.assertNotIn("agentMayEnable", mode)
+        self.assertEqual(mode["setBy"]["by"], "agent")
         self.assertIn("agent may enable: yes", self.cli("status")[1])
         self.assertEqual(self.cli("mode", "off", "reverse-engineering", "--scope", "project")[0], 0)
         self.assertFalse(self.get(self.ppath)["modes"]["reverse-engineering"]["active"])

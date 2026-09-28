@@ -39,10 +39,11 @@ below changes configuration on the user's behalf, so each one carries `--as-user
 5. Install and apply the answers:
 
    ```bash
-   G="${CLAUDE_SKILL_DIR}/../../hooks/guard.py"
-   python3 "$G" preset install <name> --only <id,id> --as-user [--project] --reason "setup: <summary of answers>"
-   python3 "$G" mode declare <mode> --description "<the preset's description>" [--agent-may-enable] --as-user [--project]
-   python3 "$G" mode on <mode> --scope project --as-user          # only if they chose "always on in this project"
+   python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" preset install <name> --only <id,id> --as-user [--project] \
+     --reason "setup: <summary of answers>"
+   python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" mode declare <mode> --description "<the preset's description>" \
+     [--agent-may-enable] --as-user [--project]
+   python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" mode on <mode> --scope project --as-user   # only if they chose "always on in this project"
    ```
 
 6. Run `status` and show the user the result.

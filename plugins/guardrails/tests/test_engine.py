@@ -1,6 +1,8 @@
 from __future__ import annotations  # noqa: I001
 
 import json
+import os
+import unittest
 from typing import Any
 
 from helpers import Isolated
@@ -161,6 +163,12 @@ class Hook(Isolated):
         second = reason(self.hook("find /tmp"))
         self.assertIn("terse", second)
         self.assertNotIn("SHEET", second)
+
+    @unittest.skipIf(hasattr(os, "geteuid") and os.geteuid() == 0, "root ignores directory permissions")
+    def test_readonly_data_dir_still_denies(self) -> None:
+        os.chmod(self.data, 0o500)
+        self.addCleanup(os.chmod, self.data, 0o700)
+        self.assertEqual(decision(self.hook("strings a")), "deny")
 
     def test_invalid_rule_in_state_is_ignored(self) -> None:
         state = self.get(self.gpath)
