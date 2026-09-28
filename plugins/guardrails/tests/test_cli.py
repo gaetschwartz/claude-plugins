@@ -190,7 +190,8 @@ class ModeCommands(Isolated):
 
 class Status(Isolated):
     def test_lists_rules_modes_and_problems(self) -> None:
-        self.put(self.gpath, {"rules": {"no-strings": json.loads(RULE), "bad": {"match": {"regex": "("}, "message": "x"}},
+        self.put(self.gpath, {"rules": {"no-strings": json.loads(RULE),
+                                        "bad": {"match": {"regex": "("}, "message": "x"}},
                               "modes": {"reverse-engineering": {"description": "RE", "agentMayEnable": True}}})
         self.put(self.ppath, {"rules": {"nm": {"match": {"program": "nm"}, "message": "m", "modes": ["ghost"]}}})
         code, out, _ = self.cli("status")

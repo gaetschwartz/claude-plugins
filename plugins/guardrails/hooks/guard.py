@@ -17,7 +17,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args:
         try:
             engine.run_hook(sys.stdin, sys.stdout)
-        except Exception:  # noqa: BLE001, S110 -- hook must fail open on any error, per design spec
+        except Exception:  # noqa: BLE001, S110
             pass
         return 0
     return cli.main(args)

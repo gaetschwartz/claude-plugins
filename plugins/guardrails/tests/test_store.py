@@ -1,12 +1,13 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import datetime
 import os
 import subprocess
 import unittest
 
-import store
 from helpers import Isolated
+
+import store
 
 UTC = datetime.timezone.utc
 

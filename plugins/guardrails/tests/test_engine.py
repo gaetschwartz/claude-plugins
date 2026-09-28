@@ -1,10 +1,11 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import json
 from typing import Any
 
-import store
 from helpers import Isolated
+
+import store
 
 STRINGS: dict[str, Any] = {"match": {"program": "strings"}, "message": "Read the docs.", "retry": "same-command",
                            "modes": ["reverse-engineering"]}

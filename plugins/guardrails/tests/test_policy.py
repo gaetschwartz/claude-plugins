@@ -1,11 +1,12 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import os
 import unittest
 from typing import Any
 
-import policy
 from helpers import Isolated
+
+import policy
 from shellwords import simple_commands
 
 
