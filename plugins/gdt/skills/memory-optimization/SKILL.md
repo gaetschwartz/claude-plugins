@@ -65,7 +65,7 @@ just set `mode`.
 ### 1. Back up first, always
 
 ```bash
-uv run scripts/memory_tools.py backup <memory-dir> --dest <session-scratchpad>
+gdt-memory backup <memory-dir> --dest <session-scratchpad>
 ```
 
 Writes a timestamped tarball plus an uncompressed *pristine* copy. `--dest` defaults
@@ -116,9 +116,9 @@ Save the workflow's tool result to a file — the next steps read it.
 ### 3. Repair links, rebuild the index, validate
 
 ```bash
-uv run scripts/memory_tools.py repair <memory-dir> --reports <result.json>
-uv run scripts/memory_tools.py rebuild-index <memory-dir> --reports <result.json>
-uv run scripts/memory_tools.py validate <memory-dir> --pristine <pristine-dir>
+gdt-memory repair <memory-dir> --reports <result.json>
+gdt-memory rebuild-index <memory-dir> --reports <result.json>
+gdt-memory validate <memory-dir> --pristine <pristine-dir>
 ```
 
 `repair` normalizes every `name:` slug, then repoints `[[links]]` whose targets were
@@ -193,4 +193,4 @@ decisive.
 - `scripts/workflow.js` — planner + four stages, with all agent briefs
 - `scripts/memory_tools.py` — `backup`, `survey`, `repair`, `rebuild-index`, `validate`
   (`survey` is for eyeballing the store yourself; the planner does its own listing).
-  Stdlib-only with a PEP 723 header, so `uv run scripts/memory_tools.py …` just works.
+  Stdlib-only with a PEP 723 header, so `gdt-memory …` (backed by `uv run`) just works.
