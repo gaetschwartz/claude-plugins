@@ -65,8 +65,8 @@ re-run the commands above to restate what is already here.
 
 For each drifted entry, the right advice depends on the source type. `chezmoi source-path
 <path>` tells you which: a plain file takes `chezmoi re-add`, a `.tmpl` source silently
-ignores `re-add` and must be edited at the template, an `encrypted_` source needs
-`--re-encrypt`. If `autoCommit`/`autoPush` are true, say that capturing the edit will also
+ignores `re-add` and must be edited at the template (`encrypted_` sources take a plain
+`re-add`). If `autoCommit`/`autoPush` are true, say that capturing the edit will also
 commit and push.
 
 Report `R` entries explicitly — a pending script runs code on the next apply, and the user

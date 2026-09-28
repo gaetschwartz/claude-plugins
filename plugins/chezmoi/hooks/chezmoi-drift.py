@@ -260,15 +260,12 @@ def describe(first, second, path, source):
     if first in ("M", "A", "D"):
         if not source:
             return f"- `{path}`: destination edited{'; it ' + effect if effect else ''}."
-        base = os.path.basename(source)
         if source.endswith(".tmpl"):
             fix = (
                 f"its source is a TEMPLATE (`{source}`), so `chezmoi re-add` will "
-                f"silently skip it - edit the template instead (`chezmoi edit {path}`, "
-                f"then `chezmoi apply`)"
+                f"silently skip it - port the edit into the template, then "
+                f"`chezmoi apply {path}`"
             )
-        elif base.startswith("encrypted_"):
-            fix = f"persist with `chezmoi re-add --re-encrypt {path}` (source is encrypted)"
         else:
             fix = f"persist with `chezmoi re-add {path}`"
         tail = f", or leave it and it {effect}" if effect else ""

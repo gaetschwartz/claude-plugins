@@ -41,8 +41,8 @@ chezmoi git -- status --short     # source changes not yet committed
 
 Destination drift means an edit exists only on this machine.
 `chezmoi source-path <path>` tells you how to capture it: plain file → `chezmoi re-add`,
-template → port the edit into the template (`re-add` silently no-ops), encrypted →
-`re-add --re-encrypt`. Ask before capturing anything that looks machine-local or secret.
+template → port the edit into the template (`re-add` silently no-ops). Encrypted sources
+take a plain `re-add`. Ask before capturing anything that looks machine-local or secret.
 
 **2. Check whether autoCommit already acted.**
 

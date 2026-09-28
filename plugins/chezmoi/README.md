@@ -10,6 +10,10 @@ chezmoi dotfile-manager expertise for Claude Code, plus a drift advisor hook.
 | `chezmoi:push` | Publishing changes. Captures uncaptured destination edits first, commits, pushes, and on rejection integrates rather than forcing — then reports what was pushed, what came back, and what changed locally. |
 | `chezmoi:status` | Answering "is anything drifted / do I need to push or pull". Loads the live picture up front so the answer needs no tool round-trips. |
 | `chezmoi:hook` | Turning the drift hook off or on, and reading its state. |
+| `chezmoi:edit` | Adding, changing and removing managed files: which way each command moves data, and the template/encrypted exceptions to `re-add`. |
+| `chezmoi:templates` | Making a file vary per machine, and testing a render before applying. |
+| `chezmoi:secrets` | Keeping credentials out of the shared source repo. |
+| `chezmoi:setup` | New-machine init, the config template, and answering prompts without a terminal. |
 
 ### Embedded shell execution
 
@@ -61,8 +65,7 @@ What it adds beyond "run chezmoi status":
 | Situation | Advice given |
 |---|---|
 | Destination file edited | `chezmoi re-add <path>` to persist, or leave it to be overwritten |
-| …source is a **template** | Warns `re-add` silently skips templates; points at `chezmoi edit` + `apply` |
-| …source is **encrypted** | Adds `--re-encrypt` |
+| …source is a **template** | Warns `re-add` silently skips templates; says to port the edit into the template, then `apply` |
 | `git.autoCommit`/`autoPush` on | Warns the suggested command will also commit and push |
 | Source ahead of destination | Names what `apply` would create, delete or overwrite |
 | Script pending | Flags that `apply` would run it |
