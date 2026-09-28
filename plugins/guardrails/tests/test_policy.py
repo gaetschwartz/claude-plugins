@@ -75,7 +75,22 @@ class Layering(unittest.TestCase):
     def test_project_replaces_text_and_match(self) -> None:
         g = {"rules": {"r": rule()}}
         eff = policy.effective_rules(g, {"rules": {"r": {"message": "m2", "match": {"program": "nm"}}}})["r"]
-        self.assertEqual((eff["message"], eff["match"]), ("m2", {"program": "nm"}))
+        self.assertEqual((eff["message"], eff["match"]), ("m2", {"program": "strings"}))
+
+    def test_project_match_override_ignored(self) -> None:
+        g = {"rules": {"r": rule()}}
+        eff = policy.effective_rules(g, {"rules": {"r": {"match": {"program": "nm"}}}})["r"]
+        self.assertEqual(eff["match"], {"program": "strings"})
+
+    def test_project_requires_override_ignored(self) -> None:
+        g = {"rules": {"r": rule(requires=["rg"])}}
+        eff = policy.effective_rules(g, {"rules": {"r": {"requires": ["fd"]}}})["r"]
+        self.assertEqual(eff["requires"], ["rg"])
+
+    def test_project_empty_message_falls_back_to_global(self) -> None:
+        g = {"rules": {"r": rule(message="global text")}}
+        eff = policy.effective_rules(g, {"rules": {"r": {"message": ""}}})["r"]
+        self.assertEqual(eff["message"], "global text")
 
     def test_project_only_rule_gets_defaults(self) -> None:
         eff = policy.effective_rules({}, {"rules": {"p": rule()}})["p"]

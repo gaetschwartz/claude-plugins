@@ -128,9 +128,13 @@ def with_defaults(rule: Rule) -> Rule:
 
 
 def merge_rule(base: Rule, override: Rule) -> Rule:
-    """Layer a project entry onto a defaulted global rule; only tightening changes apply."""
+    """Layer a project entry onto a defaulted global rule; only tightening changes apply.
+
+    A project override can never change what a global rule matches: 'match' and 'requires'
+    are ignored, and a merge that fails validation falls back to the global rule unchanged.
+    """
     out = dict(base)
-    for key in ("message", "messageShort", "description", "match", "requires"):
+    for key in ("message", "messageShort", "description"):
         if key in override:
             out[key] = override[key]
     if override.get("action") == "deny":
@@ -141,6 +145,10 @@ def merge_rule(base: Rule, override: Rule) -> Rule:
         out["enabled"] = True
     if isinstance(override.get("modes"), list):
         out["modes"] = [m for m in modes_of(base) if m in override["modes"]]
+    try:
+        validate_rule(out)
+    except Invalid:
+        return base
     return out
 
 

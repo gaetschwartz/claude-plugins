@@ -31,8 +31,12 @@ that allow it, and must quote the user; you get a notice when such a mode first 
 | global | `~/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` (`${CLAUDE_PLUGIN_DATA}`) |
 | project | `<project>/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` |
 
-Project entries can add rules and tighten global ones, never loosen them. Session state (retry acknowledgements,
-modes, warnings shown) lives in the global file and is pruned after 7 days.
+Project entries can add rules, and for a global rule id can only: tighten `action`/`retry`, re-enable it, remove
+suspending modes, and reword `message`/`messageShort`/`description`. What a global rule matches (`match`,
+`requires`) cannot be changed by a project entry; an override that does not validate falls back to the global rule
+unchanged. A project can also switch a declared mode on for itself (`active`), which suspends the rules that list
+that mode. Session state (retry acknowledgements, modes, warnings shown) lives in the global file and is pruned
+after 7 days.
 
 ## Presets
 

@@ -57,9 +57,10 @@ class RuleCommands(Isolated):
         self.assertEqual(code, 0)
         entry = self.get(self.ppath)["rules"]["no-strings"]
         self.assertEqual(entry["action"], "deny")
-        self.assertEqual(entry["match"], {"program": "strings", "args": "-a"})
+        self.assertEqual(entry["match"], {"args": "-a"})
         self.assertNotIn("message", entry)
         self.assertIn("enabled=false", out)
+        self.assertIn("args=-a", out)
 
     def test_project_flag_outside_project(self) -> None:
         del os.environ["CLAUDE_PROJECT_DIR"]

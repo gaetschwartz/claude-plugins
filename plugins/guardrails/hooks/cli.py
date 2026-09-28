@@ -222,6 +222,8 @@ def ineffective(pairs: list[tuple[str, str]], base: policy.Rule) -> list[str]:
             added = [m.strip() for m in value.split(",") if m.strip() and m.strip() not in policy.modes_of(base)]
             if added:
                 notes.append(f"modes {','.join(added)} (a project can only remove suspending modes)")
+        elif key in policy.MATCH_KEYS or key == "requires":
+            notes.append(f"{key}={value} (a project cannot change what a global rule matches)")
     return notes
 
 
@@ -242,8 +244,7 @@ def cmd_rule_set(args: Args) -> int:
         if not isinstance(rules.get(args.id), dict):
             if base is None:
                 raise Invalid(f"no rule '{args.id}' in {path}")
-            touches_match = any(key in policy.MATCH_KEYS for key, _ in pairs)
-            rules[args.id] = {"match": dict(view(base, "match"))} if touches_match else {}
+            rules[args.id] = {}
         rule = rules[args.id]
         for key, value in pairs:
             apply_assignment(rule, key, value)

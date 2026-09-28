@@ -20,8 +20,10 @@ only through `guard.py`. Never edit the state files by hand.
 - Never add, loosen, disable or remove a rule because it just blocked you.
 - Put the user's own words in `--reason`.
 - Default to global scope; add `--project` when the user means "in this repo". A project entry for a global rule can
-  only tighten it (warn→deny, drop retry, remove suspending modes, re-enable); the CLI prints a note when an
-  assignment has no effect.
+  only tighten it (warn→deny, drop retry, remove suspending modes, re-enable) and reword its messages; it cannot
+  change what the rule matches (`match`, `requires` are ignored). A project can also switch a declared mode on for
+  itself (`active`), which suspends the rules that list that mode. The CLI prints a note when an assignment has no
+  effect.
 - `enable` / `disable` of the whole hook are refused for agents: tell the user to run them from their terminal.
 
 ## Rule fields
