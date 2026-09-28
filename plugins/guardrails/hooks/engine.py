@@ -143,7 +143,10 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
     if gstate.get("enabled", True) is False:
         return
     cwd = payload.get("cwd")
-    pstate = store.load(store.project_state_path(cwd if isinstance(cwd, str) else None))
+    try:
+        pstate = store.load(store.project_state_path(cwd if isinstance(cwd, str) else None))
+    except store.StateError:
+        pstate = {}
     if not policy.effective_rules(gstate, pstate):
         return
 

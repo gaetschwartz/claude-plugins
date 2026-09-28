@@ -128,6 +128,10 @@ class Hook(Isolated):
         self.put(self.ppath, {"modes": {"reverse-engineering": {"active": True}}})
         self.assertIsNone(self.hook("strings a"))
 
+    def test_corrupt_project_state_does_not_disable_global_rules(self) -> None:
+        self.put(self.ppath, "garbage")
+        self.assertEqual(decision(self.hook("strings a")), "deny")
+
     def test_global_disabled_is_silent(self) -> None:
         state = self.get(self.gpath)
         state["enabled"] = False
