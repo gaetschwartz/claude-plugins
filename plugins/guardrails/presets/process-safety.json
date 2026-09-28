@@ -1,0 +1,25 @@
+{
+  "description": "Discourage broad process killing: pkill/killall by name, and SIGKILL as a first resort.",
+  "rules": {
+    "no-pkill": {
+      "description": "Signalling processes by name pattern",
+      "match": {"program": ["pkill", "killall"]},
+      "action": "deny",
+      "retry": "same-command",
+      "modes": ["incident"],
+      "message": "Don't signal processes by name: pkill/killall patterns match more than you expect and can kill the user's editors, agents or servers. Find the process with `pgrep -fl <pattern>`, confirm it is the right one, then `kill <pid>`, or ask the user to run it."
+    },
+    "kill-9": {
+      "description": "SIGKILL without trying SIGTERM first",
+      "match": {"program": "kill", "args": "(^|\\s)-(9|KILL|SIGKILL)(\\s|$)|(^|\\s)-s\\s+(9|KILL|SIGKILL)(\\s|$)"},
+      "action": "warn",
+      "message": "SIGKILL gives the process no chance to clean up (temp files, locks, child processes). Send SIGTERM first (`kill <pid>`) and escalate only if it does not exit."
+    }
+  },
+  "modes": {
+    "incident": {
+      "description": "Actively firefighting; the user accepts broad process killing",
+      "agentMayEnable": false
+    }
+  }
+}

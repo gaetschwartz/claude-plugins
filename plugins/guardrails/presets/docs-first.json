@@ -1,0 +1,26 @@
+{
+  "description": "Steer agents to documentation instead of inferring behaviour from binaries (strings, otool, nm, objdump).",
+  "rules": {
+    "no-strings": {
+      "description": "strings(1) used to work out how a program behaves",
+      "match": {"program": "strings"},
+      "action": "deny",
+      "retry": "same-command",
+      "modes": ["reverse-engineering"],
+      "message": "Don't work out how a program behaves from strings(1) on its binary: the output is unordered fragments without context and routinely misleads. Read its documentation instead: Context7 for libraries, frameworks and CLI tools, `<tool> --help`, `man <tool>`, or the upstream docs and source."
+    },
+    "binary-spelunking": {
+      "description": "Symbol or disassembly dumps used for API discovery",
+      "match": {"program": ["otool", "nm", "objdump"]},
+      "action": "warn",
+      "modes": ["reverse-engineering"],
+      "message": "If you are dumping symbols or disassembly to learn how to use a program or library, read its documentation instead (Context7, --help, man pages, upstream docs or source). Checking linkage or debugging a build is fine."
+    }
+  },
+  "modes": {
+    "reverse-engineering": {
+      "description": "The user is deliberately analysing a binary's behaviour, not just learning how to use it",
+      "agentMayEnable": true
+    }
+  }
+}
