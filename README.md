@@ -8,7 +8,7 @@ A small Claude Code plugin marketplace.
 | `p4` | P4 / Tofino SDE SME — bundled source-grounded corpus (P4_16 spec, TNA, BF-Runtime, SDE guides) via a knowledge-rag MCP, `knowledge` skill, and a `p4-expert` subagent that cites every answer. |
 | `language-tutor` | Personal language tutor for any language pair — curriculum, lessons, and spaced-repetition vocabulary, with all progress stored in your Notion workspace. |
 | `swiss-transport` | Accurate Swiss public-transport lookups — connections, live departure/arrival boards, and station search — via the keyless public search.ch timetable API, with a bundled `sbb.py` helper. |
-| `shell-guard` | Bash PreToolUse guard — denies `pkill`, `find`, `grep -r` in favour of `kill <pid>`, `fd`, `rg` (cheat sheet included); `/shell-guard:configure` toggles rules. |
+| `guardrails` | Data-driven Bash guardrails — deny/warn rules with per-command retry and session modes, global or per-project; presets for docs-first (`strings`), process safety (`pkill`) and fd/rg; `guardrails:setup` installs them. |
 
 ```text
 /plugin marketplace add https://github.com/gaetschwartz/claude-plugins

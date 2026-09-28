@@ -38,10 +38,10 @@
       "description": "Gaëtan's dev tooling — personal development-workflow skills. sdd: autonomous spec-driven development (worktree → specs → plan → adversarial review → execution). memory-optimization: fan-out audit that fact-checks a Claude Code memory store against the live system, consolidates it, and rebuilds MEMORY.md."
     },
     {
-      "name": "shell-guard",
-      "category": "productivity",
-      "source": "./plugins/shell-guard",
-      "description": "PreToolUse guard for Bash: shell-lexer-based rules that deny pkill (use kill <pid>), find (use fd) and grep -r (use rg) with a once-per-context cheat sheet; toggle rules with /shell-guard:configure."
+      "name": "guardrails",
+      "category": "development",
+      "source": "./plugins/guardrails",
+      "description": "Data-driven guardrails for agent Bash commands: deny or warn rules with per-command retry, session modes an agent may enable only when you say so, global and per-project state, and presets (docs-first, process-safety, modern-cli) installed by a setup skill."
     },
     {
       "name": "chezmoi",

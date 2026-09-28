@@ -1,38 +1,57 @@
-# shell-guard
+# guardrails
 
-A PreToolUse hook for the Bash tool. It tokenises the command with a real shell lexer
-(wrappers like `sudo`/`xargs`/`timeout` are looked through, `bash -c` strings and `$(…)` are
-descended into, heredoc bodies and redirect targets are ignored) and runs small rules against
-the simple commands it finds.
+A PreToolUse hook for the Bash tool whose rules are data. Each command is tokenised with a real shell lexer
+(wrappers like `sudo`/`xargs`/`timeout` are looked through, `bash -c` strings and `$(…)` are descended into, heredoc
+bodies and redirect targets are ignored), then checked against the rules in state.
 
-| Rule    | Trigger                                   | Action                                                                 |
-|---------|-------------------------------------------|------------------------------------------------------------------------|
-| `pkill` | `pkill` in command position               | deny — use `pgrep` + `kill <pid>`                                       |
-| `find`  | `find` in command position, `fd` installed | deny with an fd/rg cheat sheet (full once per context, then terse)     |
-| `grep`  | `grep -r`/`-R`/`--recursive`, `rg` installed | same                                                                 |
+**Nothing is active after install.** Run the `guardrails:setup` skill to pick presets.
 
-Escape hatches: `FIND_OK=1 find …`, `GREP_OK=1 grep -r …` (prefix on that simple command).
-Commands that run inside another host (`podman exec … find`, `ssh host find`) are not touched.
+## Rules
 
-## Configure
+A rule matches a command (`program`, `args`, `builtin`, raw `regex`) and says what happens:
 
-```text
-/shell-guard:configure                 # status + interactive toggle
-/shell-guard:configure disable pkill
-/shell-guard:configure enable find grep
-/shell-guard:configure reset
-```
+- `action`: `deny` (the agent gets the message and the call is blocked) or `warn` (the agent gets the message as
+  context, once per session).
+- `retry: same-command`: the identical command, re-issued in the same session, is allowed. That is the escape hatch
+  for the cases a rule cannot anticipate.
+- `modes`: session modes that suspend the rule, e.g. `reverse-engineering` for `strings`.
+- `requires`: only active when one of these binaries is installed.
+- `messageShort`: shown instead of `message` once the full message has been seen in the session.
 
-Config lives at `${CLAUDE_PLUGIN_DATA}/config.json` (Claude Code exports `CLAUDE_PLUGIN_DATA`
-to hook processes) and is re-read on every Bash call. `SHELL_GUARD_CONFIG=<path>` overrides it.
+## Modes
 
-## Adding a rule
+Modes are declared with `agentMayEnable` (may an agent switch it on for a session when the user says so?) and can be
+on per session, for every session in a project, or globally. Agents can only switch session modes on, only for modes
+that allow it, and must quote the user; you get a notice when such a mode first suspends a rule.
 
-Drop a module in `hooks/rules/` exposing `RULES` (`{id: description}`), `KEYWORDS`
-(substrings that must appear in the raw command for the rule to run at all) and
-`check(ctx) -> ("deny" | "warn", message) | None`, then add it to `MODULES` in
-`hooks/rules/__init__.py`. `ctx.cmds` is the parsed command list (`None` on unbalanced quotes),
-`ctx.enabled` the set of active rule ids, `ctx.which(name)` a PATH lookup.
+## State
 
-`just test` runs the suite, `just check` lints and type-checks, `just validate` runs
-`claude plugin validate`.
+| scope | file |
+|---|---|
+| global | `~/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` (`${CLAUDE_PLUGIN_DATA}`) |
+| project | `<project>/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` |
+
+Project entries can add rules and tighten global ones, never loosen them. Session state (retry acknowledgements,
+modes, warnings shown) lives in the global file and is pruned after 7 days.
+
+## Presets
+
+| preset | rules |
+|---|---|
+| `docs-first` | `no-strings` (deny, retry), `binary-spelunking` (otool/nm/objdump, warn); mode `reverse-engineering` |
+| `process-safety` | `no-pkill` (pkill/killall, deny, retry), `kill-9` (warn); mode `incident` |
+| `modern-cli` | `find-fd`, `grep-rg` (deny, retry, fd/rg cheat sheet, only when installed) |
+
+## CLI
+
+`hooks/guard.py` without arguments is the hook; with arguments it is the CLI (`python3 hooks/guard.py --help`):
+`status`, `rule add|set|rm`, `mode declare|undeclare|on|off`, `preset list|show|install`, `enable|disable`. When run
+by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and `enable`/`disable` are refused.
+
+## Skills
+
+- `guardrails:setup`: interview, then install presets.
+- `guardrails:rules`: change rules and modes when you ask for it.
+- `guardrails:mode`: switch a session mode on or off when you say the session is that kind of work.
+
+`just test` runs the suite, `just check` lints and type-checks, `just validate` runs `claude plugin validate`.

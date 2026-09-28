@@ -1,6 +1,6 @@
-# Run the hook/skill test suite
+# Run the test suite
 test:
-    python3 tests/test_shell_guard.py
+    python3 -m unittest discover -s tests -v
 
 # Lint + type-check (ty needs the hooks dir on its search path)
 check:
