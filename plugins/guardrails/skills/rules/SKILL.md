@@ -1,66 +1,55 @@
 ---
 name: rules
-description: Use when the user explicitly asks to add, change, disable, remove or list guardrails rules or modes, e.g. "block X for agents", "warn when an agent runs Y", "make the strings rule a warning", "turn off the pkill rule in this repo", "what guardrails are active?". Never use it to get past a guardrails denial. A denial means follow its message, re-run the exact command if it says so, or ask the user.
+description: Use when the user explicitly asks to add, write, change, disable, remove or list guardrails rules or modes, e.g. "block X for agents", "write a rule that warns on Y", "make the strings rule a warning", "turn off the pkill rule in this repo", "what guardrails are active?". Never use it to get past a guardrails denial. A denial means follow its message, re-run the exact command if it says so, or ask the user.
 allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/../../hooks/guard.py *)
 ---
 
-# Managing guardrails rules
+# guardrails rules
 
-guardrails is a PreToolUse hook that checks every Bash command against rules stored as data. Rules and modes change
-only through `guard.py`. Never edit the state files by hand.
-
-## Current state
+Rules are data, checked against every Bash command by a PreToolUse hook. Change them only through
+`python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" <verb>` (written `guard.py` below), never by editing state files.
 
 !`python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" status 2>&1 || echo "(could not read guardrails state)"`
 
 ## Ground rules
 
-- Only make changes the user asked for in this conversation. Pass `--as-user` on every change: it states that the user
-  explicitly requested it, and it is recorded (`setBy.by: agent`).
-- Never add, loosen, disable or remove a rule because it just blocked you.
-- Put the user's own words in `--reason`.
-- Default to global scope; add `--project` when the user means "in this repo". A project entry for a global rule can
-  only tighten it (warn→deny, drop retry, remove suspending modes, re-enable) and reword its messages; it cannot
-  change what the rule matches (`match`, `requires` are ignored). A project can also switch a declared mode on for
-  itself (`active`), which suspends the rules that list that mode. The CLI prints a note when an assignment has no
-  effect.
-- `enable` / `disable` of the whole hook are refused for agents: tell the user to run them from their terminal.
+- Only make changes the user asked for in this conversation, never because a rule just blocked you.
+- Pass `--as-user` on every change and put the user's own words in `--reason`.
+- Global by default; `--project` when they mean this repo. A project entry can only tighten or reword a global rule.
+- `enable` / `disable` are refused for agents: the user runs them from their terminal.
 
-## Rule fields
+## Authoring a rule
 
-| field | values |
+1. Pin down what to catch and what the agent should do instead.
+2. Use the narrowest matcher: `program`, narrowed by `args` if needed; `regex` only when nothing else fits.
+3. Write a `message` that names the alternative.
+4. Default to `deny` with `retry: same-command` (the retry covers cases the rule cannot foresee); use `warn` for
+   advice, `modes` for work where the rule should step aside.
+5. Dry-run it with at least three commands it must catch (one wrapped: `sudo …`, `bash -c '…'`, `x | …`) and three it
+   must not (`man X`, `echo X`, a heredoc mentioning X). Adjust until every line is right:
+   `guard.py rule test --json '<rule>' 'cmd1' 'cmd2' …`
+6. `guard.py rule add <id> --json '<rule>' --as-user --reason "…"`, then show `status`.
+
+## Fields
+
+| field | meaning |
 |---|---|
-| `match.program` | command name or list of names (wrappers like sudo/xargs/timeout and `bash -c` are looked through) |
-| `match.args` | regex over that command's arguments joined by spaces |
-| `match.builtin` | built-in predicate: `grep-recursive` |
+| `match.program` | command name(s); wrappers (`sudo`, `xargs`, `timeout`, `bash -c`, `$(…)`) are looked through |
+| `match.args` | regex over that command's arguments, joined by spaces |
+| `match.builtin` | `grep-recursive` |
 | `match.regex` | regex over the raw command text |
 | `action` | `deny` (default) or `warn` (context note, once per session) |
-| `retry` | `none` (default) or `same-command` (re-running the identical command is allowed) |
+| `retry` | `none` (default) or `same-command` |
 | `modes` | modes that suspend the rule |
-| `message` | required; say what to do instead |
-| `messageShort` | optional; shown instead of `message` after the first time in a session |
-| `requires` | optional; rule is only active if one of these binaries is installed |
+| `message` | required; `{which:a\|b}` becomes the first installed binary |
+| `messageShort` | shown instead of `message` after its first showing in a session |
+| `requires` | rule only active if one of these binaries is installed |
 | `enabled` | `true` / `false` |
 
-`message` may use `{which:a|b}`, which becomes the first of those binaries that is installed.
+## Other verbs
 
-## Commands
+`rule set <id> key=value…` (keys: the fields above; `program`/`args`/`builtin`/`regex` set `match`; comma lists;
+empty clears), `rule rm <id>`, `rule test --id <id> 'cmd'…`, `mode declare <name> [--agent-may-enable]`,
+`mode undeclare <name>`, `mode on|off <name> --scope project|global`, `preset list`, `status`.
 
-```bash
-python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" rule add no-telnet --as-user --reason "<user's words>" \
-  --json '{"match": {"program": "telnet"}, "message": "Use nc or openssl s_client instead."}'
-python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" rule set no-strings action=warn --as-user --reason "<user's words>"
-python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" rule set no-pkill modes= --project --as-user --reason "<user's words>"
-python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" rule rm no-telnet --as-user --reason "<user's words>"
-python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" mode declare incident --description "Firefighting" [--agent-may-enable] --as-user
-python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" mode undeclare incident --as-user
-python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" mode on reverse-engineering --scope project --as-user   # persistent for this repo
-python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" preset list
-python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" status
-```
-
-`rule set` keys: action retry enabled modes message messageShort description program args builtin regex requires
-(`program`, `modes`, `requires` take comma lists; an empty value clears the field).
-
-Exit codes: 0 ok, 2 invalid input or unreadable state (fix what the message says), 3 refused (relay it to the user).
-Show the user `status` after any change.
+Exit codes: 0 ok, 2 invalid input (fix what it says), 3 refused (relay to the user).
