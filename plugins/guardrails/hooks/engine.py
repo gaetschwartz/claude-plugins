@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
 from typing import IO, Any
 
 import policy
@@ -42,8 +43,9 @@ def hints(rule: policy.Rule, modes: dict[str, policy.Mode], session_id: str) -> 
             text += (f" If this session is genuinely '{name}' work, ask the user; once they confirm, "
                      "enable it with the guardrails:mode skill.")
         else:
+            guard_py = os.path.join(store.HERE, "guard.py")
             text += (f" If this is '{name}' work, the user can enable it from their terminal: "
-                     f"guard.py mode on {name} --session-id {session_id}")
+                     f"python3 {guard_py} mode on {name} --session-id {session_id}")
     return text
 
 

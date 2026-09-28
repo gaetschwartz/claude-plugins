@@ -1,13 +1,13 @@
 ---
 name: rules
 description: Use when the user explicitly asks to add, write, change, disable, remove or list guardrails rules or modes, e.g. "block X for agents", "write a rule that warns on Y", "make the strings rule a warning", "turn off the pkill rule in this repo", "what guardrails are active?". Never use it to get past a guardrails denial. A denial means follow its message, re-run the exact command if it says so, or ask the user.
-allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/../../hooks/guard.py *)
+allowed-tools: Bash(guardrails *)
 ---
 
 # guardrails rules
 
-Rules are data, checked against every Bash command by a PreToolUse hook. Change them only through
-`python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" <verb>` (written `guard.py` below), never by editing state files.
+Rules are data, checked against every Bash command by a PreToolUse hook. Change them only through the `guardrails`
+command, never by editing state files.
 
 !`python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" status 2>&1 || echo "(could not read guardrails state)"`
 
@@ -27,8 +27,8 @@ Rules are data, checked against every Bash command by a PreToolUse hook. Change 
    advice, `modes` for work where the rule should step aside.
 5. Dry-run it with at least three commands it must catch (one wrapped: `sudo …`, `bash -c '…'`, `x | …`) and three it
    must not (`man X`, `echo X`, a heredoc mentioning X). Adjust until every line is right:
-   `guard.py rule test --json '<rule>' 'cmd1' 'cmd2' …`
-6. `guard.py rule add <id> --json '<rule>' --as-user --reason "…"`, then show `status`.
+   `guardrails rule test --json '<rule>' 'cmd1' 'cmd2' …`
+6. `guardrails rule add <id> --json '<rule>' --as-user --reason "…"`, then show `status`.
 
 ## Fields
 

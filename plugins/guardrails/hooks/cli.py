@@ -497,7 +497,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--session-id", help="session to act on (default: $CLAUDE_CODE_SESSION_ID)")
     common.add_argument("--reason", help="recorded with the change")
 
-    parser = argparse.ArgumentParser(prog="guard.py", description="Manage guardrails rules, modes and presets.")
+    parser = argparse.ArgumentParser(prog="guardrails", description="Manage guardrails rules, modes and presets.")
     verbs = parser.add_subparsers(dest="verb", required=True)
     verbs.add_parser("status", parents=[common], help="show effective rules and modes")
 
