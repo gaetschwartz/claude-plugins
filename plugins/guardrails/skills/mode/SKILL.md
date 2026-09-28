@@ -20,8 +20,10 @@ python3 "${CLAUDE_SKILL_DIR}/../../hooks/guard.py" mode on <name> --reason "<the
 ```
 
 - Only when the user said, in this conversation, that the session is that kind of work. Quote them in `--reason`.
-- Exit 3 (refused) means the mode does not let agents switch it on. Tell the user they can run
-  `python3 <absolute path to guard.py> mode on <name>` themselves; resolve the path first.
+- Exit 3 (refused) means the mode does not let agents switch it on, or a deny you hit already told you this. Either
+  way, give the user the full command, with the absolute path to `guard.py` (resolve `${CLAUDE_SKILL_DIR}` first) and
+  `--session-id` set to the value of `$CLAUDE_CODE_SESSION_ID`:
+  `python3 <absolute path to guard.py> mode on <name> --session-id <the value of $CLAUDE_CODE_SESSION_ID>`
 - Exit 2 with "not declared" means no such mode exists. Declaring one is a configuration change for the
   guardrails:rules skill, and only if the user asks for it.
 

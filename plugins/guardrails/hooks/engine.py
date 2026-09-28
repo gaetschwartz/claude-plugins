@@ -29,7 +29,7 @@ def remember(session: Session, key: str, value: str) -> bool:
     return True
 
 
-def hints(rule: policy.Rule, modes: dict[str, policy.Mode]) -> str:
+def hints(rule: policy.Rule, modes: dict[str, policy.Mode], session_id: str) -> str:
     if rule.get("action") != "deny":
         return ""
     text = ""
@@ -42,12 +42,13 @@ def hints(rule: policy.Rule, modes: dict[str, policy.Mode]) -> str:
             text += (f" If this session is genuinely '{name}' work, ask the user; once they confirm, "
                      "enable it with the guardrails:mode skill.")
         else:
-            text += f" If this is '{name}' work, the user can enable that mode from their terminal."
+            text += (f" If this is '{name}' work, the user can enable it from their terminal: "
+                     f"guard.py mode on {name} --session-id {session_id}")
     return text
 
 
 def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode], session: Session,
-            shown_before: set[str]) -> tuple[str, bool]:
+            shown_before: set[str], session_id: str) -> tuple[str, bool]:
     """Render texts (messageShort once the full message was shown), merging rules that render identically."""
     changed = False
     groups: dict[str, list[str]] = {}
@@ -62,13 +63,13 @@ def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode],
             elif remember(session, "shown", digest(full)):
                 changed = True
         groups.setdefault(text, []).append(rid)
-        tails.setdefault(text, hints(rule, modes))
+        tails.setdefault(text, hints(rule, modes, session_id))
     paragraphs = [f"[guardrails:{', '.join(ids)}] {text}{tails[text]}" for text, ids in groups.items()]
     return "\n\n".join(paragraphs), changed
 
 
 def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, policy.Mode],
-             session: Session) -> tuple[Output | None, bool]:
+             session: Session, session_id: str) -> tuple[Output | None, bool]:
     try:
         cmds: list[SimpleCommand] | None = simple_commands(command)
     except ValueError:
@@ -111,7 +112,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
 
     output: Output = {}
     if denies:
-        text, composed = compose(denies + warns, modes, session, shown_before)
+        text, composed = compose(denies + warns, modes, session, shown_before, session_id)
         changed = changed or composed
         output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                         "permissionDecisionReason": text}
@@ -119,7 +120,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
         fresh = [(rid, rule) for rid, rule in warns if remember(session, "warned", rid)]
         if fresh:
             changed = True
-            text, _ = compose(fresh, modes, session, shown_before)
+            text, _ = compose(fresh, modes, session, shown_before, session_id)
             output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "additionalContext": text}
     if notices:
         output["systemMessage"] = "\n".join(notices)
@@ -158,7 +159,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         session_raw = sessions.get(sid)
         session = session_raw if isinstance(session_raw, dict) else {}
         output, changed = evaluate(command, policy.effective_rules(gstate, pstate),
-                                   policy.effective_modes(gstate, pstate), session)
+                                   policy.effective_modes(gstate, pstate), session, sid)
         if changed:
             session["seenAt"] = store.now()
             sessions[sid] = session

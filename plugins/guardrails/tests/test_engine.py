@@ -59,6 +59,7 @@ class Hook(Isolated):
         self.put(self.gpath, state)
         text = reason(self.hook("strings /bin/ls"))
         self.assertIn("from their terminal", text)
+        self.assertIn("mode on reverse-engineering --session-id s1", text)
         self.assertNotIn("guardrails:mode", text)
 
     def test_same_command_retry_is_per_command_and_session(self) -> None:
