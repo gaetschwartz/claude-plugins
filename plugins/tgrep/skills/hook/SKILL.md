@@ -1,7 +1,7 @@
 ---
 name: hook
 description: Use when the user wants to turn the automatic tgrep server (the SessionStart hook) off or back on, keep one repository out of it, stop a server it started, asks why a tgrep server appeared in their repo, says tgrep indexing is eating CPU or memory at session start, asks whether the hook is enabled, or wants to check or reset its state.
-allowed-tools: Bash(python3 ${CLAUDE_SKILL_DIR}/../../hooks/tgrep-serve.py *)
+allowed-tools: Bash(tgrep-serve *)
 ---
 
 # Controlling the tgrep server hook
@@ -53,18 +53,18 @@ default setup. Override the location with `TGREP_SERVE_STATE`.
 
 ## Turning it off and on
 
-The hook script doubles as its own CLI. From the plugin directory:
+The hook script doubles as its own CLI, on the `PATH` as `tgrep-serve`:
 
 ```bash
-python3 hooks/tgrep-serve.py --status
-python3 hooks/tgrep-serve.py --disable "reason goes here"
-python3 hooks/tgrep-serve.py --enable
-python3 hooks/tgrep-serve.py --exclude [root]   # default: the current repository
-python3 hooks/tgrep-serve.py --include [root]
-python3 hooks/tgrep-serve.py --stop [root]      # stop the server for a root now
+tgrep-serve --status
+tgrep-serve --disable "reason goes here"
+tgrep-serve --enable
+tgrep-serve --exclude [root]   # default: the current repository
+tgrep-serve --include [root]
+tgrep-serve --stop [root]      # stop the server for a root now
 ```
 
-If you cannot resolve the plugin path, write the file directly — the schema above is the
+If `tgrep-serve` isn't available, write the file directly — the schema above is the
 whole contract:
 
 ```bash
