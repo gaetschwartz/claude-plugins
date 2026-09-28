@@ -51,8 +51,9 @@ after 7 days.
 ## CLI
 
 `hooks/guard.py` without arguments is the hook; with arguments it is the CLI (`python3 hooks/guard.py --help`):
-`status`, `rule add|set|rm`, `mode declare|undeclare|on|off`, `preset list|show|install`, `enable|disable`. When run
-by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and `enable`/`disable` are refused.
+`status`, `rule add|set|rm|test`, `mode declare|undeclare|on|off`, `preset list|show|install`, `enable|disable`. When
+run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and `enable`/`disable` are refused.
+`rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample commands without changing anything.
 
 ## Migrating from shell-guard
 

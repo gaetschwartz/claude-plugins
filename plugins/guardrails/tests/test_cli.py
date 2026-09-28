@@ -233,3 +233,66 @@ class Status(Isolated):
         out = self.cli("status")[1]
         self.assertIn("(none; the guardrails:setup skill installs recommended presets)", out)
         self.assertIn("(none declared)", out)
+
+
+def line(marker: str, cmd: str) -> str:
+    return f"  {marker:<7}{cmd}"
+
+
+class RuleTest(Isolated):
+    DRAFT = '{"match": {"program": "strings"}, "message": "docs"}'
+
+    def test_draft_matches_and_misses(self) -> None:
+        heredoc = "cat <<'EOF' > n.md\nstrings\nEOF"
+        code, out, _ = self.cli(
+            "rule", "test", "--json", self.DRAFT,
+            "sudo strings x", "bash -c 'strings a'", "man strings", "echo strings", heredoc,
+        )
+        self.assertEqual(code, 0)
+        self.assertIn("rule (draft): deny", out)
+        self.assertIn(line("match", "sudo strings x"), out)
+        self.assertIn(line("match", "bash -c 'strings a'"), out)
+        self.assertIn(line("-", "man strings"), out)
+        self.assertIn(line("-", "echo strings"), out)
+        self.assertIn(line("-", "cat <<'EOF' > n.md\\nstrings\\nEOF"), out)
+        self.assertIn("message: docs", out)
+
+    def test_draft_invalid_rule(self) -> None:
+        code, _, err = self.cli("rule", "test", "--json", '{"match": {}, "message": "m"}', "echo hi")
+        self.assertEqual(code, 2)
+        self.assertIn("error:", err)
+
+    def test_draft_invalid_json(self) -> None:
+        self.assertEqual(self.cli("rule", "test", "--json", "{", "echo hi")[0], 2)
+
+    def test_installed_reports_effective_rule(self) -> None:
+        self.cli("rule", "add", "no-strings", "--json",
+                 '{"match": {"program": "strings"}, "message": "docs", "action": "warn", '
+                 '"retry": "same-command", "modes": ["reverse-engineering"]}')
+        self.cli("rule", "set", "no-strings", "action=deny", "--project")
+        code, out, _ = self.cli("rule", "test", "--id", "no-strings", "strings a")
+        self.assertEqual(code, 0)
+        self.assertIn("rule no-strings: deny retry modes=reverse-engineering", out)
+        self.assertIn(line("match", "strings a"), out)
+
+    def test_unknown_id(self) -> None:
+        self.assertEqual(self.cli("rule", "test", "--id", "ghost", "echo hi")[0], 2)
+
+    def test_agent_allowed_without_as_user(self) -> None:
+        self.assertEqual(self.cli("rule", "test", "--json", self.DRAFT, "echo hi", agent=True)[0], 0)
+
+    def test_is_read_only(self) -> None:
+        self.cli("rule", "test", "--json", self.DRAFT, "echo hi")
+        self.assertFalse(self.gpath.exists())
+
+    def test_requires_unmet_notes(self) -> None:
+        draft = ('{"match": {"program": "strings"}, "message": "docs", '
+                 '"requires": ["definitely-not-installed-xyz"]}')
+        out = self.cli("rule", "test", "--json", draft, "strings a")[1]
+        self.assertIn("note: none of definitely-not-installed-xyz is installed here, so the hook skips this rule",
+                      out)
+
+    def test_disabled_rule_notes(self) -> None:
+        draft = '{"match": {"program": "strings"}, "message": "docs", "enabled": false}'
+        out = self.cli("rule", "test", "--json", draft, "strings a")[1]
+        self.assertIn("note: rule is disabled", out)

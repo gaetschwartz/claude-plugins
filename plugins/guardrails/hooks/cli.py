@@ -12,6 +12,7 @@ from typing import Any, Callable
 import policy
 import store
 from policy import Invalid, view
+from shellwords import simple_commands
 
 PRESETS_DIR = os.path.join(os.path.dirname(store.HERE), "presets")
 SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description",
@@ -275,6 +276,45 @@ def cmd_rule_rm(args: Args) -> int:
     return 0
 
 
+def cmd_rule_test(args: Args) -> int:
+    if args.json is not None:
+        try:
+            rule = json.loads(args.json)
+        except ValueError as exc:
+            raise Invalid(f"--json is not valid JSON: {exc}") from exc
+        policy.validate_rule(rule)
+        rule = policy.with_defaults(rule)
+        label = "(draft)"
+    else:
+        rules = policy.effective_rules(store.load(store.global_state_path()), store.load(store.project_state_path()))
+        if args.id not in rules:
+            raise Invalid(f"no rule '{args.id}'")
+        rule = rules[args.id]
+        policy.validate_rule(rule)
+        label = args.id
+
+    flags = [str(rule["action"])]
+    if rule.get("retry") == "same-command":
+        flags.append("retry")
+    if policy.modes_of(rule):
+        flags.append("modes=" + ",".join(policy.modes_of(rule)))
+    print(f"rule {label}: {' '.join(flags)}")
+    for command in args.commands:
+        try:
+            cmds = simple_commands(command)
+        except ValueError:
+            cmds = None
+        marker = "match" if policy.rule_matches(rule, command, cmds) else "-"
+        shown = command.replace("\n", "\\n")
+        print(f"  {marker:<7}{shown}")
+    print(f"message: {policy.render(rule['message'])}")
+    if rule.get("requires") and not policy.requirements_met(rule):
+        print(f"note: none of {'|'.join(rule['requires'])} is installed here, so the hook skips this rule")
+    if rule.get("enabled") is False:
+        print("note: rule is disabled")
+    return 0
+
+
 def cmd_mode_declare(args: Args) -> int:
     require_user(args, "mode declare")
     check_name("mode", args.name)
@@ -470,6 +510,11 @@ def build_parser() -> argparse.ArgumentParser:
     set_.add_argument("assignments", nargs="+", metavar="key=value")
     rm = rule.add_parser("rm", parents=[common], help="remove a rule")
     rm.add_argument("id")
+    test = rule.add_parser("test", parents=[common], help="dry-run a rule against sample commands")
+    source = test.add_mutually_exclusive_group(required=True)
+    source.add_argument("--json", help="a draft rule as a JSON object")
+    source.add_argument("--id", help="an installed rule's id")
+    test.add_argument("commands", nargs="+", metavar="CMD")
 
     mode = verbs.add_parser("mode", help="declare modes and switch them on or off").add_subparsers(dest="op",
                                                                                                 required=True)
@@ -502,6 +547,7 @@ HANDLERS: dict[tuple[str, str | None], Callable[[Args], int]] = {
     ("rule", "add"): cmd_rule_add,
     ("rule", "set"): cmd_rule_set,
     ("rule", "rm"): cmd_rule_rm,
+    ("rule", "test"): cmd_rule_test,
     ("mode", "declare"): cmd_mode_declare,
     ("mode", "undeclare"): cmd_mode_undeclare,
     ("mode", "on"): cmd_mode_on,
