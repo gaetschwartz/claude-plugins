@@ -3,10 +3,9 @@ from __future__ import annotations
 import json
 import os
 
-from helpers import Isolated
-
 import cli
 import policy
+from helpers import Isolated
 
 
 class Presets(Isolated):

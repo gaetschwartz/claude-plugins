@@ -5,9 +5,8 @@ import os
 import subprocess
 import unittest
 
-from helpers import Isolated
-
 import store
+from helpers import Isolated
 
 UTC = datetime.timezone.utc
 

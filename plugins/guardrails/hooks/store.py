@@ -10,7 +10,8 @@ import os
 import re
 import subprocess
 import tempfile
-from typing import Any, Callable, Iterator, TypeVar
+from collections.abc import Iterator
+from typing import Any, Callable, TypeVar
 
 PLUGIN = "guardrails"
 MARKETPLACE = "gaetans-claude-plugins"

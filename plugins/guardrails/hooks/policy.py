@@ -213,10 +213,10 @@ def rule_matches(rule: Rule, command: str, cmds: list[SimpleCommand] | None) -> 
     if cmds is not None:
         if any(_command_matches(rule, c) for c in cmds):
             return True
-    elif programs_of(rule) and not match.get("builtin"):
-        if any(_fallback(p).search(command) for p in programs_of(rule)):
-            if not match.get("args") or re.search(match["args"], command):
-                return True
+    elif (programs_of(rule) and not match.get("builtin")
+          and any(_fallback(p).search(command) for p in programs_of(rule))
+          and (not match.get("args") or re.search(match["args"], command))):
+        return True
     regex = match.get("regex")
     return bool(regex) and re.search(regex, command) is not None
 

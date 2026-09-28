@@ -150,8 +150,10 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
     sid = str(payload.get("session_id") or "nosession")
     with store.locked(gpath):
         gstate = store.load(gpath)
-        sessions = gstate.get("sessions") if isinstance(gstate.get("sessions"), dict) else {}
-        session = sessions.get(sid) if isinstance(sessions.get(sid), dict) else {}
+        sessions_raw = gstate.get("sessions")
+        sessions = sessions_raw if isinstance(sessions_raw, dict) else {}
+        session_raw = sessions.get(sid)
+        session = session_raw if isinstance(session_raw, dict) else {}
         output, changed = evaluate(command, policy.effective_rules(gstate, pstate),
                                    policy.effective_modes(gstate, pstate), session)
         if changed:

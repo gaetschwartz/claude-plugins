@@ -8,8 +8,8 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
-import cli  # noqa: E402
-import engine  # noqa: E402
+import cli
+import engine
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -17,7 +17,7 @@ def main(argv: list[str] | None = None) -> int:
     if not args:
         try:
             engine.run_hook(sys.stdin, sys.stdout)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 -- hook must fail open on any error, per design spec
             pass
         return 0
     return cli.main(args)

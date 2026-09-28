@@ -4,9 +4,8 @@ import os
 import unittest
 from typing import Any
 
-from helpers import Isolated
-
 import policy
+from helpers import Isolated
 from shellwords import simple_commands
 
 
@@ -51,9 +50,8 @@ class Validate(unittest.TestCase):
             rule(tool=5),
         ]
         for r in bad:
-            with self.subTest(rule=r):
-                with self.assertRaises(policy.Invalid):
-                    policy.validate_rule(r)
+            with self.subTest(rule=r), self.assertRaises(policy.Invalid):
+                policy.validate_rule(r)
 
 
 class Layering(unittest.TestCase):

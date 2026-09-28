@@ -3,9 +3,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from helpers import Isolated
-
 import store
+from helpers import Isolated
 
 STRINGS: dict[str, Any] = {"match": {"program": "strings"}, "message": "Read the docs.", "retry": "same-command",
                            "modes": ["reverse-engineering"]}
@@ -89,7 +88,8 @@ class Hook(Isolated):
 
     def test_warn_rides_along_with_deny(self) -> None:
         state = self.get(self.gpath)
-        state["rules"]["k9"] = {"match": {"program": "kill", "args": "-9"}, "message": "SIGTERM first", "action": "warn"}
+        state["rules"]["k9"] = {"match": {"program": "kill", "args": "-9"}, "message": "SIGTERM first",
+                                "action": "warn"}
         self.put(self.gpath, state)
         text = reason(self.hook("strings a; kill -9 1"))
         self.assertIn("Read the docs.", text)
