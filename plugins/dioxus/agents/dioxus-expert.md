@@ -38,7 +38,7 @@ unavailable in your runtime, fall back to the dispatcher subcommands below.
 Everything that isn't a Rust symbol goes through one entry point:
 
 ```
-bash ${CLAUDE_PLUGIN_ROOT}/skills/dioxus-docs/scripts/dispatch.sh <subcommand> [args]
+dioxus-docs <subcommand> [args]
 ```
 
 | Subcommand                                                          | Use it for |
@@ -63,7 +63,7 @@ which case the Serena MCP server failed to start at session boot and its tools
 (`find_symbol` etc.) won't be available to you.
 
 What to do:
-1. Run any dispatcher subcommand (e.g. `bash ${CLAUDE_PLUGIN_ROOT}/skills/dioxus-docs/scripts/dispatch.sh read signal --list`). The dispatcher bootstraps the workspace on the first call.
+1. Run any dispatcher subcommand (e.g. `dioxus-docs read signal --list`). The dispatcher bootstraps the workspace on the first call.
 2. Use the dispatcher to answer the user's current question (it works fine without Serena).
 3. After you answer, tell the user: *"I bootstrapped the workspace on first use. Run `/reload-plugins` to bring up the Serena MCP server for symbol-level queries in the next message."*
 

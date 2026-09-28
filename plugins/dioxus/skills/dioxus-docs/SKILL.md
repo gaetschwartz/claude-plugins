@@ -32,8 +32,8 @@ apps, and free-text search — things Serena doesn't do.
 ## Subcommands
 
 All access goes through one entry point — `/dioxus-docs <subcommand> [args]` for
-human use, or `bash ${CLAUDE_PLUGIN_ROOT}/skills/dioxus-docs/scripts/dispatch.sh
-<subcommand> [args]` from a subagent. Bootstrap is automatic on every call.
+human use, or `dioxus-docs <subcommand> [args]` from a subagent. Bootstrap is
+automatic on every call.
 
 | Subcommand                        | What it does |
 |-----------------------------------|---|
