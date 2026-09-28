@@ -1,5 +1,5 @@
 {
-  "description": "shell-guard: rule-based deny/steer for Bash commands",
+  "description": "guardrails: data-driven deny/warn rules for Bash commands (rules live in state; nothing is active until presets are installed)",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/shell-guard.sh\"",
+            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guardrails.sh\"",
             "timeout": 5
           }
         ]
