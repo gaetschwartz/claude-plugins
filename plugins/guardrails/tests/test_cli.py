@@ -176,9 +176,18 @@ class ModeCommands(Isolated):
         self.assertEqual(self.cli("mode", "on", "reverse-engineering", "--scope", "project")[0], 0)
         self.assertTrue(self.get(self.ppath)["modes"]["reverse-engineering"]["active"])
 
-    def test_persistent_scope_needs_declaration_in_that_file(self) -> None:
-        self.declare()
+    def test_persistent_scope_needs_declaration_somewhere(self) -> None:
         self.assertEqual(self.cli("mode", "on", "reverse-engineering", "--scope", "project")[0], 2)
+
+    def test_persistent_scope_project_stubs_a_globally_declared_mode(self) -> None:
+        self.declare("--agent-may-enable")
+        self.assertEqual(self.cli("mode", "on", "reverse-engineering", "--scope", "project")[0], 0)
+        mode = self.get(self.ppath)["modes"]["reverse-engineering"]
+        self.assertTrue(mode["active"])
+        self.assertNotIn("agentMayEnable", mode)
+        self.assertIn("agent may enable: yes", self.cli("status")[1])
+        self.assertEqual(self.cli("mode", "off", "reverse-engineering", "--scope", "project")[0], 0)
+        self.assertFalse(self.get(self.ppath)["modes"]["reverse-engineering"]["active"])
 
     def test_session_mode_suspends_rule_end_to_end(self) -> None:
         self.cli("rule", "add", "no-strings", "--json", RULE)

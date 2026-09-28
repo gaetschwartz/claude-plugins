@@ -311,11 +311,16 @@ def cmd_mode_undeclare(args: Args) -> int:
 def set_persistent(args: Args, active: bool) -> int:
     require_user(args, f"mode {'on' if active else 'off'} --scope {args.scope}")
     path = store.global_state_path() if args.scope == "global" else project_path()
+    declared_elsewhere = args.scope == "project" and args.name in policy.effective_modes(
+        store.load(store.global_state_path()), store.load(path))
 
     def change(state: store.State) -> None:
-        mode = view(state, "modes").get(args.name)
+        modes = table(state, "modes")
+        mode = modes.get(args.name)
         if not isinstance(mode, dict):
-            raise Invalid(f"mode '{args.name}' is not declared in {path}; declare it there first")
+            if not declared_elsewhere:
+                raise Invalid(f"mode '{args.name}' is not declared in {path}; declare it there first")
+            mode = modes[args.name] = {"setBy": stamp(args.reason)}
         mode["active"] = active
 
     store.mutate(path, change)
