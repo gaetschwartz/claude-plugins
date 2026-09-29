@@ -78,12 +78,11 @@ esac
 
 topic="${1:-}"
 if [[ "$topic" == -* ]]; then
-    die "unknown flag: $topic (usage: $PROG load [<topic>])"
+    usage_error "unknown flag: $topic (usage: $PROG load [<topic>])"
 fi
 if [[ -n "$topic" ]] && { ! [[ "$topic" =~ ^[a-z]+$ ]] || ! declare -F "topic_$topic" >/dev/null; }; then
     log "unknown topic: $topic"
-    log "topics: $(list_names | paste -sd, - | sed 's/,/, /g')"
-    exit 1
+    usage_error "topics: $(list_names | paste -sd, - | sed 's/,/, /g')"
 fi
 
 ensure_bootstrapped

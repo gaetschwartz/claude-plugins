@@ -114,10 +114,10 @@ rc_is "--help exits 0" 0
 run "$EMPTY" help
 rc_is "help exits 0" 0
 run "$EMPTY" frobnicate
-rc_is "unknown subcommand exits 1" 1
+rc_is "unknown subcommand exits 2" 2
 err_has "unknown subcommand prints usage on stderr" "Usage: dioxus-docs"
 run "$EMPTY" rag status
-rc_is "rag is an unknown subcommand" 1
+rc_is "rag is an unknown subcommand" 2
 err_has "rag is reported as unknown" "unknown subcommand: rag"
 expect "usage/help/unknown never create vendor" test ! -e "$EMPTY/vendor"
 
@@ -233,7 +233,7 @@ rc_is "load without topic exits 0" 0
 out_has "load lists topics" "state"
 out_has "load lists sizes" "bytes"
 run "$DATA" load nope
-rc_is "unknown topic exits 1" 1
+rc_is "unknown topic exits 2" 2
 err_has "unknown topic says so" "unknown topic"
 err_has "unknown topic lists topics" "router"
 run "$DATA" load router
@@ -242,7 +242,7 @@ out_has "load router prints pages" "# Defining Routes"
 err_has "load prints size estimate on stderr" "tokens"
 out_lacks "load has no raw include" '{{#include'
 run "$DATA" load all
-rc_is "'all' topic is gone" 1
+rc_is "'all' topic is gone" 2
 
 echo "example"
 run "$DATA" example --list router
@@ -291,7 +291,9 @@ expect "semantic argument errors never bootstrap" test ! -e "$NOBOOT/vendor"
 rm -f "$UVX_ARGV"
 PATH="$STUB:$PATH" run "$DATA" semantic "dynamic route segments"
 rc_is "semantic default exits 0" 0
-expect "semantic default runs semble search" test "$(sed -n '1,4p' "$UVX_ARGV" | tr '\n' ' ')" = "--from semble[mcp] semble search "
+expect "semantic default runs semble search" test "$(sed -n '1p;3,4p' "$UVX_ARGV" | tr '\n' ' ')" = "--from semble search "
+expect "semantic pins semble to an exact version" test "$(sed -n '2p' "$UVX_ARGV" | grep -cE '^semble==[0-9]+\.[0-9]+\.[0-9]+$')" -eq 1
+expect "semantic asks for no extras" argv_lacks "[mcp]"
 expect "semantic passes the query" argv_has "dynamic route segments"
 expect "semantic searches all content types" test "$(grep -A1 -x -- '--content' "$UVX_ARGV" | tail -n 1)" = all
 expect "semantic default limit over-fetches 4x" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 32
@@ -315,10 +317,20 @@ expect "semantic all has examples" argv_has "$EXS"
 expect "semantic all has the book" argv_has "$DOCS_SRC"
 expect "semantic all has doc_examples" argv_has "$DOC_EX"
 expect "semantic --limit=3 over-fetches -k 12" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 12
-PATH="$STUB:$PATH" run "$DATA" semantic hooks --limit=60
+PATH="$STUB:$PATH" run "$DATA" semantic hooks --limit=30
 expect "semantic over-fetch is capped at 100" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 100
-PATH="$STUB:$PATH" run "$DATA" semantic hooks --limit=150
-expect "semantic never fetches fewer than the limit" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 150
+PATH="$STUB:$PATH" run "$DATA" semantic hooks --limit=50
+rc_is "semantic accepts the maximum limit" 0
+rm -f "$UVX_ARGV"
+for bad in 51 3000 99999999999999999999; do
+    PATH="$STUB:$PATH" run "$NOBOOT" semantic hooks --limit="$bad"
+    rc_is "semantic --limit=$bad exits 2" 2
+    err_has "semantic --limit=$bad names the cap" "capped at 50"
+done
+expect "semantic over-limit never reaches semble" test ! -e "$UVX_ARGV"
+PATH="$STUB:$PATH" run "$NOBOOT" semantic '   '
+rc_is "semantic whitespace-only query exits 2" 2
+expect "semantic whitespace-only query never bootstraps" test ! -e "$NOBOOT/vendor"
 err_lacks "semantic prints no first-use notice" "first use"
 
 printf '{"query": "q", "results": [{"file_path": "hooks/src/x.rs", "start_line": 3, "end_line": 9, "score": 0.1, "content": "fn x() {}"}]}\n' > "$TMP/semble.json"
@@ -420,21 +432,33 @@ expect_no_bootstrap() {
 expect_no_bootstrap "read --help" 0 read --help
 out_has "read --help prints usage" "Usage: dioxus-docs read"
 expect_no_bootstrap "read -h" 0 read -h
-expect_no_bootstrap "read --bogus" 1 read --bogus
+expect_no_bootstrap "read --bogus" 2 read --bogus
 err_has "read --bogus names the flag" "unknown flag: --bogus"
-expect_no_bootstrap "read without a query" 1 read
+expect_no_bootstrap "read without a query" 2 read
 expect_no_bootstrap "example -h" 0 example -h
 out_has "example -h prints usage" "Usage: dioxus-docs example"
-expect_no_bootstrap "example --bogus" 1 example --bogus
-expect_no_bootstrap "load nope" 1 load nope
+expect_no_bootstrap "example --bogus" 2 example --bogus
+expect_no_bootstrap "load nope" 2 load nope
 err_has "load nope lists topics" "topics:"
-expect_no_bootstrap "load a b" 1 load 'a b'
-expect_no_bootstrap "load ../x" 1 load ../x
-expect_no_bootstrap "load --list" 1 load --list
+expect_no_bootstrap "load a b" 2 load 'a b'
+expect_no_bootstrap "load ../x" 2 load ../x
+expect_no_bootstrap "load --list" 2 load --list
+expect_no_bootstrap "read whitespace-only query" 2 read '   '
+expect_no_bootstrap "example whitespace-only query" 2 example ' '
+expect_no_bootstrap "search whitespace-only query" 2 search '  '
+expect_no_bootstrap "search without a query" 2 search
+expect_no_bootstrap "search --scope=nope" 2 search q --scope=nope
+expect_no_bootstrap "search --limit abc" 2 search q --limit abc
+expect_no_bootstrap "search --limit 0" 2 search q --limit 0
+expect_no_bootstrap "search --bogus" 2 search --bogus
+expect_no_bootstrap "example without a query" 2 example
 expect_no_bootstrap "search --help" 0 search --help
 expect_no_bootstrap "semantic --help" 0 semantic --help
+run "$DATA" read --help
+out_has "read usage names the slug-or-path argument" "read <slug-or-path>"
+out_has "read usage lists the accepted path forms" "as printed by search/semantic"
 run "$DATA" read --bogus
-rc_is "read --bogus on a bootstrapped dir exits 1" 1
+rc_is "read --bogus on a bootstrapped dir exits 2" 2
 run "$DATA" read -- --bogus
 err_has "read -- treats the rest as the query" "no matches for: --bogus"
 run "$DATA" example -- --bogus

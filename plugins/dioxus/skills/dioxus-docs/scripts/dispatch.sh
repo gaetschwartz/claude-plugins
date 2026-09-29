@@ -16,8 +16,9 @@ Subcommands:
                           Fixed-string, smart-case ripgrep over the vendored Dioxus and docs.
   semantic <query> [--scope=docs|src|examples|all] [--limit=N]
                           Meaning-based search via semble; needs uv. First use downloads a small model.
-  read <slug-or-fragment> [--list]
+  read <slug-or-path> [--list]
                           Print a Dioxus 0.7 doc page (mdbook includes expanded), or list candidates.
+                          A path as printed by search/semantic works, with or without .md and :start-end.
   example <pattern> [--list]
                           Find a maintained example under examples/.
   load <topic>            Print a curated bundle of doc pages.
@@ -54,5 +55,5 @@ case "$cmd" in
     -h|--help|help)
         usage; exit 0 ;;
     *)
-        log "unknown subcommand: $cmd"; usage >&2; exit 1 ;;
+        log "unknown subcommand: $cmd"; usage >&2; exit 2 ;;
 esac

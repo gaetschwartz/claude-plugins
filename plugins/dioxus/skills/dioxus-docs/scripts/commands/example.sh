@@ -16,12 +16,12 @@ while (( $# )); do
         --list)    list_only=1; shift ;;
         -h|--help) printf 'Usage: %s\n' "$SYNOPSIS"; exit 0 ;;
         --)        shift; pat+="${pat:+ }$*"; break ;;
-        -*)        die "unknown flag: $1 (usage: $SYNOPSIS)" ;;
+        -*)        usage_error "unknown flag: $1 (usage: $SYNOPSIS)" ;;
         *)         pat+="${pat:+ }$1"; shift ;;
     esac
 done
 
-[[ -n "$pat" ]] || die "usage: $SYNOPSIS"
+! is_blank "$pat" || usage_error "usage: $SYNOPSIS"
 
 ensure_bootstrapped
 

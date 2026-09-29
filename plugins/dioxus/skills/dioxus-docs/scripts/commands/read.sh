@@ -8,7 +8,7 @@
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
-SYNOPSIS="$PROG read <slug-or-fragment> [--list]"
+SYNOPSIS="$PROG read <slug-or-path> [--list]  (path: as printed by search/semantic, .md and :start-end optional)"
 
 list_only=0
 q=""
@@ -17,12 +17,12 @@ while (( $# )); do
         --list)    list_only=1; shift ;;
         -h|--help) printf 'Usage: %s\n' "$SYNOPSIS"; exit 0 ;;
         --)        shift; q+="${q:+ }$*"; break ;;
-        -*)        die "unknown flag: $1 (usage: $SYNOPSIS)" ;;
+        -*)        usage_error "unknown flag: $1 (usage: $SYNOPSIS)" ;;
         *)         q+="${q:+ }$1"; shift ;;
     esac
 done
 
-[[ -n "$q" ]] || die "usage: $SYNOPSIS"
+! is_blank "$q" || usage_error "usage: $SYNOPSIS"
 if [[ "$q" =~ ^(.*):[0-9]+(-[0-9]+)?$ ]]; then q="${BASH_REMATCH[1]}"; fi
 q="${q#"$DOCS_ROOT"/}"
 q="${q#"${DOCS_ROOT#"$DATA"/}"/}"

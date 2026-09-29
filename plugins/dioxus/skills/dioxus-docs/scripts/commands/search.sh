@@ -19,19 +19,19 @@ while (( $# )); do
         --scope=*) scope="${1#--scope=}"; shift ;;
         --limit=*) limit="${1#--limit=}"; shift ;;
         --scope|--limit)
-            (( $# >= 2 )) || die "$1 needs a value (usage: $SYNOPSIS)"
+            (( $# >= 2 )) || usage_error "$1 needs a value (usage: $SYNOPSIS)"
             if [[ "$1" == --scope ]]; then scope=$2; else limit=$2; fi
             shift 2 ;;
         --regex)   regex=1; shift ;;
         -h|--help) printf 'Usage: %s\n' "$SYNOPSIS"; exit 0 ;;
         --)        shift; query+="${query:+ }$*"; break ;;
-        -*)        die "unknown flag: $1 (usage: $SYNOPSIS)" ;;
+        -*)        usage_error "unknown flag: $1 (usage: $SYNOPSIS)" ;;
         *)         query+="${query:+ }$1"; shift ;;
     esac
 done
 
-[[ -n "$query" ]] || die "usage: $SYNOPSIS"
-[[ "$limit" =~ ^[1-9][0-9]*$ ]] || die "--limit must be a positive integer, got: $limit"
+! is_blank "$query" || usage_error "usage: $SYNOPSIS"
+[[ "$limit" =~ ^[1-9][0-9]*$ ]] || usage_error "--limit must be a positive integer, got: $limit"
 
 docs_paths=(vendor/docsite/docs-src/0.7/src vendor/docsite/packages/docs-router/src/doc_examples)
 case "$scope" in
@@ -39,7 +39,7 @@ case "$scope" in
     src)      paths=(vendor/dioxus/packages) ;;
     examples) paths=(vendor/dioxus/examples) ;;
     all)      paths=(vendor/dioxus/packages vendor/dioxus/examples "${docs_paths[@]}") ;;
-    *) die "unknown --scope=$scope (docs|src|examples|all)" ;;
+    *) usage_error "unknown --scope=$scope (docs|src|examples|all)" ;;
 esac
 
 ensure_bootstrapped
