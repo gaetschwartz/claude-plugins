@@ -19,6 +19,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+from paths import PROG, data_dir
+
 
 DEFAULTS_BY_BACKEND = {
     "ollama": {
@@ -47,42 +49,42 @@ def default_config() -> dict:
 
 # --- state I/O ---------------------------------------------------------------
 
-def state_path(plugin_root: Path) -> Path:
-    return plugin_root / ".rag-state.json"
+def state_path(data: Path) -> Path:
+    return data / ".rag-state.json"
 
 
-def secrets_path(plugin_root: Path) -> Path:
-    return plugin_root / ".rag-config-secrets"
+def secrets_path(data: Path) -> Path:
+    return data / ".rag-config-secrets"
 
 
-def load_state(plugin_root: Path) -> dict:
-    p = state_path(plugin_root)
+def load_state(data: Path) -> dict:
+    p = state_path(data)
     if p.exists():
         return json.loads(p.read_text())
     return {}
 
 
-def save_state(plugin_root: Path, state: dict) -> None:
-    state_path(plugin_root).write_text(json.dumps(state, indent=2) + "\n")
+def save_state(data: Path, state: dict) -> None:
+    state_path(data).write_text(json.dumps(state, indent=2) + "\n")
 
 
-def get_config(plugin_root: Path) -> dict:
-    state = load_state(plugin_root)
+def get_config(data: Path) -> dict:
+    state = load_state(data)
     cfg = default_config()
     cfg.update(state.get("config", {}))
     return cfg
 
 
-def set_config(plugin_root: Path, **updates) -> None:
-    state = load_state(plugin_root)
+def set_config(data: Path, **updates) -> None:
+    state = load_state(data)
     cfg = state.get("config") or default_config()
     cfg.update({k: v for k, v in updates.items() if v is not None})
     state["config"] = cfg
-    save_state(plugin_root, state)
+    save_state(data, state)
 
 
-def read_secrets(plugin_root: Path) -> dict:
-    p = secrets_path(plugin_root)
+def read_secrets(data: Path) -> dict:
+    p = secrets_path(data)
     if not p.exists():
         return {}
     try:
@@ -91,9 +93,9 @@ def read_secrets(plugin_root: Path) -> dict:
         return {}
 
 
-def write_secret(plugin_root: Path, key: str, value: str) -> None:
-    p = secrets_path(plugin_root)
-    secrets = read_secrets(plugin_root)
+def write_secret(data: Path, key: str, value: str) -> None:
+    p = secrets_path(data)
+    secrets = read_secrets(data)
     secrets[key] = value
     p.write_text(json.dumps(secrets, indent=2) + "\n")
     try:
@@ -119,17 +121,17 @@ def probe_ollama(url: str = "http://localhost:11434") -> tuple[bool, str]:
         return False, f"unreachable ({type(e).__name__})"
 
 
-def probe_openai(plugin_root: Path, cfg: dict) -> tuple[bool, str]:
+def probe_openai(data: Path, cfg: dict) -> tuple[bool, str]:
     key_env = cfg.get("openai_api_key_env", "OPENAI_API_KEY")
     if os.environ.get(key_env):
         return True, f"key set via env ${key_env}"
-    if read_secrets(plugin_root).get(key_env):
-        return True, f"key stored in .rag-config-secrets (.gitignored)"
+    if read_secrets(data).get(key_env):
+        return True, "key stored in .rag-config-secrets (chmod 600)"
     return False, f"no key (set ${key_env} or run `rag config set-openai-key <KEY>`)"
 
 
-def probe_st(plugin_root: Path) -> tuple[bool, str]:
-    venv = plugin_root / ".rag-venv"
+def probe_st(data: Path) -> tuple[bool, str]:
+    venv = data / ".rag-venv"
     if not venv.exists():
         return False, "venv not set up yet (will be created on `rag enable`)"
     # Probe the venv's site-packages for sentence_transformers
@@ -141,20 +143,20 @@ def probe_st(plugin_root: Path) -> tuple[bool, str]:
 
 # --- show command -----------------------------------------------------------
 
-def render_show(plugin_root: Path) -> str:
-    cfg = get_config(plugin_root)
-    state = load_state(plugin_root)
+def render_show(data: Path) -> str:
+    cfg = get_config(data)
+    state = load_state(data)
     books = state.get("books", {})
 
     ollama_ok, ollama_msg = probe_ollama()
-    openai_ok, openai_msg = probe_openai(plugin_root, cfg)
-    st_ok, st_msg = probe_st(plugin_root)
+    openai_ok, openai_msg = probe_openai(data, cfg)
+    st_ok, st_msg = probe_st(data)
 
     backend = cfg["backend"]
     model = cfg["model"]
     base = cfg["openai_base_url"]
     key_env = cfg["openai_api_key_env"]
-    key_source = "env" if os.environ.get(key_env) else ("file" if read_secrets(plugin_root).get(key_env) else "none")
+    key_source = "env" if os.environ.get(key_env) else ("file" if read_secrets(data).get(key_env) else "none")
 
     lines = []
     lines.append("# RAG configuration")
@@ -232,30 +234,30 @@ def _agent_instructions(*, backend: str, model: str, ollama_ok: bool, openai_ok:
         out.append("")
         out.append("- **ollama** →")
         if ollama_ok:
-            out.append("    Run: `/dioxus-docs rag config set-backend ollama`")
-            out.append("    Run: `/dioxus-docs rag enable docs`")
+            out.append(f"    Run: `{PROG} rag config set-backend ollama`")
+            out.append(f"    Run: `{PROG} rag enable docs`")
             out.append("    Report when indexing finishes.")
         else:
             out.append("    Ollama is unreachable. Ask the user: \"Please start `ollama serve` in another terminal, then say 'ready'.\"")
             out.append("    Wait for their confirmation, then:")
-            out.append("    Run: `/dioxus-docs rag config set-backend ollama`")
-            out.append("    Run: `/dioxus-docs rag enable docs`")
+            out.append(f"    Run: `{PROG} rag config set-backend ollama`")
+            out.append(f"    Run: `{PROG} rag enable docs`")
             out.append("    Report when indexing finishes.")
         out.append("- **openai** →")
         out.append(f"    Ask the user for: (a) API key, unless ${key_env} is already in their environment;")
         out.append("    (b) model — default `text-embedding-3-small`, alternative `text-embedding-3-large`;")
         out.append("    (c) custom base URL — only if they're using Azure / OpenRouter / vLLM / llama.cpp etc.")
         out.append("    Then run, in order, with the values they gave you:")
-        out.append("    `/dioxus-docs rag config set-backend openai`")
-        out.append("    `/dioxus-docs rag config set-openai-key <KEY>`     (skip if env var is already set)")
-        out.append("    `/dioxus-docs rag config set-model <model>`        (skip if default)")
-        out.append("    `/dioxus-docs rag config set-openai-base <url>`    (skip if default)")
-        out.append("    `/dioxus-docs rag enable docs`")
+        out.append(f"    `{PROG} rag config set-backend openai`")
+        out.append(f"    `{PROG} rag config set-openai-key <KEY>`     (skip if env var is already set)")
+        out.append(f"    `{PROG} rag config set-model <model>`        (skip if default)")
+        out.append(f"    `{PROG} rag config set-openai-base <url>`    (skip if default)")
+        out.append(f"    `{PROG} rag enable docs`")
         out.append("    Report when indexing finishes.")
         out.append("- **sentence-transformers** →")
         out.append("    Confirm the ~1 GB torch+model download is acceptable. Then run:")
-        out.append("    `/dioxus-docs rag config set-backend sentence-transformers`")
-        out.append("    `/dioxus-docs rag enable docs`")
+        out.append(f"    `{PROG} rag config set-backend sentence-transformers`")
+        out.append(f"    `{PROG} rag enable docs`")
         out.append("    Report when indexing finishes.")
         out.append("")
         out.append("**Rules**:")
@@ -275,10 +277,10 @@ def _agent_instructions(*, backend: str, model: str, ollama_ok: bool, openai_ok:
         out.append(f"RAG is configured and working: backend=`{backend}`, model=`{model}`.")
         out.append("")
         out.append("If the user wants to:")
-        out.append("- **add another book** (`src` / `examples`): ask which, then run `/dioxus-docs rag enable <book>` yourself.")
+        out.append(f"- **add another book** (`src` / `examples`): ask which, then run `{PROG} rag enable <book>` yourself.")
         out.append("- **change backend or model**: ask for the new values, confirm migration intent, then run `disable` + `set-*` + `enable` yourself.")
         out.append("  (Each book's embeddings are tied to its recorded backend+model — dimensions don't match across.)")
-        out.append("- **refresh content** (after a vendor `git pull`): confirm intent, then run `/dioxus-docs rag rebuild <book>` yourself.")
+        out.append(f"- **refresh content** (after `{PROG} update`): confirm intent, then run `{PROG} rag rebuild <book>` yourself.")
         return out
 
     # State 3: drift — config doesn't match indexed books
@@ -289,39 +291,39 @@ def _agent_instructions(*, backend: str, model: str, ollama_ok: bool, openai_ok:
     out.append("Queries still work against each book using its recorded backend+model (this is intentional).")
     out.append("")
     out.append("If the user wants to migrate `<book>` to the current config, confirm intent then run yourself:")
-    out.append("  `/dioxus-docs rag disable <book>` then `/dioxus-docs rag enable <book>`")
+    out.append(f"  `{PROG} rag disable <book>` then `{PROG} rag enable <book>`")
     return out
 
 
 # --- set-* commands ---------------------------------------------------------
 
-def cmd_set_backend(plugin_root: Path, name: str) -> None:
+def cmd_set_backend(data: Path, name: str) -> None:
     if name not in DEFAULTS_BY_BACKEND:
         sys.exit(f"unknown backend: {name} (valid: {', '.join(DEFAULTS_BY_BACKEND)})")
     new_model = DEFAULTS_BY_BACKEND[name]["model"]
-    set_config(plugin_root, backend=name, model=new_model)
+    set_config(data, backend=name, model=new_model)
     print(f"[rag-config] backend={name}, model={new_model} (default for {name}; override with set-model)", file=sys.stderr)
 
 
-def cmd_set_model(plugin_root: Path, model: str) -> None:
-    set_config(plugin_root, model=model)
+def cmd_set_model(data: Path, model: str) -> None:
+    set_config(data, model=model)
     print(f"[rag-config] model={model}", file=sys.stderr)
 
 
-def cmd_set_openai_base(plugin_root: Path, url: str) -> None:
-    set_config(plugin_root, openai_base_url=url)
+def cmd_set_openai_base(data: Path, url: str) -> None:
+    set_config(data, openai_base_url=url)
     print(f"[rag-config] openai_base_url={url}", file=sys.stderr)
 
 
-def cmd_set_openai_key(plugin_root: Path, key: str) -> None:
-    cfg = get_config(plugin_root)
+def cmd_set_openai_key(data: Path, key: str) -> None:
+    cfg = get_config(data)
     key_env = cfg.get("openai_api_key_env", "OPENAI_API_KEY")
-    write_secret(plugin_root, key_env, key)
-    print(f"[rag-config] stored ${key_env} in .rag-config-secrets (gitignored, chmod 600)", file=sys.stderr)
+    write_secret(data, key_env, key)
+    print(f"[rag-config] stored ${key_env} in .rag-config-secrets (chmod 600)", file=sys.stderr)
 
 
-def cmd_reset(plugin_root: Path) -> None:
-    set_config(plugin_root, **default_config())
+def cmd_reset(data: Path) -> None:
+    set_config(data, **default_config())
     print("[rag-config] reset to defaults", file=sys.stderr)
 
 
@@ -329,7 +331,6 @@ def cmd_reset(plugin_root: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser(prog="rag/config.py")
-    ap.add_argument("--plugin-root", required=True)
     sub = ap.add_subparsers(dest="cmd", required=True)
 
     sub.add_parser("show")
@@ -344,24 +345,24 @@ def main() -> None:
     p = sub.add_parser("get-book"); p.add_argument("book"); p.add_argument("field")
 
     args = ap.parse_args()
-    plugin_root = Path(args.plugin_root)
+    data = data_dir()
 
     if args.cmd == "show":
-        print(render_show(plugin_root))
+        print(render_show(data))
     elif args.cmd == "set-backend":
-        cmd_set_backend(plugin_root, args.name)
+        cmd_set_backend(data, args.name)
     elif args.cmd == "set-model":
-        cmd_set_model(plugin_root, args.model)
+        cmd_set_model(data, args.model)
     elif args.cmd == "set-openai-base":
-        cmd_set_openai_base(plugin_root, args.url)
+        cmd_set_openai_base(data, args.url)
     elif args.cmd == "set-openai-key":
-        cmd_set_openai_key(plugin_root, args.key)
+        cmd_set_openai_key(data, args.key)
     elif args.cmd == "reset":
-        cmd_reset(plugin_root)
+        cmd_reset(data)
     elif args.cmd == "get":
-        print(get_config(plugin_root).get(args.field, ""))
+        print(get_config(data).get(args.field, ""))
     elif args.cmd == "get-book":
-        state = load_state(plugin_root)
+        state = load_state(data)
         info = state.get("books", {}).get(args.book, {})
         print(info.get(args.field, ""))
 

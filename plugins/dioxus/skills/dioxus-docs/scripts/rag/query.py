@@ -10,21 +10,21 @@ import sys
 from pathlib import Path
 
 from lib import chroma_client, embed, load_state
+from paths import PROG, data_dir
 
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--plugin-root", required=True)
     ap.add_argument("--query", required=True)
     ap.add_argument("--book", default="all")
     ap.add_argument("--top-k", type=int, default=8)
     args = ap.parse_args()
 
-    plugin_root = Path(args.plugin_root)
-    state = load_state(plugin_root)
+    data = data_dir()
+    state = load_state(data)
     books_state = state.get("books", {})
     if not books_state:
-        sys.exit("no books indexed. user can run: /dioxus-docs rag enable <book>")
+        sys.exit(f"no books indexed. user can run: {PROG} rag enable <book>")
 
     if args.book == "all":
         books = list(books_state.keys())
@@ -33,7 +33,7 @@ def main() -> None:
             sys.exit(f"book '{args.book}' is not enabled. enabled: {list(books_state.keys())}")
         books = [args.book]
 
-    client = chroma_client(plugin_root)
+    client = chroma_client(data)
     pooled: list[dict] = []
 
     for book in books:
@@ -45,7 +45,7 @@ def main() -> None:
         except Exception as e:
             print(f"[rag-query] WARN: skipping {book}: {e}", file=sys.stderr)
             continue
-        q_emb = embed(model, [args.query], backend=backend, plugin_root=plugin_root)[0]
+        q_emb = embed(model, [args.query], backend=backend, data=data)[0]
         res = coll.query(query_embeddings=[q_emb], n_results=args.top_k)
         for i in range(len(res["ids"][0])):
             pooled.append({

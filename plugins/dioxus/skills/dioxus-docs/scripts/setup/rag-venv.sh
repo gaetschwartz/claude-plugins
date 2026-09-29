@@ -7,12 +7,12 @@
 #   - sentence-transformers — fallback embedding backend (when Ollama is unreachable)
 #
 # Skips installation if $RAG_VENV/.deps-installed already exists.
-# To force a clean reinstall: rm -rf .rag-venv
+# To force a clean reinstall: rm -rf "$RAG_VENV"
 
-# shellcheck source=_lib.sh
+# shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
-RAG_VENV="$PLUGIN_ROOT/.rag-venv"
+RAG_VENV="$DATA/.rag-venv"
 MARKER="$RAG_VENV/.deps-installed"
 
 # Pick the most ML-wheel-friendly Python on PATH (3.13/3.12 first, latest last).

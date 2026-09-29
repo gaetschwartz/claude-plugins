@@ -11,6 +11,7 @@ import argparse
 import sys
 from pathlib import Path
 
+from paths import data_dir
 from lib import (
     chroma_client, embed, load_state, save_state, ollama_alive, ollama_pull,
     chunk_text, now_iso,
@@ -26,7 +27,7 @@ MAX_FILE_BYTES = 200_000  # skip huge files (lockfiles, generated code)
 EMBED_BATCH = 32
 
 
-def index_book(book: str, source_dir: Path, plugin_root: Path, model: str, backend: str) -> None:
+def index_book(book: str, source_dir: Path, data: Path, model: str, backend: str) -> None:
     if not source_dir.is_dir():
         sys.exit(f"source dir does not exist: {source_dir}")
     if book not in BOOK_PATTERNS:
@@ -40,7 +41,7 @@ def index_book(book: str, source_dir: Path, plugin_root: Path, model: str, backe
         else:
             print(f"[rag-index] Ollama unreachable — will use sentence-transformers fallback for {model}", file=sys.stderr)
 
-    client = chroma_client(plugin_root)
+    client = chroma_client(data)
     coll_name = f"book_{book}"
     try:
         client.delete_collection(coll_name)
@@ -57,7 +58,7 @@ def index_book(book: str, source_dir: Path, plugin_root: Path, model: str, backe
     docs: list[str] = []
     ids: list[str] = []
     metas: list[dict] = []
-    plugin_root_str = str(plugin_root)
+    data_str = str(data)
 
     for f in files:
         try:
@@ -66,7 +67,7 @@ def index_book(book: str, source_dir: Path, plugin_root: Path, model: str, backe
             print(f"[rag-index] skip {f}: {e}", file=sys.stderr)
             continue
         f_str = str(f)
-        rel = str(f.relative_to(plugin_root)) if f_str.startswith(plugin_root_str) else f_str
+        rel = str(f.relative_to(data)) if f_str.startswith(data_str) else f_str
         for line, chunk in chunk_text(text):
             ids.append(f"{rel}:{line}:{len(docs)}")
             docs.append(chunk)
@@ -78,7 +79,7 @@ def index_book(book: str, source_dir: Path, plugin_root: Path, model: str, backe
     print(f"[rag-index] embedding {len(docs)} chunks with backend={backend} model={model}", file=sys.stderr)
     for i in range(0, len(docs), EMBED_BATCH):
         batch_docs = docs[i:i + EMBED_BATCH]
-        embs = embed(model, batch_docs, backend=backend, plugin_root=plugin_root)
+        embs = embed(model, batch_docs, backend=backend, data=data)
         coll.add(
             ids=ids[i:i + EMBED_BATCH],
             documents=batch_docs,
@@ -88,33 +89,33 @@ def index_book(book: str, source_dir: Path, plugin_root: Path, model: str, backe
         done = min(i + EMBED_BATCH, len(docs))
         print(f"[rag-index] {done}/{len(docs)}", file=sys.stderr)
 
-    state = load_state(plugin_root)
+    state = load_state(data)
     state.setdefault("books", {})[book] = {
         "backend": backend,
         "model": model,
         "indexed_at": now_iso(),
         "chunk_count": len(docs),
         "file_count": len(files),
-        "source_dir": str(source_dir.relative_to(plugin_root)) if source_dir.is_relative_to(plugin_root) else str(source_dir),
+        "source_dir": str(source_dir.relative_to(data)) if source_dir.is_relative_to(data) else str(source_dir),
     }
-    save_state(plugin_root, state)
+    save_state(data, state)
     print(f"[rag-index] done: {book} → {len(docs)} chunks indexed", file=sys.stderr)
 
 
-def disable_book(book: str, plugin_root: Path) -> None:
-    client = chroma_client(plugin_root)
+def disable_book(book: str, data: Path) -> None:
+    client = chroma_client(data)
     try:
         client.delete_collection(f"book_{book}")
         print(f"[rag-index] dropped collection for {book}", file=sys.stderr)
     except Exception as e:
         print(f"[rag-index] no collection to drop for {book}: {e}", file=sys.stderr)
-    state = load_state(plugin_root)
+    state = load_state(data)
     state.get("books", {}).pop(book, None)
-    save_state(plugin_root, state)
+    save_state(data, state)
 
 
-def status(plugin_root: Path) -> None:
-    state = load_state(plugin_root)
+def status(data: Path) -> None:
+    state = load_state(data)
     books = state.get("books", {})
     if not books:
         print("[rag] no books indexed.")
@@ -131,7 +132,6 @@ def status(plugin_root: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--plugin-root", required=True)
     ap.add_argument("--action", default="index", choices=["index", "rebuild", "disable", "status"])
     ap.add_argument("--book")
     ap.add_argument("--source-dir")
@@ -140,18 +140,18 @@ def main() -> None:
                     choices=["ollama", "openai", "sentence-transformers"])
     args = ap.parse_args()
 
-    plugin_root = Path(args.plugin_root)
+    data = data_dir()
 
     if args.action == "status":
-        status(plugin_root)
+        status(data)
     elif args.action == "disable":
         if not args.book:
             sys.exit("--book required for disable")
-        disable_book(args.book, plugin_root)
+        disable_book(args.book, data)
     else:
         if not args.book or not args.source_dir:
             sys.exit("--book and --source-dir required for index/rebuild")
-        index_book(args.book, Path(args.source_dir), plugin_root, args.model, args.backend)
+        index_book(args.book, Path(args.source_dir), data, args.model, args.backend)
 
 
 if __name__ == "__main__":
