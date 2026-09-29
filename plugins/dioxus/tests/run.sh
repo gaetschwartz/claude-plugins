@@ -88,7 +88,7 @@ fake_repos() {
 
 lists_all_subcommands() {
     local s
-    for s in search read example load update paths setup-serena; do
+    for s in search semantic read example load update paths setup-serena; do
         grep -q "^  $s" "$TMP/out" || return 1
     done
 }
@@ -224,6 +224,90 @@ rc_is "example exits 0" 0
 out_has "example prints paths" "vendor/dioxus/examples/"
 run "$DATA" example zzz-no-such-example
 rc_is "example no match exits 1" 1
+
+echo "semantic"
+STUB="$TMP/stub"
+mkdir -p "$STUB"
+cat > "$STUB/uvx" <<'STUBEOF'
+#!/usr/bin/env bash
+printf '%s\n' "$@" > "$UVX_ARGV"
+if [[ -n "${UVX_JSON:-}" ]]; then cat "$UVX_JSON"; else printf '{"query": "q", "results": []}\n'; fi
+STUBEOF
+chmod +x "$STUB/uvx"
+export UVX_ARGV="$TMP/uvx.argv"
+argv_has()   { grep -qxF -- "$1" "$UVX_ARGV"; }
+argv_lacks() { ! grep -qF -- "$1" "$UVX_ARGV"; }
+DOCS_SRC="$DATA/vendor/docsite/docs-src/0.7/src"
+DOC_EX="$DATA/vendor/docsite/packages/docs-router/src/doc_examples"
+PKGS="$DATA/vendor/dioxus/packages"
+EXS="$DATA/vendor/dioxus/examples"
+
+NOBOOT="$TMP/noboot"
+PATH="$STUB:$PATH" run "$NOBOOT" semantic
+rc_is "semantic without a query exits 2" 2
+err_has "semantic without a query prints usage" "usage: dioxus-docs semantic"
+expect "semantic without a query never bootstraps" test ! -e "$NOBOOT/vendor"
+PATH="$STUB:$PATH" run "$NOBOOT" semantic q --scope=nope
+rc_is "semantic invalid scope exits 2" 2
+err_has "semantic invalid scope says so" "unknown --scope=nope"
+PATH="$STUB:$PATH" run "$NOBOOT" semantic q --limit 0
+rc_is "semantic zero --limit exits 2" 2
+PATH="$STUB:$PATH" run "$NOBOOT" semantic q --bogus
+rc_is "semantic unknown flag exits 2" 2
+expect "semantic argument errors never bootstrap" test ! -e "$NOBOOT/vendor"
+
+rm -f "$UVX_ARGV"
+PATH="$STUB:$PATH" run "$DATA" semantic "dynamic route segments"
+rc_is "semantic default exits 0" 0
+expect "semantic default runs semble search" test "$(sed -n '1,4p' "$UVX_ARGV" | tr '\n' ' ')" = "--from semble[mcp] semble search "
+expect "semantic passes the query" argv_has "dynamic route segments"
+expect "semantic searches all content types" test "$(grep -A1 -x -- '--content' "$UVX_ARGV" | tail -n 1)" = all
+expect "semantic default limit is 8" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 8
+expect "semantic default scope has the book" argv_has "$DOCS_SRC"
+expect "semantic default scope has doc_examples" argv_has "$DOC_EX"
+expect "semantic default scope excludes framework source" argv_lacks "dioxus/packages"
+expect "semantic default scope excludes examples" argv_lacks "dioxus/examples"
+err_has "semantic empty result is reported" "no matches for: dynamic route segments"
+
+PATH="$STUB:$PATH" run "$DATA" semantic hooks --scope=src
+rc_is "semantic --scope=src exits 0" 0
+expect "semantic src has framework source" argv_has "$PKGS"
+expect "semantic src excludes the book" argv_lacks "docs-src"
+PATH="$STUB:$PATH" run "$DATA" semantic hooks --scope examples
+expect "semantic --scope examples has examples" argv_has "$EXS"
+expect "semantic --scope examples excludes packages" argv_lacks "dioxus/packages"
+PATH="$STUB:$PATH" run "$DATA" semantic hooks --scope=all --limit=3
+rc_is "semantic --scope=all exits 0" 0
+expect "semantic all has packages" argv_has "$PKGS"
+expect "semantic all has examples" argv_has "$EXS"
+expect "semantic all has the book" argv_has "$DOCS_SRC"
+expect "semantic all has doc_examples" argv_has "$DOC_EX"
+expect "semantic --limit=3 maps to -k 3" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 3
+
+printf '{"query": "q", "results": [{"file_path": "hooks/src/x.rs", "start_line": 3, "end_line": 9, "score": 0.1, "content": "fn x() {}"}]}\n' > "$TMP/semble.json"
+UVX_JSON="$TMP/semble.json" PATH="$STUB:$PATH" run "$DATA" semantic hooks --scope=src
+out_has "semantic prints path and line range" "vendor/dioxus/packages/hooks/src/x.rs:3-9"
+out_has "semantic prints the snippet" "fn x() {}"
+
+MISSING="$TMP/semantic-missing"
+mkdir -p "$MISSING/vendor/dioxus/.git" "$MISSING/vendor/docsite/.git" "$MISSING/index"
+printf 'x\n' > "$MISSING/index/docs.tsv"
+PATH="$STUB:$PATH" run "$MISSING" semantic hooks --scope=src
+rc_isnt "semantic with no existing scope path fails" 0
+err_has "semantic missing paths suggest update" "dioxus-docs update"
+
+NOUV="$TMP/nouv-bin"
+mkdir -p "$NOUV"
+ln -sf "$(command -v bash)" "$NOUV/bash"
+ln -sf "$(command -v dirname)" "$NOUV/dirname"
+CLAUDE_PLUGIN_DATA="$NOBOOT" PATH="$NOUV" "$NOUV/bash" "$DISPATCH" semantic hooks >"$TMP/out" 2>"$TMP/err"
+RC=$?
+OUT="$(cat "$TMP/out")"
+ERR="$(cat "$TMP/err")"
+rc_isnt "semantic without uvx fails" 0
+err_has "semantic without uvx names uv" "uv is required"
+err_has "semantic without uvx links the install page" "docs.astral.sh/uv"
+expect "semantic without uvx never bootstraps" test ! -e "$NOBOOT/vendor"
 
 echo "bootstrap against local repos"
 FAKE="$TMP/fake"

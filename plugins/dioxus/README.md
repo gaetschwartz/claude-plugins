@@ -15,6 +15,7 @@ The plugin puts `dioxus-docs` on the PATH of Claude's Bash tool. The `dioxus-doc
 | Subcommand | What it does |
 |---|---|
 | `search <query> [--scope=docs\|src\|examples\|all] [--limit=N] [--regex]` | Fixed-string, smart-case search. |
+| `semantic <query> [--scope=docs\|src\|examples\|all] [--limit=N]` | Meaning-based search backed by [semble](https://github.com/MinishLab/semble). |
 | `read <slug-or-fragment> [--list]` | Print a book page with mdbook includes expanded. |
 | `example <pattern> [--list]` | Find a maintained example. |
 | `load <topic>` | Print a curated bundle of book pages. |
@@ -44,6 +45,10 @@ The plugin directory itself is never written to, so plugin updates do not lose t
 The project file the plugin writes sets `read_only: true`, which removes Serena's own editing tools for that project. It does not restrict Claude's `Edit` and `Write`.
 
 `dioxus-docs setup-serena` is a separate, explicit step because it changes your machine: it installs rust-analyzer with `brew` (or `rustup component add`) if none is usable, and runs `cargo metadata` inside the Dioxus clone, which writes a `Cargo.lock` there and may use the network. Run it once, then `/reload-plugins`. The MCP server starts at session boot, so on a fresh install it fails until the clones exist; `/reload-plugins` after the first docs call (or `setup-serena`) brings it up.
+
+## Semantic search
+
+`dioxus-docs semantic "<question>"` finds passages by meaning instead of exact text, using [semble](https://github.com/MinishLab/semble) through `uvx` (so `uv` must be installed; no server or GPU). The first call downloads a ~32 MB model and builds an index for the scope, which is slow once; semble keeps its own cache and re-indexes files that changed, so `dioxus-docs update` needs no extra step. Scopes: `docs` (default: the 0.7 book plus its doc examples), `src` (framework packages), `examples`, or `all`. `--limit` defaults to 8. Scopes are limited to the 0.7 book so stale 0.4 to 0.6 pages do not compete.
 
 ## Context7 fallback
 

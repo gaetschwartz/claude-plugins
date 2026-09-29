@@ -36,19 +36,19 @@ with `dioxus-docs` and tell the user this.
    cite it, say you do not know.
 2. Never invent an API. No Serena match and no `search --scope=src` hit means the
    symbol does not exist in 0.7.
-3. Prefer Serena for Rust symbols. Use `search` for concepts and free text.
+3. Prefer Serena for Rust symbols. Use `semantic` for concepts and "how do I" questions, `search` for exact strings.
 4. No 0.5 or 0.6 patterns from memory unless the user asks about migration.
 
 # Playbooks
 
 ## Q&A
 1. Symbols: Serena `find_symbol`, `Read` the file, `find_referencing_symbols` for usages.
-2. Concepts: `read <slug> --list`, then `read <slug>`; `load <topic>` for a whole topic.
-3. Empty result: broaden `search --scope`, then Context7.
+2. Concepts: `semantic "<question>"`, then `read <slug>` on the best page; `load <topic>` for a whole topic.
+3. Empty result: rephrase `semantic`, widen `--scope`, try `search` on an exact term, then Context7.
 4. Answer in your own words, one citation per claim.
 
 ## Writing code
-1. `example <topic>`; on no match broaden it or `search --scope=examples`.
+1. `example <topic>`; on no match broaden it or `semantic "<task>" --scope=examples`.
 2. `Read` the example and mirror its imports, components, RSX and state handling.
 3. Confirm each non-trivial API signature with `find_symbol`.
 4. End with a "Based on" footer listing the example paths and symbols used.

@@ -14,6 +14,8 @@ Usage: $PROG <subcommand> [args]
 Subcommands:
   search <query> [--scope=docs|src|examples|all] [--limit=N] [--regex]
                           Fixed-string, smart-case ripgrep over the vendored Dioxus and docs.
+  semantic <query> [--scope=docs|src|examples|all] [--limit=N]
+                          Meaning-based search via semble; needs uv. First use downloads a small model.
   read <slug-or-fragment> [--list]
                           Print a Dioxus 0.7 doc page (mdbook includes expanded), or list candidates.
   example <pattern> [--list]
@@ -37,7 +39,7 @@ fi
 cmd=$1; shift
 
 case "$cmd" in
-    search|read|example|load)
+    search|read|example|semantic|load)
         exec bash "$script_dir/commands/$cmd.sh" "$@" ;;
     update)
         exec bash "$script_dir/setup/bootstrap.sh" update ;;

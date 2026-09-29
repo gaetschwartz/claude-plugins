@@ -19,6 +19,7 @@ to stdout. `dioxus-docs --help` lists every subcommand and the `load` topics.
 | Subcommand | Use |
 |---|---|
 | `search <query> [--scope=docs\|src\|examples\|all] [--limit=N] [--regex]` | Fixed-string, smart-case search. Output is `path:line:text`, relative to the data dir. |
+| `semantic <query> [--scope=docs\|src\|examples\|all] [--limit=N]` | Meaning-based search (semble, needs `uv`). Default scope `docs`, default limit 8. Output is `path:start-end` plus a snippet, relative to the data dir. |
 | `read <slug-or-fragment> [--list]` | Print a book page with mdbook includes expanded. Ambiguous input lists candidates. |
 | `example <pattern> [--list]` | Find a maintained example under `examples/`. |
 | `load <topic>` | Print a curated bundle of book pages. No topic prints the topics with sizes. |
@@ -30,10 +31,11 @@ to stdout. `dioxus-docs --help` lists every subcommand and the `load` topics.
 | Question | Use |
 |---|---|
 | Where is a symbol defined, who calls it, what is its signature | Serena `find_symbol`, `find_referencing_symbols`, `get_symbols_overview` |
-| How does a concept work (server functions, router, hooks) | `read <slug>` or `search "<phrase>" --scope=docs` |
+| An exact string or identifier | `search "<text>"` |
+| A concept or "how do I..." question | `semantic "<question>"`, then `read <slug>` on the best page |
 | A working pattern to copy | `example <pattern>`, then read the file |
+| A full page | `read <slug>` |
 | A whole topic before coding | `load <topic>` |
-| Free text across docs, source and examples | `search "<phrase>"` |
 
 If Serena is unavailable, fall back to `search --scope=src`.
 
@@ -49,7 +51,9 @@ win on conflict.
 
 The first `search`, `read`, `example` or `load` clones the Dioxus and docsite
 repositories into the data dir and builds the index. `dioxus-docs update`
-refreshes both. Serena needs `dioxus-docs setup-serena` once (installs
+refreshes both. The first `semantic` call downloads a ~32 MB model and builds
+that scope's index, so it is slow once; semble refreshes its own cache when
+files change. Serena needs `dioxus-docs setup-serena` once (installs
 rust-analyzer, warms cargo metadata), then `/reload-plugins` so the MCP server
 restarts against the clone.
 
@@ -57,8 +61,8 @@ restarts against the clone.
 
 1. Cite `<path>:<line>` for every API claim. Turn search output into an absolute
    path with the roots from `dioxus-docs paths` before opening it with `Read`.
-2. Start with Serena for symbols, and with `read` or `search --scope=docs` for
-   "how do I" questions. Do not answer from memory.
+2. Start with Serena for symbols, and with `semantic` or `read` for "how do I"
+   questions. Do not answer from memory.
 3. Before writing non-trivial code, find the closest `example` and mirror its
    idioms.
 4. Never invent an API. No Serena match and no `search --scope=src` hit means it
