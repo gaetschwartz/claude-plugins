@@ -3,11 +3,14 @@
 #
 # Output: <path>:<start>-<end> then the snippet, paths relative to the data dir.
 # Backed by semble via uvx; semble caches and refreshes its own indexes.
+# Results under untested_* directories (old doc versions) are dropped.
 
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
 SNIPPET_LINES=12
+OVERFETCH=4
+MAX_FETCH=100
 SYNOPSIS="$PROG semantic <query> [--scope=docs|src|examples|all] [--limit=N]"
 
 arg_error() { log "ERROR: $* (usage: $SYNOPSIS)"; exit 2; }
@@ -53,7 +56,9 @@ for p in "${candidates[@]}"; do
 done
 (( ${#paths[@]} )) || die "no directories to search for --scope=$scope under $DATA (run: $PROG update)"
 
-log "[semantic] first use downloads a small model and builds an index per scope; later runs are fast"
-uvx --from 'semble[mcp]' semble search -k "$limit" --content all \
+fetch=$(( limit * OVERFETCH ))
+(( fetch <= MAX_FETCH )) || fetch=$MAX_FETCH
+(( fetch >= limit )) || fetch=$limit
+uvx --from 'semble[mcp]' semble search -k "$fetch" --content all \
     --max-snippet-lines "$SNIPPET_LINES" --format json -- "$query" "${paths[@]}" \
-    | python3 "$_LIB_DIR/lib/render_semantic.py" --data "$DATA" --query "$query" "${paths[@]}"
+    | python3 "$_LIB_DIR/lib/render_semantic.py" --data "$DATA" --query "$query" --limit "$limit" "${paths[@]}"

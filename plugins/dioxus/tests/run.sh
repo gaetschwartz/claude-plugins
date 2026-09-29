@@ -262,7 +262,7 @@ rc_is "semantic default exits 0" 0
 expect "semantic default runs semble search" test "$(sed -n '1,4p' "$UVX_ARGV" | tr '\n' ' ')" = "--from semble[mcp] semble search "
 expect "semantic passes the query" argv_has "dynamic route segments"
 expect "semantic searches all content types" test "$(grep -A1 -x -- '--content' "$UVX_ARGV" | tail -n 1)" = all
-expect "semantic default limit is 8" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 8
+expect "semantic default limit over-fetches 4x" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 32
 expect "semantic default scope has the book" argv_has "$DOCS_SRC"
 expect "semantic default scope has doc_examples" argv_has "$DOC_EX"
 expect "semantic default scope excludes framework source" argv_lacks "dioxus/packages"
@@ -282,12 +282,40 @@ expect "semantic all has packages" argv_has "$PKGS"
 expect "semantic all has examples" argv_has "$EXS"
 expect "semantic all has the book" argv_has "$DOCS_SRC"
 expect "semantic all has doc_examples" argv_has "$DOC_EX"
-expect "semantic --limit=3 maps to -k 3" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 3
+expect "semantic --limit=3 over-fetches -k 12" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 12
+PATH="$STUB:$PATH" run "$DATA" semantic hooks --limit=60
+expect "semantic over-fetch is capped at 100" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 100
+PATH="$STUB:$PATH" run "$DATA" semantic hooks --limit=150
+expect "semantic never fetches fewer than the limit" test "$(grep -A1 -x -- '-k' "$UVX_ARGV" | tail -n 1)" = 150
+err_lacks "semantic prints no first-use notice" "first use"
 
 printf '{"query": "q", "results": [{"file_path": "hooks/src/x.rs", "start_line": 3, "end_line": 9, "score": 0.1, "content": "fn x() {}"}]}\n' > "$TMP/semble.json"
 UVX_JSON="$TMP/semble.json" PATH="$STUB:$PATH" run "$DATA" semantic hooks --scope=src
 out_has "semantic prints path and line range" "vendor/dioxus/packages/hooks/src/x.rs:3-9"
 out_has "semantic prints the snippet" "fn x() {}"
+
+python3 - "$DOC_EX" "$DOCS_SRC" > "$TMP/stale.json" <<'PY'
+import json, sys
+ex, src = sys.argv[1:3]
+hits = [
+    ("doc_examples/untested_04/a.rs", "STALE04"),
+    ("doc_examples/nav.rs", "KEEP1"),
+    ("doc_examples/untested_06/b.rs", "STALE06"),
+    ("src/essentials/router/navigation.md", "KEEP2"),
+    ("doc_examples/routes.rs", "KEEP3"),
+]
+results = [{"file_path": p, "start_line": 1, "end_line": 2, "score": 0.1, "content": c} for p, c in hits]
+print(json.dumps({"query": "q", "results": results, "repos": {"doc_examples": ex, "src": src}}))
+PY
+UVX_JSON="$TMP/stale.json" PATH="$STUB:$PATH" run "$DATA" semantic q --limit=2
+rc_is "semantic with stale hits exits 0" 0
+out_lacks "semantic drops untested_04 hits" "STALE04"
+out_lacks "semantic drops untested_06 hits" "STALE06"
+out_has "semantic keeps the first current hit" "KEEP1"
+out_has "semantic keeps the second current hit" "KEEP2"
+out_lacks "semantic honours the limit after filtering" "KEEP3"
+UVX_JSON="$TMP/stale.json" PATH="$STUB:$PATH" run "$DATA" semantic q --limit=5
+out_has "semantic returns all current hits when fewer than the limit" "KEEP3"
 
 MISSING="$TMP/semantic-missing"
 mkdir -p "$MISSING/vendor/dioxus/.git" "$MISSING/vendor/docsite/.git" "$MISSING/index"
