@@ -12,6 +12,7 @@ response. The shape of that section depends on the current state
 """
 
 import argparse
+import getpass
 import json
 import os
 import sys
@@ -20,88 +21,10 @@ import urllib.request
 from pathlib import Path
 
 from paths import PROG, data_dir
-
-
-DEFAULTS_BY_BACKEND = {
-    "ollama": {
-        "model": "qwen3-embedding:0.6b",
-        "alternatives": ["nomic-embed-text", "mxbai-embed-large"],
-    },
-    "openai": {
-        "model": "text-embedding-3-small",
-        "alternatives": ["text-embedding-3-large", "text-embedding-ada-002"],
-    },
-    "sentence-transformers": {
-        "model": "Qwen/Qwen3-Embedding-0.6B",
-        "alternatives": ["nomic-ai/nomic-embed-text-v1.5", "BAAI/bge-large-en-v1.5"],
-    },
-}
-
-
-def default_config() -> dict:
-    return {
-        "backend": "ollama",
-        "model": DEFAULTS_BY_BACKEND["ollama"]["model"],
-        "openai_base_url": "https://api.openai.com/v1",
-        "openai_api_key_env": "OPENAI_API_KEY",
-    }
-
-
-# --- state I/O ---------------------------------------------------------------
-
-def state_path(data: Path) -> Path:
-    return data / ".rag-state.json"
-
-
-def secrets_path(data: Path) -> Path:
-    return data / ".rag-config-secrets"
-
-
-def load_state(data: Path) -> dict:
-    p = state_path(data)
-    if p.exists():
-        return json.loads(p.read_text())
-    return {}
-
-
-def save_state(data: Path, state: dict) -> None:
-    state_path(data).write_text(json.dumps(state, indent=2) + "\n")
-
-
-def get_config(data: Path) -> dict:
-    state = load_state(data)
-    cfg = default_config()
-    cfg.update(state.get("config", {}))
-    return cfg
-
-
-def set_config(data: Path, **updates) -> None:
-    state = load_state(data)
-    cfg = state.get("config") or default_config()
-    cfg.update({k: v for k, v in updates.items() if v is not None})
-    state["config"] = cfg
-    save_state(data, state)
-
-
-def read_secrets(data: Path) -> dict:
-    p = secrets_path(data)
-    if not p.exists():
-        return {}
-    try:
-        return json.loads(p.read_text())
-    except json.JSONDecodeError:
-        return {}
-
-
-def write_secret(data: Path, key: str, value: str) -> None:
-    p = secrets_path(data)
-    secrets = read_secrets(data)
-    secrets[key] = value
-    p.write_text(json.dumps(secrets, indent=2) + "\n")
-    try:
-        p.chmod(0o600)
-    except OSError:
-        pass
+from state import (
+    DEFAULTS_BY_BACKEND, default_config, load_config, load_state, read_secrets,
+    save_config, write_secret,
+)
 
 
 # --- backend readiness probes -----------------------------------------------
@@ -127,7 +50,7 @@ def probe_openai(data: Path, cfg: dict) -> tuple[bool, str]:
         return True, f"key set via env ${key_env}"
     if read_secrets(data).get(key_env):
         return True, "key stored in .rag-config-secrets (chmod 600)"
-    return False, f"no key (set ${key_env} or run `rag config set-openai-key <KEY>`)"
+    return False, f"no key (export ${key_env}, or pipe a key into `{PROG} rag config set-openai-key`)"
 
 
 def probe_st(data: Path) -> tuple[bool, str]:
@@ -144,7 +67,7 @@ def probe_st(data: Path) -> tuple[bool, str]:
 # --- show command -----------------------------------------------------------
 
 def render_show(data: Path) -> str:
-    cfg = get_config(data)
+    cfg = load_config(data)
     state = load_state(data)
     books = state.get("books", {})
 
@@ -165,6 +88,7 @@ def render_show(data: Path) -> str:
     lines.append(f"- **model**:   `{model}`")
     lines.append(f"- **openai_base_url**: `{base}` (used only when backend=openai)")
     lines.append(f"- **openai_api_key**: source=`{key_source}`, env var=`${key_env}`")
+    lines.append(f"- **trust_remote_code**: `{str(cfg['trust_remote_code']).lower()}` (sentence-transformers only; some models need it, it runs code from the model repo)")
     lines.append("")
     lines.append("## Backend readiness")
     lines.append("")
@@ -207,12 +131,11 @@ def _agent_instructions(*, backend: str, model: str, ollama_ok: bool, openai_ok:
     """Render the state-dependent guidance block.
 
     Policy: **the agent drives the conversation and runs the commands itself.**
-    Ask the user for inputs (backend choice, API key, model, base URL); then
-    run `rag config set-*` and `rag enable` directly via Bash — don't hand
-    a list of slash commands back for the user to type. Only run `set-*`
+    Ask the user for inputs (backend choice, model, base URL); then run
+    `rag config set-*` and `rag enable` directly via Bash. Only run `set-*`
     with values the user explicitly provided in this conversation; never
-    fabricate keys / model names / URLs. Confirm intent before destructive
-    operations (`rag disable`, `rag rebuild`).
+    fabricate models / URLs. API keys never go on a command line. Confirm
+    intent before destructive operations (`rag disable`, `rag enable --force`).
     """
     out = []
 
@@ -244,18 +167,18 @@ def _agent_instructions(*, backend: str, model: str, ollama_ok: bool, openai_ok:
             out.append(f"    Run: `{PROG} rag enable docs`")
             out.append("    Report when indexing finishes.")
         out.append("- **openai** →")
-        out.append(f"    Ask the user for: (a) API key, unless ${key_env} is already in their environment;")
-        out.append("    (b) model — default `text-embedding-3-small`, alternative `text-embedding-3-large`;")
-        out.append("    (c) custom base URL — only if they're using Azure / OpenRouter / vLLM / llama.cpp etc.")
-        out.append("    Then run, in order, with the values they gave you:")
+        out.append(f"    Key: if ${key_env} is not in their environment, ask them to export it and restart, or to run `{PROG} rag config set-openai-key` themselves in a terminal (it prompts for the key). Never ask them to paste the key into the chat.")
+        out.append("    Ask the user for:")
+        out.append("    (a) model — default `text-embedding-3-small`, alternative `text-embedding-3-large`;")
+        out.append("    (b) custom base URL — only if they're using Azure / OpenRouter / vLLM / llama.cpp etc.")
+        out.append("    Then run, in order, with the values they gave you (the key must already be available as described above):")
         out.append(f"    `{PROG} rag config set-backend openai`")
-        out.append(f"    `{PROG} rag config set-openai-key <KEY>`     (skip if env var is already set)")
         out.append(f"    `{PROG} rag config set-model <model>`        (skip if default)")
         out.append(f"    `{PROG} rag config set-openai-base <url>`    (skip if default)")
         out.append(f"    `{PROG} rag enable docs`")
         out.append("    Report when indexing finishes.")
         out.append("- **sentence-transformers** →")
-        out.append("    Confirm the ~1 GB torch+model download is acceptable. Then run:")
+        out.append("    Confirm the ~1 GB torch+model download is acceptable (`enable` installs sentence-transformers into the plugin venv on first use). Then run:")
         out.append(f"    `{PROG} rag config set-backend sentence-transformers`")
         out.append(f"    `{PROG} rag enable docs`")
         out.append("    Report when indexing finishes.")
@@ -280,7 +203,7 @@ def _agent_instructions(*, backend: str, model: str, ollama_ok: bool, openai_ok:
         out.append(f"- **add another book** (`src` / `examples`): ask which, then run `{PROG} rag enable <book>` yourself.")
         out.append("- **change backend or model**: ask for the new values, confirm migration intent, then run `disable` + `set-*` + `enable` yourself.")
         out.append("  (Each book's embeddings are tied to its recorded backend+model — dimensions don't match across.)")
-        out.append(f"- **refresh content** (after `{PROG} update`): confirm intent, then run `{PROG} rag rebuild <book>` yourself.")
+        out.append(f"- **refresh content** (after `{PROG} update`): confirm intent, then run `{PROG} rag enable <book> --force` yourself (reuses the recorded backend and model).")
         return out
 
     # State 3: drift — config doesn't match indexed books
@@ -301,29 +224,55 @@ def cmd_set_backend(data: Path, name: str) -> None:
     if name not in DEFAULTS_BY_BACKEND:
         sys.exit(f"unknown backend: {name} (valid: {', '.join(DEFAULTS_BY_BACKEND)})")
     new_model = DEFAULTS_BY_BACKEND[name]["model"]
-    set_config(data, backend=name, model=new_model)
+    save_config(data, backend=name, model=new_model)
     print(f"[rag-config] backend={name}, model={new_model} (default for {name}; override with set-model)", file=sys.stderr)
 
 
 def cmd_set_model(data: Path, model: str) -> None:
-    set_config(data, model=model)
+    save_config(data, model=model)
     print(f"[rag-config] model={model}", file=sys.stderr)
 
 
 def cmd_set_openai_base(data: Path, url: str) -> None:
-    set_config(data, openai_base_url=url)
+    save_config(data, openai_base_url=url)
     print(f"[rag-config] openai_base_url={url}", file=sys.stderr)
 
 
-def cmd_set_openai_key(data: Path, key: str) -> None:
-    cfg = get_config(data)
-    key_env = cfg.get("openai_api_key_env", "OPENAI_API_KEY")
-    write_secret(data, key_env, key)
+def cmd_set_trust_remote_code(data: Path, value: str) -> None:
+    if value not in ("on", "off"):
+        sys.exit("set-trust-remote-code takes 'on' or 'off'")
+    save_config(data, trust_remote_code=(value == "on"))
+    print(f"[rag-config] trust_remote_code={value}", file=sys.stderr)
+
+
+def read_key_input(key_env: str) -> str:
+    if not sys.stdin.isatty():
+        key = sys.stdin.read().strip()
+        if key:
+            return key
+    else:
+        key = getpass.getpass(f"{key_env}: ").strip()
+        if key:
+            return key
+    key = os.environ.get(key_env, "").strip()
+    if key:
+        return key
+    sys.exit(f"no key provided: pipe it on stdin or export {key_env}")
+
+
+def cmd_set_openai_key(data: Path, argv_key: str | None) -> None:
+    if argv_key is not None:
+        sys.exit(
+            "refusing a key on the command line (it would end up in shell history and the transcript); "
+            f"pipe it on stdin instead: printf %s \"$KEY\" | {PROG} rag config set-openai-key"
+        )
+    key_env = load_config(data).get("openai_api_key_env", "OPENAI_API_KEY")
+    write_secret(data, key_env, read_key_input(key_env))
     print(f"[rag-config] stored ${key_env} in .rag-config-secrets (chmod 600)", file=sys.stderr)
 
 
 def cmd_reset(data: Path) -> None:
-    set_config(data, **default_config())
+    save_config(data, **default_config())
     print("[rag-config] reset to defaults", file=sys.stderr)
 
 
@@ -337,10 +286,11 @@ def main() -> None:
     p = sub.add_parser("set-backend"); p.add_argument("name")
     p = sub.add_parser("set-model"); p.add_argument("model")
     p = sub.add_parser("set-openai-base"); p.add_argument("url")
-    p = sub.add_parser("set-openai-key"); p.add_argument("key")
+    p = sub.add_parser("set-trust-remote-code"); p.add_argument("value")
+    p = sub.add_parser("set-openai-key"); p.add_argument("key", nargs="?")
     sub.add_parser("reset")
 
-    # Read-only accessors used by rag.sh to thread config values through.
+    # Read-only accessors used by rag.sh.
     p = sub.add_parser("get"); p.add_argument("field")
     p = sub.add_parser("get-book"); p.add_argument("book"); p.add_argument("field")
 
@@ -355,12 +305,14 @@ def main() -> None:
         cmd_set_model(data, args.model)
     elif args.cmd == "set-openai-base":
         cmd_set_openai_base(data, args.url)
+    elif args.cmd == "set-trust-remote-code":
+        cmd_set_trust_remote_code(data, args.value)
     elif args.cmd == "set-openai-key":
         cmd_set_openai_key(data, args.key)
     elif args.cmd == "reset":
         cmd_reset(data)
     elif args.cmd == "get":
-        print(get_config(data).get(args.field, ""))
+        print(load_config(data).get(args.field, ""))
     elif args.cmd == "get-book":
         state = load_state(data)
         info = state.get("books", {}).get(args.book, {})

@@ -1,60 +1,71 @@
 #!/usr/bin/env bash
-# Idempotent: create / upgrade the plugin's RAG Python venv.
+# Idempotent: create the RAG venv and install its dependencies.
 #
-# Installs:
-#   - chromadb        — persistent vector store
-#   - requests        — Ollama HTTP client
-#   - sentence-transformers — fallback embedding backend (when Ollama is unreachable)
-#
-# Skips installation if $RAG_VENV/.deps-installed already exists.
-# To force a clean reinstall: rm -rf "$RAG_VENV"
+# Usage: rag-venv.sh [--backend=<name>]
+#   Core deps (chromadb, requests) are always installed. sentence-transformers
+#   (pulls in torch) is installed only when --backend=sentence-transformers.
+# Prefers `uv` when available, falls back to python -m venv + pip.
+# To force a clean reinstall: rm -rf "$DATA/.rag-venv"
 
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
 RAG_VENV="$DATA/.rag-venv"
-MARKER="$RAG_VENV/.deps-installed"
+CORE_MARKER="$RAG_VENV/.deps-installed"
+ST_MARKER="$RAG_VENV/.st-installed"
 
-# Pick the most ML-wheel-friendly Python on PATH (3.13/3.12 first, latest last).
-python_bin=""
-for cand in python3.13 python3.12 python3.11 python3.10 python3.14 python3; do
-    if command -v "$cand" >/dev/null 2>&1; then
-        python_bin="$(command -v "$cand")"
-        break
-    fi
+WITH_ST=0
+for a in "$@"; do
+    case "$a" in
+        --backend=sentence-transformers) WITH_ST=1 ;;
+        --backend=*) ;;
+        *) die "usage: rag-venv.sh [--backend=<name>]" ;;
+    esac
 done
-[[ -n "$python_bin" ]] || die "no python3 found in PATH (need >=3.10)"
 
-ver_ok=$("$python_bin" -c 'import sys; print(1 if sys.version_info >= (3,10) else 0)')
-[[ "$ver_ok" == "1" ]] || die "$python_bin too old (need >=3.10): $($python_bin --version)"
+USE_UV=0
+command -v uv >/dev/null 2>&1 && USE_UV=1
 
-if [[ -f "$MARKER" ]]; then
-    log "[rag-venv] already set up at $RAG_VENV (delete .deps-installed to force reinstall)"
-    exit 0
-fi
+pip_install() {
+    if (( USE_UV )); then
+        uv pip install --quiet --python "$RAG_VENV/bin/python" "$@"
+    else
+        "$RAG_VENV/bin/pip" install --quiet "$@"
+    fi
+}
 
-if [[ ! -d "$RAG_VENV" ]]; then
+create_venv() {
+    if (( USE_UV )); then
+        log "[rag-venv] creating venv at $RAG_VENV with uv"
+        uv venv --quiet --python ">=3.10,<3.14" "$RAG_VENV"
+        return
+    fi
+    local python_bin="" cand
+    for cand in python3.13 python3.12 python3.11 python3.10 python3; do
+        if command -v "$cand" >/dev/null 2>&1; then
+            python_bin="$(command -v "$cand")"
+            break
+        fi
+    done
+    [[ -n "$python_bin" ]] || die "no python3 found in PATH (need >=3.10)"
+    "$python_bin" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 10) else 1)' \
+        || die "$python_bin too old (need >=3.10): $("$python_bin" --version)"
     log "[rag-venv] creating venv at $RAG_VENV with $python_bin"
     "$python_bin" -m venv "$RAG_VENV"
+    "$RAG_VENV/bin/pip" install --quiet --upgrade pip wheel
+}
+
+if [[ ! -f "$CORE_MARKER" ]]; then
+    [[ -x "$RAG_VENV/bin/python" ]] || create_venv
+    log "[rag-venv] installing core deps (chromadb, requests)"
+    pip_install 'chromadb>=0.5,<0.6' 'requests>=2.31'
+    touch "$CORE_MARKER"
 fi
 
-log "[rag-venv] upgrading pip"
-"$RAG_VENV/bin/pip" install --quiet --upgrade pip wheel
-
-log "[rag-venv] installing core deps (chromadb, requests)"
-"$RAG_VENV/bin/pip" install --quiet \
-    'chromadb>=0.5,<0.6' \
-    'requests>=2.31'
-
-# sentence-transformers is the fallback when Ollama isn't reachable. It pulls in
-# torch — large (~1 GB), but it's the price of self-contained operation. Eager
-# install keeps `rag query` fast on the fallback path (no first-call delay).
-log "[rag-venv] installing fallback embedding backend (sentence-transformers; large, ~1 GB)"
-if ! "$RAG_VENV/bin/pip" install --quiet 'sentence-transformers>=2.7'; then
-    log "[rag-venv] WARN: sentence-transformers install failed."
-    log "[rag-venv] You'll be locked into the Ollama backend. Install Ollama from https://ollama.com"
-    log "[rag-venv] and run: ollama serve"
+if (( WITH_ST )) && [[ ! -f "$ST_MARKER" ]]; then
+    log "[rag-venv] installing sentence-transformers (pulls in torch; large, ~1 GB)"
+    pip_install 'sentence-transformers>=2.7' || die "sentence-transformers install failed"
+    touch "$ST_MARKER"
 fi
 
-touch "$MARKER"
-log "[rag-venv] done. venv at $RAG_VENV"
+log "[rag-venv] ready at $RAG_VENV"

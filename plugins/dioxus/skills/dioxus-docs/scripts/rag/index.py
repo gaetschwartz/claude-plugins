@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build, rebuild, disable, or report status on the dioxus-docs RAG indexes.
+"""Build, disable, or report status on the dioxus-docs RAG indexes.
 
 Invoked from rag.sh. Books map to source subtrees:
   docs     → vendor/docsite/docs-src/0.7/src/   (.md)
@@ -11,11 +11,9 @@ import argparse
 import sys
 from pathlib import Path
 
+from lib import chroma_client, embed, ollama_alive, ollama_pull, chunk_text, now_iso
 from paths import data_dir
-from lib import (
-    chroma_client, embed, load_state, save_state, ollama_alive, ollama_pull,
-    chunk_text, now_iso,
-)
+from state import load_state, save_state
 
 BOOK_PATTERNS: dict[str, tuple[str, ...]] = {
     "docs": ("**/*.md",),
@@ -33,21 +31,11 @@ def index_book(book: str, source_dir: Path, data: Path, model: str, backend: str
     if book not in BOOK_PATTERNS:
         sys.exit(f"unknown book: {book} (valid: {', '.join(BOOK_PATTERNS)})")
 
-    # Pre-flight: only pull the model when backend=ollama AND Ollama is alive.
-    # Other backends manage their own model fetching.
     if backend == "ollama":
         if ollama_alive():
             ollama_pull(model)
         else:
-            print(f"[rag-index] Ollama unreachable — will use sentence-transformers fallback for {model}", file=sys.stderr)
-
-    client = chroma_client(data)
-    coll_name = f"book_{book}"
-    try:
-        client.delete_collection(coll_name)
-    except Exception:
-        pass
-    coll = client.create_collection(coll_name, metadata={"book": book, "model": model, "backend": backend})
+            print(f"[rag-index] Ollama unreachable — will use the sentence-transformers fallback for {model} if it is installed", file=sys.stderr)
 
     files: list[Path] = []
     for pattern in BOOK_PATTERNS[book]:
@@ -76,29 +64,58 @@ def index_book(book: str, source_dir: Path, data: Path, model: str, backend: str
     if not docs:
         sys.exit(f"no chunks produced from {source_dir} — check the book's source pattern")
 
+    client = chroma_client(data)
+    live_name = f"book_{book}"
+    tmp_name = f"{live_name}__building"
+    try:
+        client.delete_collection(tmp_name)
+    except Exception:
+        pass
+    coll = client.create_collection(tmp_name)
+
     print(f"[rag-index] embedding {len(docs)} chunks with backend={backend} model={model}", file=sys.stderr)
-    for i in range(0, len(docs), EMBED_BATCH):
-        batch_docs = docs[i:i + EMBED_BATCH]
-        embs = embed(model, batch_docs, backend=backend, data=data)
-        coll.add(
-            ids=ids[i:i + EMBED_BATCH],
-            documents=batch_docs,
-            embeddings=embs,
-            metadatas=metas[i:i + EMBED_BATCH],
-        )
-        done = min(i + EMBED_BATCH, len(docs))
-        print(f"[rag-index] {done}/{len(docs)}", file=sys.stderr)
+    used_backend = used_model = None
+    try:
+        for i in range(0, len(docs), EMBED_BATCH):
+            batch_docs = docs[i:i + EMBED_BATCH]
+            result = embed(model, batch_docs, backend=backend, data=data, allow_fallback=True)
+            if used_backend is None:
+                used_backend, used_model = result.backend, result.model
+            elif (result.backend, result.model) != (used_backend, used_model):
+                sys.exit(f"embedding backend changed mid-index ({used_backend} -> {result.backend}); nothing was replaced, retry once the backend is stable")
+            coll.add(
+                ids=ids[i:i + EMBED_BATCH],
+                documents=batch_docs,
+                embeddings=result.vectors,
+                metadatas=metas[i:i + EMBED_BATCH],
+            )
+            done = min(i + EMBED_BATCH, len(docs))
+            print(f"[rag-index] {done}/{len(docs)}", file=sys.stderr)
+
+        try:
+            client.delete_collection(live_name)
+        except Exception:
+            pass
+        coll.modify(name=live_name, metadata={"book": book, "model": used_model, "backend": used_backend})
+    except BaseException:
+        try:
+            client.delete_collection(tmp_name)
+        except Exception:
+            pass
+        raise
 
     state = load_state(data)
-    state.setdefault("books", {})[book] = {
-        "backend": backend,
-        "model": model,
+    state["books"][book] = {
+        "backend": used_backend,
+        "model": used_model,
         "indexed_at": now_iso(),
         "chunk_count": len(docs),
         "file_count": len(files),
         "source_dir": str(source_dir.relative_to(data)) if source_dir.is_relative_to(data) else str(source_dir),
     }
     save_state(data, state)
+    if (used_backend, used_model) != (backend, model):
+        print(f"[rag-index] note: indexed with backend={used_backend} model={used_model} (requested {backend}/{model})", file=sys.stderr)
     print(f"[rag-index] done: {book} → {len(docs)} chunks indexed", file=sys.stderr)
 
 
@@ -110,20 +127,20 @@ def disable_book(book: str, data: Path) -> None:
     except Exception as e:
         print(f"[rag-index] no collection to drop for {book}: {e}", file=sys.stderr)
     state = load_state(data)
-    state.get("books", {}).pop(book, None)
+    state["books"].pop(book, None)
     save_state(data, state)
 
 
 def status(data: Path) -> None:
     state = load_state(data)
-    books = state.get("books", {})
+    books = state["books"]
     if not books:
         print("[rag] no books indexed.")
         return
     print("[rag] enabled books:")
     for book, info in books.items():
         print(
-            f"  - {book}: model={info.get('model', '?')}, "
+            f"  - {book}: backend={info.get('backend', '?')}, model={info.get('model', '?')}, "
             f"chunks={info.get('chunk_count', '?')}, "
             f"files={info.get('file_count', '?')}, "
             f"indexed_at={info.get('indexed_at', '?')}"
@@ -132,7 +149,7 @@ def status(data: Path) -> None:
 
 def main() -> None:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--action", default="index", choices=["index", "rebuild", "disable", "status"])
+    ap.add_argument("--action", default="index", choices=["index", "disable", "status"])
     ap.add_argument("--book")
     ap.add_argument("--source-dir")
     ap.add_argument("--model", default="qwen3-embedding:0.6b")
@@ -150,7 +167,7 @@ def main() -> None:
         disable_book(args.book, data)
     else:
         if not args.book or not args.source_dir:
-            sys.exit("--book and --source-dir required for index/rebuild")
+            sys.exit("--book and --source-dir required for index")
         index_book(args.book, Path(args.source_dir), data, args.model, args.backend)
 
 

@@ -2,9 +2,8 @@
 # RAG sub-dispatcher for the dioxus-docs command.
 #
 # Verbs:
-#   enable <book>    Set up venv, pull model, build index. Side effects.
+#   enable <book>    Set up venv, pull model, build index; --force re-indexes. Side effects.
 #   disable <book>   Drop the index for a book. Destructive.
-#   rebuild <book>   Re-index a book in place. Side effects.
 #   status           Print enabled books and metadata. Read-only.
 #   query <q>        Top-k semantic search across enabled books. Read-only.
 #   config <verb>    Inspect or change the RAG configuration.
@@ -35,14 +34,16 @@ usage() {
 Usage: $PROG rag <verb> [args]
 
 Verbs:
-  enable <book> [--backend=...] [--model=...]   side-effects
+  enable <book> [--backend=...] [--model=...] [--force]   side-effects
                           Set up the RAG venv, pull the embedding model, and
                           build a semantic index for <book>.
                           Books: docs, src, examples.
                           --backend and --model default to the current config
-                          (see \`rag config show\`).
+                          (see \`rag config show\`), or to the recorded ones
+                          when <book> is already indexed.
+                          An already indexed book is left alone unless --force
+                          re-indexes it (use after \`$PROG update\`).
   disable <book>          destructive. Drop the index for <book>.
-  rebuild <book>          side-effects. Re-index <book> with the recorded backend+model.
   status                  read-only. List enabled books and metadata.
   query <text> [--book=docs|src|examples|all] [--top-k=N]
                           read-only. Semantic top-k search. Default --book=all, --top-k=8.
@@ -51,7 +52,10 @@ Verbs:
                           set-backend <name>         writes config
                           set-model <name>           writes config
                           set-openai-base <url>      writes config
-                          set-openai-key <KEY>       writes config (stored in .rag-config-secrets, chmod 600)
+                          set-openai-key             writes config. Reads the key from stdin (never argv),
+                                                     stored in .rag-config-secrets, chmod 600
+                          set-trust-remote-code on|off
+                                                     writes config (sentence-transformers only)
                           reset                      writes config
 EOF
 }
@@ -70,7 +74,8 @@ note_side_effects() {
 }
 
 run_in_venv() {
-    [[ -x "$RAG_VENV/bin/python" ]] || die "RAG venv not set up — run '$PROG rag enable <book>' first"
+    [[ -x "$RAG_VENV/bin/python" ]] \
+        || die "RAG is not enabled: no venv at $RAG_VENV. '$PROG rag enable <book>' creates it (installs Python packages and builds an index), so ask the user first."
     "$RAG_VENV/bin/python" "$@"
 }
 
@@ -84,19 +89,27 @@ config_get() {
 # Defaults come from current config so the user's `rag config` choices flow into `enable`.
 MODEL=""
 BACKEND=""
+FORCE=0
 parse_enable_flags() {
     OUT_ARGS=()
     for a in "$@"; do
         case "$a" in
             --model=*)   MODEL="${a#--model=}" ;;
             --backend=*) BACKEND="${a#--backend=}" ;;
+            --force)     FORCE=1 ;;
             *) OUT_ARGS+=("$a") ;;
         esac
     done
+}
+
+book_field() { "$SYSTEM_PY" "$RAG_DIR/config.py" get-book "$1" "$2"; }
+
+resolve_backend_model() {
+    local book=$1
+    [[ -n "$MODEL"   ]] || MODEL="$(book_field "$book" model)"
+    [[ -n "$BACKEND" ]] || BACKEND="$(book_field "$book" backend)"
     [[ -n "$MODEL"   ]] || MODEL="$(config_get model)"
     [[ -n "$BACKEND" ]] || BACKEND="$(config_get backend)"
-    [[ -n "$MODEL"   ]] || MODEL="qwen3-embedding:0.6b"
-    [[ -n "$BACKEND" ]] || BACKEND="ollama"
 }
 
 if (( $# == 0 )); then usage; exit 0; fi
@@ -105,13 +118,19 @@ verb=$1; shift
 
 case "$verb" in
     enable)
+        [[ -n "$SYSTEM_PY" ]] || die "python3 not found in PATH"
+        parse_enable_flags "$@"
+        set -- "${OUT_ARGS[@]+"${OUT_ARGS[@]}"}"
+        book="${1:?usage: $PROG rag enable <book> [--backend=...] [--model=...] [--force]}"
+        path="$(book_path "$book")"
+        if (( ! FORCE )) && [[ -n "$(book_field "$book" indexed_at)" ]]; then
+            log "[rag] '$book' is already indexed (backend=$(book_field "$book" backend), model=$(book_field "$book" model)); pass --force to re-index"
+            exit 0
+        fi
         note_side_effects enable
         ensure_bootstrapped
-        parse_enable_flags "$@"
-        set -- "${OUT_ARGS[@]}"
-        book="${1:?usage: $PROG rag enable <book> [--backend=...] [--model=...]}"
-        path="$(book_path "$book")"
-        bash "$SETUP_DIR/rag-venv.sh" || die "venv setup failed"
+        resolve_backend_model "$book"
+        bash "$SETUP_DIR/rag-venv.sh" ${BACKEND:+--backend="$BACKEND"} || die "venv setup failed"
         log "[rag] indexing book='$book' from '$path' with backend='$BACKEND' model='$MODEL'"
         run_in_venv "$RAG_DIR/index.py" \
             --action index \
@@ -126,25 +145,6 @@ case "$verb" in
         run_in_venv "$RAG_DIR/index.py" \
             --action disable \
             --book "$book"
-        ;;
-    rebuild)
-        note_side_effects rebuild
-        ensure_bootstrapped
-        book="${1:?usage: $PROG rag rebuild <book>}"
-        path="$(book_path "$book")"
-        # Reuse the backend+model recorded for this book at index time.
-        # Fall back to current config defaults if the book isn't in state.
-        recorded_backend=$("$SYSTEM_PY" "$RAG_DIR/config.py" get-book "$book" backend)
-        recorded_model=$("$SYSTEM_PY"   "$RAG_DIR/config.py" get-book "$book" model)
-        [[ -n "$recorded_backend" ]] || recorded_backend="$(config_get backend)"
-        [[ -n "$recorded_model"   ]] || recorded_model="$(config_get model)"
-        log "[rag] rebuilding '$book' from '$path' with backend='$recorded_backend' model='$recorded_model'"
-        run_in_venv "$RAG_DIR/index.py" \
-            --action rebuild \
-            --book "$book" \
-            --source-dir "$path" \
-            --backend "$recorded_backend" \
-            --model "$recorded_model"
         ;;
     status)
         if [[ ! -x "$RAG_VENV/bin/python" ]]; then
@@ -168,8 +168,8 @@ case "$verb" in
             show|"")
                 exec "$SYSTEM_PY" "$RAG_DIR/config.py" show
                 ;;
-            set-backend|set-model|set-openai-base|set-openai-key|reset)
-                note_side_effects "config $sub"
+            set-backend|set-model|set-openai-base|set-openai-key|set-trust-remote-code|reset)
+                log "[rag] 'config $sub' writes persistent config."
                 exec "$SYSTEM_PY" "$RAG_DIR/config.py" "$sub" "$@"
                 ;;
             -h|--help|help)
@@ -187,8 +187,12 @@ Usage: $PROG rag config <sub-verb> [args]
                                   - HuggingFace id (e.g. Qwen/Qwen3-Embedding-0.6B)
   set-openai-base <url>         writes config. OpenAI-compatible endpoint
                                 (api.openai.com / Azure / OpenRouter / vLLM / llama.cpp).
-  set-openai-key <KEY>          writes config. Stored in .rag-config-secrets (chmod 600).
-                                Env var \$OPENAI_API_KEY takes precedence if set.
+  set-openai-key                writes config. Reads the key from stdin (or prompts on a
+                                terminal, or falls back to \$OPENAI_API_KEY); a key on the
+                                command line is refused. Stored in .rag-config-secrets (chmod 600).
+                                Env var \$OPENAI_API_KEY takes precedence over the file.
+  set-trust-remote-code on|off  writes config. Let sentence-transformers run code from the
+                                model repo (off by default; some models need it).
   reset                         writes config. Restore defaults.
 EOF
                 ;;
