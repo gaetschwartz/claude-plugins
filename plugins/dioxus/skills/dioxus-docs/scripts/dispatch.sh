@@ -24,7 +24,6 @@ Subcommands:
   update                  Fetch upstream, reset both clones, rebuild the index.
   paths                   Print absolute vendor, docs, examples and data directories.
   setup-serena            Install rust-analyzer and warm cargo metadata for the Serena MCP server.
-  rag <verb> [args]       Semantic search over an opt-in vector index (see 'rag help').
 
 Data lives in $DATA.
 EOF
@@ -38,7 +37,7 @@ fi
 cmd=$1; shift
 
 case "$cmd" in
-    search|read|example|load|rag)
+    search|read|example|load)
         exec bash "$script_dir/commands/$cmd.sh" "$@" ;;
     update)
         exec bash "$script_dir/setup/bootstrap.sh" update ;;

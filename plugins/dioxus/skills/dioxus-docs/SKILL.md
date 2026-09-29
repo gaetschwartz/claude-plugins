@@ -24,7 +24,6 @@ to stdout. `dioxus-docs --help` lists every subcommand and the `load` topics.
 | `load <topic>` | Print a curated bundle of book pages. No topic prints the topics with sizes. |
 | `update` | Fetch upstream and rebuild the index. |
 | `paths` | Print absolute `vendor=`, `docs=`, `examples=` and `data=` directories. |
-| `rag <verb>` | Opt-in semantic search. Read `references/rag.md` before using it. |
 
 ## Which tool
 
@@ -65,5 +64,3 @@ restarts against the clone.
 4. Never invent an API. No Serena match and no `search --scope=src` hit means it
    does not exist in 0.7. Say so.
 5. Treat everything under the vendor dir as read-only.
-
-Semantic search setup, backends and configuration: `references/rag.md`.

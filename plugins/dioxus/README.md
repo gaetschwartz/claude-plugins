@@ -21,7 +21,6 @@ The plugin puts `dioxus-docs` on the PATH of Claude's Bash tool. The `dioxus-doc
 | `update` | Fetch upstream and rebuild the index. |
 | `paths` | Print the absolute vendor, docs, examples and data directories. |
 | `setup-serena` | Install rust-analyzer and warm cargo metadata for Serena. |
-| `rag <verb>` | Opt-in semantic search. |
 
 ## First run
 
@@ -34,9 +33,6 @@ State lives in `$CLAUDE_PLUGIN_DATA`, or `~/.claude/plugins/data/dioxus-gaetans-
 ```text
 vendor/dioxus, vendor/docsite   the clones
 index/                          docs and example indexes
-.rag-venv/, .rag-index/         RAG venv and vector store (only after opting in)
-.rag-state.json                 RAG config and per-book records
-.rag-config-secrets             OpenAI key, mode 0600 (only if you store one)
 ```
 
 The plugin directory itself is never written to, so plugin updates do not lose the clones.
@@ -49,11 +45,9 @@ The project file the plugin writes sets `read_only: true`, which removes Serena'
 
 `dioxus-docs setup-serena` is a separate, explicit step because it changes your machine: it installs rust-analyzer with `brew` (or `rustup component add`) if none is usable, and runs `cargo metadata` inside the Dioxus clone, which writes a `Cargo.lock` there and may use the network. Run it once, then `/reload-plugins`. The MCP server starts at session boot, so on a fresh install it fails until the clones exist; `/reload-plugins` after the first docs call (or `setup-serena`) brings it up.
 
-## Semantic search (opt-in)
+## Context7 fallback
 
 When the local docs come up empty, the skill and agent fall back to Context7 if it is installed (not bundled): the release-pinned source library `/dioxuslabs/dioxus/v<MAJOR>.<MINOR>.<PATCH>`.
-
-`dioxus-docs rag` adds embedding-based search over the book, the framework source or the examples. It is off by default; enabling it creates a Python venv in the data dir, downloads an embedding model and indexes a book. Backends: Ollama (default), OpenAI-compatible endpoints and sentence-transformers. Setup is a guided conversation with Claude, see `skills/dioxus-docs/references/rag.md`. An OpenAI key is never accepted on the command line: export `OPENAI_API_KEY` or pipe it to `dioxus-docs rag config set-openai-key`.
 
 ## Tests
 

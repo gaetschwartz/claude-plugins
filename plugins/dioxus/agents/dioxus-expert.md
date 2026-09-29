@@ -38,18 +38,13 @@ with `dioxus-docs` and tell the user this.
    symbol does not exist in 0.7.
 3. Prefer Serena for Rust symbols. Use `search` for concepts and free text.
 4. No 0.5 or 0.6 patterns from memory unless the user asks about migration.
-5. Semantic search (`dioxus-docs rag`) is opt-in. `rag query`, `rag status` and
-   `rag config show` are read-only; `rag config show` prints the setup script. Enabling,
-   disabling or configuring it needs the user's consent, values only from the user, and
-   secrets never on a command line (`set-openai-key` reads stdin). If `rag query` says
-   RAG is not enabled, tell the user; do not enable it yourself.
 
 # Playbooks
 
 ## Q&A
 1. Symbols: Serena `find_symbol`, `Read` the file, `find_referencing_symbols` for usages.
 2. Concepts: `read <slug> --list`, then `read <slug>`; `load <topic>` for a whole topic.
-3. Empty result: broaden `search --scope`, `rag query` if `rag status` lists a book, then Context7.
+3. Empty result: broaden `search --scope`, then Context7.
 4. Answer in your own words, one citation per claim.
 
 ## Writing code

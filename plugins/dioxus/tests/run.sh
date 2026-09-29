@@ -88,7 +88,7 @@ fake_repos() {
 
 lists_all_subcommands() {
     local s
-    for s in search read example load update paths setup-serena rag; do
+    for s in search read example load update paths setup-serena; do
         grep -q "^  $s" "$TMP/out" || return 1
     done
 }
@@ -116,6 +116,9 @@ rc_is "help exits 0" 0
 run "$EMPTY" frobnicate
 rc_is "unknown subcommand exits 1" 1
 err_has "unknown subcommand prints usage on stderr" "Usage: dioxus-docs"
+run "$EMPTY" rag status
+rc_is "rag is an unknown subcommand" 1
+err_has "rag is reported as unknown" "unknown subcommand: rag"
 expect "usage/help/unknown never create vendor" test ! -e "$EMPTY/vendor"
 
 echo "paths (not bootstrapped)"
@@ -281,96 +284,6 @@ run "$SHORT" search anything
 rc_isnt "too-small index is rejected" 0
 err_has "too-small index explains itself" "index looks wrong"
 expect "rejected index is not published" test ! -e "$SHORT/index/docs.tsv"
-
-echo "rag (offline)"
-unset OPENAI_API_KEY
-RAG_DIR="$SCRIPTS/rag"
-RAGD="$TMP/rag"
-mkdir -p "$RAGD"
-file_mode() { python3 -c 'import os,sys; print(oct(os.stat(sys.argv[1]).st_mode & 0o777)[2:])' "$1"; }
-printf 'sk-stdin-secret\n' > "$TMP/key"
-run "$RAGD" rag config set-openai-key < "$TMP/key"
-rc_is "set-openai-key reads stdin" 0
-expect "secret file is 0600" test "$(file_mode "$RAGD/.rag-config-secrets")" = 600
-expect "secret file holds the key" grep -q 'sk-stdin-secret' "$RAGD/.rag-config-secrets"
-expect "key is never echoed" not contains "$OUT$ERR" "sk-stdin-secret"
-chmod 644 "$RAGD/.rag-config-secrets"
-run "$RAGD" rag config set-openai-key < "$TMP/key"
-expect "rewriting tightens the secret mode" test "$(file_mode "$RAGD/.rag-config-secrets")" = 600
-expect "no temp files left behind" test -z "$(find "$RAGD" -name '*.tmp-*')"
-run "$RAGD" rag config set-openai-key sk-on-argv < "$TMP/key"
-rc_isnt "set-openai-key refuses argv" 0
-err_has "argv refusal says to use stdin" "stdin"
-expect "argv key is not stored" not grep -q 'sk-on-argv' "$RAGD/.rag-config-secrets"
-ENVD="$TMP/rag-env"
-mkdir -p "$ENVD"
-run "$ENVD" rag config set-openai-key < /dev/null
-rc_isnt "set-openai-key without input fails" 0
-err_has "missing key is explained" "no key provided"
-expect "failed set-openai-key writes no secret" test ! -e "$ENVD/.rag-config-secrets"
-OPENAI_API_KEY=sk-from-env run "$ENVD" rag config set-openai-key < /dev/null
-rc_is "set-openai-key falls back to the env var" 0
-expect "env key stored 0600" test "$(file_mode "$ENVD/.rag-config-secrets")" = 600
-run "$RAGD" rag config set-trust-remote-code on
-rc_is "set-trust-remote-code on" 0
-run "$RAGD" rag config show
-out_has "config show reports trust_remote_code on" "trust_remote_code**: \`true\`"
-run "$RAGD" rag config set-trust-remote-code maybe
-rc_isnt "set-trust-remote-code rejects other values" 0
-run "$RAGD" rag config set-trust-remote-code off
-run "$RAGD" rag config show
-out_has "trust_remote_code off again" "trust_remote_code**: \`false\`"
-run "$RAGD" rag rebuild docs
-rc_isnt "rag rebuild is gone" 0
-err_has "rag rebuild is an unknown verb" "unknown rag verb"
-run "$RAGD" rag help
-err_lacks "usage no longer lists rebuild" "rebuild"
-err_has "usage documents --force" "--force"
-run "$RAGD" rag status
-rc_is "status without a venv is a no-op" 0
-err_has "status explains the missing venv" "disabled"
-run "$RAGD" rag query anything
-rc_isnt "query without a venv fails" 0
-err_has "query says RAG is not enabled" "RAG is not enabled"
-IDX="$TMP/rag-indexed"
-mkdir -p "$IDX"
-printf '{"books": {"docs": {"backend": "ollama", "model": "m", "indexed_at": "2026-01-01T00:00:00Z"}}}\n' > "$IDX/.rag-state.json"
-run "$IDX" rag enable docs
-rc_is "enable on an indexed book is a no-op" 0
-err_has "enable points to --force" "--force"
-expect "no-op enable creates no venv" test ! -e "$IDX/.rag-venv"
-expect "no-op enable clones nothing" test ! -e "$IDX/vendor"
-run "$IDX" rag enable nonsense
-rc_isnt "enable rejects unknown books" 0
-python3 - "$RAG_DIR" "$TMP/atomic" <<'PY'
-import json, os, sys
-from pathlib import Path
-sys.path.insert(0, sys.argv[1])
-import state
-data = Path(sys.argv[2])
-data.mkdir()
-state.save_state(data, {"books": {"docs": {"backend": "ollama"}}})
-before = state.state_path(data).read_text()
-real_replace = os.replace
-def boom(*a, **k):
-    raise OSError("simulated crash")
-os.replace = boom
-try:
-    state.save_state(data, {"books": {"docs": {"backend": "openai"}}})
-    print("no-error")
-except OSError:
-    pass
-os.replace = real_replace
-assert state.state_path(data).read_text() == before, "state changed by a failed write"
-leftovers = [p.name for p in data.iterdir() if ".tmp-" in p.name]
-assert not leftovers, leftovers
-json.loads(before)
-PY
-RC=$?
-expect "state writes are atomic and clean up" test "$RC" -eq 0
-CLAUDE_PLUGIN_DATA="$TMP/venvarg" bash "$SCRIPTS/setup/rag-venv.sh" --bogus >/dev/null 2>&1
-RC=$?
-rc_isnt "rag-venv.sh rejects unknown flags" 0
 
 echo
 printf '%s passed, %s failed\n' "$pass" "$fail"
