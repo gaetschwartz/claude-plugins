@@ -20,10 +20,11 @@ to stdout. `dioxus-docs --help` lists every subcommand and the `load` topics.
 |---|---|
 | `search <query> [--scope=docs\|src\|examples\|all] [--limit=N] [--regex]` | Fixed-string, smart-case search. Output is `path:line:text`, relative to the data dir. Stale `untested_*` examples are skipped. |
 | `semantic <query> [--scope=docs\|src\|examples\|all] [--limit=N]` | Meaning-based search (semble, needs `uv`). Default scope `docs`, default limit 8. Output is `path:start-end` plus a snippet, relative to the data dir. |
-| `read <slug-or-fragment-or-path> [--list]` | Print a book page with mdbook includes expanded. Ambiguous input lists candidates. Accepts the page paths `search` and `semantic` print, with or without `.md` and `:start-end`. |
+| `read <slug-or-path> [--list]` | Print a book page with mdbook includes expanded. Ambiguous input lists candidates. Accepts the page paths `search` and `semantic` print, with or without `.md` and `:start-end`. |
 | `example <pattern> [--list]` | Find a maintained example under `examples/`. |
 | `load <topic>` | Print a curated bundle of book pages. No topic prints the topics with sizes. |
-| `update` | Fetch upstream and rebuild the index. Needs the user's approval, as does `setup-serena`. |
+| `update` | Fetch upstream and rebuild the index. Needs the user's approval. |
+| `setup-serena` | Install rust-analyzer and warm cargo metadata for Serena. Needs the user's approval. |
 | `paths` | Print absolute `vendor=`, `docs=`, `examples=` and `data=` directories. |
 
 ## Which tool
@@ -49,11 +50,12 @@ win on conflict.
 
 ## First run
 
-The first `search`, `read`, `example` or `load` clones the Dioxus and docsite
-repositories into the data dir and builds the index. `dioxus-docs update`
-refreshes both. The first `semantic` call downloads a ~32 MB model and builds
+The first `search`, `read`, `example`, `load`, `semantic` or `setup-serena`
+clones the Dioxus (pinned to `v0.7`) and docsite (default branch) repositories
+into the data dir and builds the index. `paths` and usage errors do not.
+`dioxus-docs update` refreshes both. The first `semantic` call downloads a ~32 MB model and builds
 that scope's index, so it is slow once; semble refreshes its own cache when
-files change. Serena needs `dioxus-docs setup-serena` once (installs
+files change. Serena needs `dioxus-docs setup-serena` once (ask the user first; installs
 rust-analyzer, warms cargo metadata), then `/reload-plugins` so the MCP server
 restarts against the clone.
 

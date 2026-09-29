@@ -10,13 +10,13 @@ Claude Code plugin for Dioxus 0.7 work: a `dioxus-docs` command over local clone
 
 ## The `dioxus-docs` command
 
-The plugin puts `dioxus-docs` on the PATH of Claude's Bash tool. The `dioxus-docs` skill (model-invoked, not a slash command) tells Claude when to use it. Run `dioxus-docs --help` for the full list.
+The plugin puts `dioxus-docs` on the PATH of Claude's Bash tool. The `dioxus-docs` skill (model-invoked, not a slash command) tells Claude when to use it. Run `dioxus-docs --help` for the full list. Usage and argument errors exit 2; no matches (`read`, `example`) and runtime failures exit 1.
 
 | Subcommand | What it does |
 |---|---|
 | `search <query> [--scope=docs\|src\|examples\|all] [--limit=N] [--regex]` | Fixed-string, smart-case search. |
 | `semantic <query> [--scope=docs\|src\|examples\|all] [--limit=N]` | Meaning-based search backed by [semble](https://github.com/MinishLab/semble). |
-| `read <slug-or-fragment-or-path> [--list]` | Print a book page with mdbook includes expanded. Also accepts the `vendor/docsite/...` page paths printed by `search` and `semantic`, with or without `.md` and a `:start-end` suffix. |
+| `read <slug-or-path> [--list]` | Print a book page with mdbook includes expanded. A slug or fragment, or a page path as printed by `search` and `semantic`, with or without `.md` and a `:start-end` suffix. |
 | `example <pattern> [--list]` | Find a maintained example. |
 | `load <topic>` | Print a curated bundle of book pages. |
 | `update` | Fetch upstream and rebuild the index. |
@@ -25,7 +25,7 @@ The plugin puts `dioxus-docs` on the PATH of Claude's Bash tool. The `dioxus-doc
 
 ## First run
 
-The first `search`, `read`, `example` or `load` shallow-clones `DioxusLabs/dioxus` (branch `v0.7`, override with `DIOXUS_REF`) and `DioxusLabs/docsite`, then builds a small index. Expect roughly 200 MB on disk and network time proportional to your connection. Nothing else is installed. `dioxus-docs update` refreshes both clones.
+The first `search`, `read`, `example`, `load`, `semantic` or `setup-serena` shallow-clones `DioxusLabs/dioxus` and `DioxusLabs/docsite`, then builds a small index; `paths`, `--help` and usage errors never do. The Dioxus source is pinned to the `v0.7` branch (override with `DIOXUS_REF`); the docsite tracks its default branch and the plugin reads its 0.7 book. Expect roughly 200 MB on disk and network time proportional to your connection. Nothing else is installed. `dioxus-docs update` refreshes both clones.
 
 ## Data directory
 
@@ -48,7 +48,7 @@ The project file the plugin writes sets `read_only: true`, which removes Serena'
 
 ## Semantic search
 
-`dioxus-docs semantic "<question>"` finds passages by meaning instead of exact text, using [semble](https://github.com/MinishLab/semble) through `uvx` (so `uv` must be installed; no server or GPU). The first call downloads a ~32 MB model and builds an index for the scope, which is slow once; semble keeps its own cache and re-indexes files that changed, so `dioxus-docs update` needs no extra step. Scopes: `docs` (default: the 0.7 book plus its doc examples), `src` (framework packages), `examples`, or `all`. `--limit` defaults to 8. Scopes cover the 0.7 book only, and both `search` and `semantic` skip the stale `untested_*` doc-example directories (0.3 to 0.6) so old patterns do not compete. The migration samples under `untested_05` are still shown by `read` on the migration pages.
+`dioxus-docs semantic "<question>"` finds passages by meaning instead of exact text, using [semble](https://github.com/MinishLab/semble) through `uvx` (so `uv` must be installed; no server or GPU). The first call downloads a ~32 MB model and builds an index for the scope, which is slow once; semble keeps its own cache and re-indexes files that changed, so `dioxus-docs update` needs no extra step. Scopes: `docs` (default: the 0.7 book plus its doc examples), `src` (framework packages), `examples`, or `all`. `--limit` defaults to 8. Scopes cover the 0.7 book only. `search` and `semantic` skip the stale `untested_*` doc-example directories (0.3 to 0.6), so code samples referenced only by the migration pages are not in their results, but `read` on those pages still expands them. `--limit` is capped at 50. semble is pinned by `SEMBLE_SPEC` in `scripts/_lib.sh`; bump it there.
 
 ## Context7 fallback
 
