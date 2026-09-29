@@ -30,8 +30,8 @@ q="${q%.md}"
 
 ensure_bootstrapped
 
-matches=$(awk -F'\t' -v q="$q" '
-    BEGIN { q = tolower(q) }
+matches=$(Q="$q" awk -F'\t' '
+    BEGIN { q = tolower(ENVIRON["Q"]) }
     {
         slug = tolower($1)
         base = slug

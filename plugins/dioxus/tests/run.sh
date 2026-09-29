@@ -227,6 +227,35 @@ for form in "$REL_DOCS/essentials/router/routes.md" "$REL_DOCS/essentials/router
     expect "read accepts path form $form" test "$RC" -eq 0 -a "$OUT" = "$SLUG_OUT"
 done
 
+run "$DATA" read migration/to_05/state
+out_has "read expands includes from untested_ migration samples" "let state = use_signal(|| 0);"
+out_lacks "read migration page has no raw include" '{{#include'
+run "$DATA" read 'rout\145s'
+rc_is "read query escapes are not interpreted" 1
+err_has "read query escapes stay literal" 'no matches for: rout\145s'
+run "$DATA" read 'routes\'
+rc_is "read query ending in a backslash is a plain miss" 1
+run "$DATA" example 'count\145r'
+rc_is "example pattern escapes are not interpreted" 1
+
+echo "include containment"
+INC="$TMP/inc"
+mkdir -p "$INC/site/docs-src/0.7/src" "$INC/site/packages/docs-router/src" "$INC/outside"
+printf 'SECRET-OUTSIDE\n' > "$INC/outside/secret.txt"
+printf 'INSIDE-OK\n' > "$INC/site/docs-src/0.7/src/ok.txt"
+ln -s "$INC/outside/secret.txt" "$INC/site/docs-src/0.7/src/link.txt"
+printf 'before\n{{#include ../../../../outside/secret.txt}}\n{{#include link.txt}}\n{{#include ok.txt}}\nafter\n' > "$INC/site/docs-src/0.7/src/page.md"
+python3 "$SCRIPTS/lib/expand_includes.py" --docsite "$INC/site" "$INC/site/docs-src/0.7/src/page.md" >"$TMP/out" 2>"$TMP/err"
+RC=$?
+OUT="$(cat "$TMP/out")"
+ERR="$(cat "$TMP/err")"
+rc_is "include outside the docsite does not crash" 0
+out_lacks "include outside the docsite is not read" "SECRET-OUTSIDE"
+out_has "include via a symlink out of the docsite stays unexpanded" "{{#include link.txt}}"
+out_has "include with .. out of the docsite stays unexpanded" "{{#include ../../../../outside/secret.txt}}"
+out_has "include inside the docsite still expands" "INSIDE-OK"
+expect "each rejected include prints one warning" test "$(grep -c '^warning: include outside the docsite' "$TMP/err")" -eq 2
+
 echo "load"
 run "$DATA" load
 rc_is "load without topic exits 0" 0

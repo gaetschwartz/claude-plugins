@@ -25,8 +25,8 @@ done
 
 ensure_bootstrapped
 
-matches=$(awk -F'\t' -v p="$pat" '
-    BEGIN { p = tolower(p) }
+matches=$(P="$pat" awk -F'\t' '
+    BEGIN { p = tolower(ENVIRON["P"]) }
     index(tolower($1), p) || index(tolower($2), p) || index(tolower($4), p)
 ' "$INDEX/examples.tsv")
 
