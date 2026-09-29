@@ -33,7 +33,9 @@ explicit request (`--as-user`).
 |---|---|
 | global | `~/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` (`${CLAUDE_PLUGIN_DATA}`) |
 | project | `<project>/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` |
-| managed | `/Library/Application Support/ClaudeCode/guardrails.json` (macOS), `/etc/claude-code/guardrails.json` (Linux), `C:\Program Files\ClaudeCode\guardrails.json` (Windows); override with `GUARDRAILS_MANAGED_PATH` |
+| managed | `/Library/Application Support/ClaudeCode/guardrails.json` (macOS), `/etc/claude-code/guardrails.json` (Linux); POSIX only |
+
+`GUARDRAILS_MANAGED_PATH` adds a second managed file, for tests and odd setups. It never replaces the platform path: both are loaded, the platform file ranks higher, and the override can only add or tighten.
 
 Layers stack managed > global > project. Project entries can add rules, and for a global rule id can only: tighten `action`/`retry`, re-enable it, remove
 suspending modes, and reword `message`/`messageShort`/`description`. What a global rule matches (`match`,
@@ -53,23 +55,41 @@ They can add rules and modes of their own, but cannot change a managed rule's `m
 switch off a managed mode that is `active`. An override that does not validate falls back to the managed entry. A
 managed rule without `modes` can never be suspended.
 
-Writing the file is governed by OS permissions only, so agents cannot change it without root. Manage it with:
+Writing the file is governed by OS permissions only, so an agent cannot change it without sudo. Note that `sudo` resets
+the environment and drops `CLAUDECODE`, so an agent with cached or passwordless sudo can write the managed file and
+the `--as-user` gating no longer applies to it. Manage it with:
 
 ```
-sudo guardrails --scope managed rule add <id> --json '<rule>' --reason "…"
+sudo guardrails rule add <id> --scope managed --json '<rule>' --reason "…"
 ```
 
 `rule add|set|rm`, `mode declare|undeclare|on|off` and `preset install` accept `--scope global|project|managed`; the
-default is unchanged and managed is never the default. When the file (or its directory, if absent) is not writable the
-CLI says so and prints the `sudo` command to re-run. Under root the parent directory is created and the file is
-written mode 0644 atomically. Session-level mode activation stays session state in the global file.
+default is unchanged and managed is never the default. `--scope managed` writes the override file when
+`GUARDRAILS_MANAGED_PATH` is set, else the platform file. When the file (or its directory, if absent) is not writable
+the CLI says so and prints the `sudo` command to re-run. Under root the parent directory is created (0755, whatever the
+umask) and the file is written mode 0644 atomically with fsync. `status` warns when the managed file or its directory
+is not owned by root or is writable by group or others, since that makes the layer decorative.
 
-`set` and `rm` on a managed rule from another scope are refused with a pointer to `--scope managed`. `status`,
-`rule test` and hook deny/warn output show where a rule came from.
+Managed rules keep their own `message`/`messageShort`; lower layers cannot reword them. A modes entry on a managed
+rule only counts when the managed file itself declares that mode; other entries are ignored (the rule stays always on)
+and `status` names them. For a mode declared in the managed file, `active` in the project state is ignored; global
+`active` and session records still apply.
 
-An unreadable or invalid managed file is not treated as empty and never turns the guard off: the layer is skipped, a
-warning is shown once per session (and on stderr), and the global and project layers keep being enforced. Individual
-invalid managed rules are skipped with a diagnostic. Managed rules also apply when the global hook is disabled.
+`set` and `rm` on a managed rule from another scope are refused with a pointer to `--scope managed` unless that scope
+holds the user's own entry for the id, which can still be changed or removed (and stays clamped by the tightening
+merge). Only the managed origin is labelled in hook deny/warn output; `status` and `rule test` show the origin of
+every rule.
+
+An unreadable, invalid or wrong-shaped managed file is not treated as empty and never turns the guard off: the
+unreadable part is skipped, a warning is shown once per session (and on stderr, and in `status`), and the global and
+project layers keep being enforced. Individual invalid managed rules are skipped with the same warning. The CLI never
+overwrites a corrupt state file: fix or remove it by hand. A corrupt managed file does not block changes to the other
+scopes. Managed rules also apply when the global hook is disabled.
+
+`agentMayEnable: false` guards against an honest agent, not against a determined one. A forged session record
+(`by: "user"`) in the global state file or `env -u CLAUDECODE guardrails mode on …` still suspends a rule. The real
+control is managed permissions and the sandbox (below), which stop an agent editing those files or unsetting the
+environment.
 
 The guard only sees the Bash tool and is not a security boundary. To make it hard to bypass, pair it with managed
 Claude Code settings; guardrails does not manage these, they are shown here for reference:

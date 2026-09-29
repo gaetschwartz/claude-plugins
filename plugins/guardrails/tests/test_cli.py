@@ -406,15 +406,36 @@ class ManagedScope(Isolated):
         self.assertEqual(code, 2)
         self.assertIn("not declared", err)
 
-    def test_lower_scope_can_switch_a_managed_mode_on_but_not_off_the_managed_activation(self) -> None:
+    def test_global_can_switch_a_managed_mode_on_but_not_off_the_managed_activation(self) -> None:
         self.managed("mode", "declare", "incident")
         self.assertEqual(self.cli("mode", "on", "incident", "--scope", "global")[0], 0)
         self.assertTrue(self.get(self.gpath)["modes"]["incident"]["active"])
         self.managed("mode", "on", "incident")
-        code, out, _ = self.cli("mode", "off", "incident", "--scope", "project")
+        code, out, _ = self.cli("mode", "off", "incident", "--scope", "global")
         self.assertEqual(code, 0)
         self.assertIn("managed scope keeps mode incident on", out)
         self.assertIn("ACTIVE", self.cli("status")[1])
+
+    def test_project_cannot_switch_a_managed_mode_on(self) -> None:
+        self.managed("mode", "declare", "incident")
+        code, out, _ = self.cli("mode", "on", "incident", "--scope", "project")
+        self.assertEqual(code, 0)
+        self.assertIn("a project cannot switch it on", out)
+        status = self.cli("status")[1]
+        self.assertIn("incident [managed+project]: inactive", status)
+        self.assertIn("project state switches on mode 'incident', which the managed file declares (ignored)", status)
+
+    def test_project_can_switch_on_its_own_and_global_modes(self) -> None:
+        self.cli("mode", "declare", "mine")
+        self.assertEqual(self.cli("mode", "on", "mine", "--scope", "project")[0], 0)
+        self.assertIn("mine [global+project]: ACTIVE", self.cli("status")[1])
+
+    def test_declare_notes_when_managed_declares_the_mode(self) -> None:
+        self.managed("mode", "declare", "incident")
+        out = self.cli("mode", "declare", "incident", "--agent-may-enable")[1]
+        self.assertIn("also declared in the managed file, which wins", out)
+        self.assertNotIn("also declared", self.managed("mode", "declare", "incident")[1])
+        self.assertNotIn("also declared", self.cli("mode", "declare", "other")[1])
 
     def test_session_mode_on_uses_managed_declaration_and_agent_lock(self) -> None:
         os.environ["CLAUDE_CODE_SESSION_ID"] = "s1"
@@ -445,23 +466,29 @@ class ManagedScope(Isolated):
         self.cli("rule", "add", "mine", "--json", MANAGED_RULE, "--project")
         code, out, _ = self.cli("status")
         self.assertEqual(code, 0)
-        for expected in (f"managed state: {self.mpath}", "no-strings [managed+global] deny retry",
+        for expected in (f"managed state: {self.dpath} (absent)", f"managed override: {self.mpath}",
+                         "no-strings [managed+global] deny retry",
                          "bare [managed] deny ALWAYS ENFORCED", "mine [project] deny",
                          "reverse-engineering [managed]: inactive"):
             self.assertIn(expected, out)
 
     def test_status_without_managed_file(self) -> None:
-        self.assertIn(f"managed state: {self.mpath} (absent)", self.cli("status")[1])
+        out = self.cli("status")[1]
+        self.assertIn(f"managed state: {self.dpath} (absent)", out)
+        self.assertIn(f"managed override: {self.mpath} (absent)", out)
 
     def test_status_reports_unreadable_managed_file(self) -> None:
         self.put(self.mpath, "{nope")
         code, out, _ = self.cli("status")
         self.assertEqual(code, 0)
-        self.assertIn("unreadable managed state file (managed rules are not enforced until it is fixed)", out)
+        self.assertIn("unreadable managed state, so its rules are NOT enforced until it is fixed", out)
+        self.assertIn("fix or remove the file by hand", out)
 
     def test_status_reports_invalid_managed_rule(self) -> None:
         self.put(self.mpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x"}}})
-        self.assertIn("rule bad:", self.cli("status")[1])
+        out = self.cli("status")[1]
+        self.assertEqual(out.count("managed rule bad is invalid and ignored"), 1)
+        self.assertNotIn("rule bad: ", out)
 
     def test_status_notes_managed_rules_survive_disabled_hook(self) -> None:
         self.managed("rule", "add", "bare", "--json", MANAGED_RULE)
@@ -473,10 +500,104 @@ class ManagedScope(Isolated):
         out = self.cli("rule", "test", "--id", "no-strings", "strings a")[1]
         self.assertIn("rule no-strings [managed]:", out)
 
-    def test_corrupt_managed_file_is_not_overwritten(self) -> None:
+    def test_corrupt_managed_file_is_not_overwritten_and_says_how_to_fix_it(self) -> None:
         self.put(self.mpath, "{nope")
-        self.assertEqual(self.managed("rule", "add", "x", "--json", RULE)[0], 2)
+        code, _, err = self.managed("rule", "add", "x", "--json", RULE)
+        self.assertEqual(code, 2)
+        self.assertIn("fix or remove the managed file by hand", err)
         self.assertEqual(self.mpath.read_text(), "{nope")
+
+    def test_corrupt_managed_file_does_not_block_other_scopes(self) -> None:
+        self.put(self.mpath, "{nope")
+        self.assertEqual(self.cli("rule", "add", "x", "--json", RULE)[0], 0)
+        self.assertEqual(self.cli("rule", "set", "x", "action=warn")[0], 0)
+        self.assertEqual(self.cli("rule", "test", "--id", "x", "strings a")[0], 0)
+        self.assertEqual(self.cli("mode", "declare", "m")[0], 0)
+        self.assertEqual(self.cli("rule", "rm", "x")[0], 0)
+        self.assertEqual(self.get(self.gpath)["rules"], {})
+
+    def test_set_and_rm_work_on_the_users_own_override_of_a_managed_id(self) -> None:
+        self.managed("rule", "add", "no-strings", "--json", RULE)
+        self.assertEqual(self.cli("rule", "add", "no-strings", "--json", RULE, "--scope", "project")[0], 0)
+        self.assertEqual(self.cli("rule", "set", "no-strings", "message=mine", "--scope", "project")[0], 0)
+        self.assertEqual(self.get(self.ppath)["rules"]["no-strings"]["message"], "mine")
+        self.assertEqual(self.cli("rule", "rm", "no-strings", "--scope", "project")[0], 0)
+        self.assertEqual(self.get(self.ppath)["rules"], {})
+        self.assertIn("no-strings", self.get(self.mpath)["rules"])
+        self.assertEqual(self.cli("rule", "rm", "no-strings", "--scope", "project")[0], 3)
+
+    def test_global_override_of_a_managed_id_can_be_removed_and_set(self) -> None:
+        self.managed("rule", "add", "no-strings", "--json", RULE)
+        self.put(self.gpath, {"rules": {"no-strings": {**json.loads(RULE), "action": "warn"}}})
+        self.assertEqual(self.cli("rule", "set", "no-strings", "action=deny")[0], 0)
+        self.assertEqual(self.cli("rule", "rm", "no-strings")[0], 0)
+        self.assertEqual(self.cli("rule", "rm", "no-strings")[0], 3)
+
+    def test_managed_texts_cannot_be_reworded_from_other_scopes(self) -> None:
+        self.managed("rule", "add", "no-strings", "--json", RULE)
+        self.cli("rule", "add", "no-strings", "--json", RULE.replace("Read", "Ignore"))
+        self.assertIn("Read the docs", self.cli("rule", "test", "--id", "no-strings", "strings a")[1])
+
+    def test_status_reports_undeclared_managed_mode(self) -> None:
+        self.managed("rule", "add", "no-strings", "--json", RULE)
+        out = self.cli("status")[1]
+        self.assertIn("managed rule no-strings lists mode 'reverse-engineering', which the managed file does not "
+                      "declare", out)
+
+    def test_status_reports_wrong_shape_managed_file(self) -> None:
+        self.put(self.mpath, {"rules": [1]})
+        self.assertIn("'rules' must be an object", self.cli("status")[1])
+
+    def test_status_reports_unreadable_parent_directory(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root can read anything")
+        self.put(self.mpath, {})
+        self.mpath.parent.chmod(0)
+        self.addCleanup(self.mpath.parent.chmod, 0o755)
+        out = self.cli("status")[1]
+        self.assertIn(f"managed override: {self.mpath} (unreadable)", out)
+        self.assertIn("unreadable managed state", out)
+
+    def test_status_warns_about_untrusted_managed_location(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("everything is owned by root")
+        self.put(self.mpath, {})
+        self.mpath.parent.chmod(0o777)
+        self.addCleanup(self.mpath.parent.chmod, 0o755)
+        out = self.cli("status")[1]
+        self.assertIn("is not owned by root", out)
+        self.assertIn("is writable by group or others", out)
+
+    def test_status_wording_when_global_is_corrupt(self) -> None:
+        self.put(self.gpath, "{nope")
+        self.assertIn("the hook fails open", self.cli("status")[1])
+        self.managed("rule", "add", "bare", "--json", MANAGED_RULE)
+        out = self.cli("status")[1]
+        self.assertIn("global and project rules are not enforced, managed rules still are", out)
+        self.assertNotIn("fails open", out)
+
+    def test_writes_go_to_the_override_when_set_else_the_default(self) -> None:
+        self.assertEqual(self.managed("rule", "add", "a", "--json", RULE)[0], 0)
+        self.assertTrue(self.mpath.is_file())
+        self.assertFalse(self.dpath.exists())
+        del os.environ["GUARDRAILS_MANAGED_PATH"]
+        self.assertEqual(self.managed("rule", "add", "b", "--json", RULE)[0], 0)
+        self.assertEqual(list(self.get(self.dpath)["rules"]), ["b"])
+        self.assertEqual(list(self.get(self.mpath)["rules"]), ["a"])
+
+    def test_override_and_default_are_both_effective(self) -> None:
+        self.put(self.dpath, {"rules": {"d": json.loads(RULE)}})
+        self.managed("rule", "add", "o", "--json", RULE)
+        out = self.cli("status")[1]
+        self.assertIn("d [managed]", out)
+        self.assertIn("o [managed]", out)
+
+    def test_creating_the_managed_directory_ignores_umask(self) -> None:
+        old = os.umask(0o077)
+        self.addCleanup(os.umask, old)
+        self.assertEqual(self.managed("rule", "add", "x", "--json", RULE)[0], 0)
+        self.assertEqual(stat.S_IMODE(self.mpath.parent.stat().st_mode), 0o755)
+        self.assertEqual(stat.S_IMODE(self.mpath.stat().st_mode), 0o644)
 
 
 class ManagedNotWritable(Isolated):

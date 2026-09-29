@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import re
 import shutil
+from collections.abc import Sequence
 from typing import Any, Callable
 
 from shellwords import SimpleCommand
@@ -127,14 +128,15 @@ def with_defaults(rule: Rule) -> Rule:
     return out
 
 
-def merge_rule(base: Rule, override: Rule) -> Rule:
+def merge_rule(base: Rule, override: Rule, reword: bool = True) -> Rule:
     """Layer a lower-precedence entry onto a defaulted rule from a higher layer; only tightening changes apply.
 
     An override can never change what the rule matches: 'match' and 'requires' are ignored, and a
-    merge that fails validation falls back to the base rule unchanged.
+    merge that fails validation falls back to the base rule unchanged. With reword=False the texts
+    are ignored too.
     """
     out = dict(base)
-    for key in ("message", "messageShort", "description"):
+    for key in ("message", "messageShort", "description") if reword else ():
         if key in override:
             out[key] = override[key]
     if override.get("action") == "deny":
@@ -169,14 +171,21 @@ def origins(key: str, managed: object, global_state: object, project_state: obje
 
 
 def effective_rules(managed: object, global_state: object, project_state: object) -> dict[str, Rule]:
-    """Fold the layers in precedence order; each later layer may only tighten what an earlier one defined."""
-    layers = [managed, global_state]
+    """Fold the layers in precedence order; each later layer may only tighten what an earlier one defined.
+
+    A managed rule keeps its own texts, and only suspends for modes the managed layer declares.
+    """
+    managed_rules = _entries(managed, "rules")
+    declared = set(_entries(managed, "modes"))
+    rules = {rid: with_defaults(r) for rid, r in managed_rules.items()}
+    for rule in rules.values():
+        rule["modes"] = [m for m in modes_of(rule) if m in declared]
+    layers = [global_state]
     if not isinstance(project_state, dict) or project_state.get("enabled", True) is not False:
         layers.append(project_state)
-    rules: dict[str, Rule] = {}
     for state in layers:
         for rid, r in _entries(state, "rules").items():
-            rules[rid] = merge_rule(rules[rid], r) if rid in rules else with_defaults(r)
+            rules[rid] = merge_rule(rules[rid], r, rid not in managed_rules) if rid in rules else with_defaults(r)
     return rules
 
 
@@ -185,20 +194,60 @@ def _mode(m: dict[str, Any]) -> Mode:
             "active": m.get("active") is True}
 
 
-def merge_mode(base: Mode, override: dict[str, Any]) -> Mode:
+def merge_mode(base: Mode, override: dict[str, Any], trust_active: bool = True) -> Mode:
     return {
         "description": str(override.get("description") or base["description"]),
         "agentMayEnable": base["agentMayEnable"] and override.get("agentMayEnable", True) is not False,
-        "active": base["active"] or override.get("active") is True,
+        "active": base["active"] or (trust_active and override.get("active") is True),
     }
 
 
 def effective_modes(managed: object, global_state: object, project_state: object) -> dict[str, Mode]:
+    """A project (repo-controlled) cannot switch on a mode the managed layer declares."""
     modes: dict[str, Mode] = {}
-    for state in (managed, global_state, project_state):
+    declared = set(_entries(managed, "modes"))
+    for layer, state in enumerate((managed, global_state, project_state)):
+        for name, m in _entries(state, "modes").items():
+            if name not in modes:
+                modes[name] = _mode(m)
+            else:
+                modes[name] = merge_mode(modes[name], m, layer < 2 or name not in declared)
+    return modes
+
+
+def _shape_problems(path: str, state: object) -> list[str]:
+    problems = []
+    for key in ("rules", "modes"):
+        if not isinstance(state, dict) or key not in state:
+            continue
+        table = state[key]
+        if not isinstance(table, dict):
+            problems.append(f"managed state {path}: '{key}' must be an object, so all its entries are ignored")
+            continue
+        problems += [f"managed state {path}: {key} entry '{name}' is not an object and is ignored"
+                     for name, entry in table.items() if not isinstance(entry, dict)]
+    return problems
+
+
+def managed_layer(sources: Sequence[tuple[str, object]]) -> tuple[dict[str, Any], list[str]]:
+    """Combine managed files (highest ranked first; later ones can only tighten) and list what is wrong with them."""
+    problems: list[str] = []
+    rules: dict[str, Rule] = {}
+    modes: dict[str, Mode] = {}
+    for path, state in sources:
+        problems += _shape_problems(path, state)
+        for rid, r in _entries(state, "rules").items():
+            try:
+                validate_rule(r)
+            except Invalid as exc:
+                problems.append(f"managed rule {rid} is invalid and ignored: {exc}")
+            rules[rid] = merge_rule(rules[rid], r, False) if rid in rules else with_defaults(r)
         for name, m in _entries(state, "modes").items():
             modes[name] = merge_mode(modes[name], m) if name in modes else _mode(m)
-    return modes
+    for rid, rule in sorted(rules.items()):
+        problems += [f"managed rule {rid} lists mode '{m}', which the managed file does not declare, so it cannot "
+                     "suspend the rule" for m in modes_of(rule) if m not in modes]
+    return {"rules": rules, "modes": modes}, problems
 
 
 def active_modes(modes: dict[str, Mode], session: object) -> dict[str, dict[str, Any]]:

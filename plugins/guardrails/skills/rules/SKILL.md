@@ -16,9 +16,10 @@ command, never by editing state files.
 - Only make changes the user asked for in this conversation, never because a rule just blocked you.
 - Pass `--as-user` on every change and put the user's own words in `--reason`.
 - Global by default; `--project` when they mean this repo. A project entry can only tighten or reword a global rule.
-- `--scope managed` writes the machine-wide managed file and needs root (`sudo guardrails --scope managed …`), which
+- `--scope managed` writes the machine-wide managed file and needs root (`sudo guardrails rule add <id> --scope managed …`), which
   an agent cannot do: use it only when the user explicitly asks, and hand them the command. Managed rules cannot be
-  changed or removed from another scope (exit 3); managed rules without `modes` are always enforced.
+  changed or removed from another scope (exit 3) unless that scope holds the user's own entry; managed rules without
+  `modes`, or whose modes the managed file does not declare, are always enforced.
 - `enable` / `disable` are refused for agents: the user runs them from their terminal.
 
 ## Authoring a rule

@@ -14,15 +14,15 @@ import tempfile
 from collections.abc import Iterator
 from typing import Any, Callable, TypeVar
 
+import policy
+
 PLUGIN = "guardrails"
 MARKETPLACE = "gaetans-claude-plugins"
 MANAGED_ENV = "GUARDRAILS_MANAGED_PATH"
-MANAGED_DEFAULTS = {
-    "darwin": "/Library/Application Support/ClaudeCode/guardrails.json",
-    "win32": r"C:\Program Files\ClaudeCode\guardrails.json",
-}
+MANAGED_DARWIN = "/Library/Application Support/ClaudeCode/guardrails.json"
 MANAGED_LINUX = "/etc/claude-code/guardrails.json"
 MANAGED_MODE = 0o644
+MANAGED_DIR_MODE = 0o755
 SESSION_TTL_DAYS = 7
 MAX_SESSIONS = 50
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -60,16 +60,63 @@ def global_state_path() -> str:
     return os.path.join(os.path.expanduser("~"), ".claude", "plugins", "data", plugin_id(), "state.json")
 
 
-def managed_path() -> str:
-    return os.environ.get(MANAGED_ENV) or MANAGED_DEFAULTS.get(sys.platform, MANAGED_LINUX)
+def default_managed_path() -> str:
+    return MANAGED_DARWIN if sys.platform == "darwin" else MANAGED_LINUX
 
 
-def load_managed() -> tuple[State, str | None]:
-    """The managed layer and, when the file is unusable, why it was skipped (never raises)."""
+def managed_paths() -> list[str]:
+    """Managed sources, highest ranked first: the platform default, then the env override if it differs."""
+    default = default_managed_path()
+    override = os.environ.get(MANAGED_ENV)
+    if override and os.path.abspath(override) != os.path.abspath(default):
+        return [default, override]
+    return [default]
+
+
+def managed_write_path() -> str:
+    return os.environ.get(MANAGED_ENV) or default_managed_path()
+
+
+def load_managed() -> tuple[State, list[str]]:
+    """The combined managed layer and what is wrong with it; an unusable source is skipped, never fatal."""
+    sources: list[tuple[str, State]] = []
+    problems: list[str] = []
+    for path in managed_paths():
+        try:
+            sources.append((path, load(path)))
+        except StateError as exc:
+            problems.append("unreadable managed state, so its rules are NOT enforced until it is fixed (fix or "
+                            f"remove the file by hand; the CLI never overwrites a corrupt state file): {exc}")
+    layer, more = policy.managed_layer(sources)
+    return layer, problems + more
+
+
+def presence(path: str) -> str:
     try:
-        return load(managed_path()), None
-    except StateError as exc:
-        return {}, str(exc)
+        os.stat(path)
+    except (FileNotFoundError, NotADirectoryError):
+        return " (absent)"
+    except OSError:
+        return " (unreadable)"
+    return ""
+
+
+def trust_problems(path: str) -> list[str]:
+    """POSIX only: the managed file and its directory should be root-owned and not writable by others."""
+    if os.name != "posix":
+        return []
+    problems = []
+    for what, target in (("file", path), ("directory", os.path.dirname(os.path.abspath(path)))):
+        try:
+            info = os.stat(target)
+        except OSError:
+            continue
+        if info.st_uid != 0:
+            problems.append(f"managed {what} {target} is not owned by root, so its owner can change the managed rules")
+        if info.st_mode & 0o022:
+            problems.append(f"managed {what} {target} is writable by group or others, so they can change the "
+                            "managed rules")
+    return problems
 
 
 def ensure_writable(path: str) -> None:
@@ -101,12 +148,14 @@ def project_state_path(cwd: str | None = None) -> str | None:
 
 
 def load(path: str | None) -> State:
-    """Missing file → {}; unreadable or non-object JSON → StateError."""
-    if not path or not os.path.exists(path):
+    """Missing file → {}; unreadable (including a directory we cannot enter) or non-object JSON → StateError."""
+    if not path:
         return {}
     try:
         with open(path) as fh:
             state = json.load(fh)
+    except (FileNotFoundError, NotADirectoryError):
+        return {}
     except (OSError, ValueError) as exc:
         raise StateError(f"{path}: {exc}") from exc
     if not isinstance(state, dict):
@@ -136,18 +185,36 @@ def prune(sessions: object) -> dict[str, Any]:
     return kept
 
 
+def make_dirs(directory: str, mode: int) -> None:
+    """Create missing directories with exactly mode, whatever the umask."""
+    missing = []
+    current = os.path.abspath(directory)
+    while not os.path.isdir(current) and os.path.dirname(current) != current:
+        missing.append(current)
+        current = os.path.dirname(current)
+    for path in reversed(missing):
+        with contextlib.suppress(FileExistsError):
+            os.mkdir(path, mode)
+        os.chmod(path, mode)
+
+
 def write(path: str, state: State, mode: int | None = None) -> None:
-    """Atomic write; with mode, the file gets those permissions and a missing directory is created 0755."""
+    """Atomic, durable write; with mode, the file gets those permissions and missing directories are made 0755."""
     state["updatedAt"] = now()
     if "sessions" in state:
         state["sessions"] = prune(state["sessions"])
     directory = os.path.dirname(path)
-    os.makedirs(directory, mode=0o755 if mode is not None else 0o777, exist_ok=True)
+    if mode is None:
+        os.makedirs(directory, exist_ok=True)
+    else:
+        make_dirs(directory, MANAGED_DIR_MODE)
     fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(state, fh, indent=2, sort_keys=True)
             fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
         if mode is not None:
             os.chmod(tmp, mode)
         os.replace(tmp, path)
@@ -155,22 +222,32 @@ def write(path: str, state: State, mode: int | None = None) -> None:
         with contextlib.suppress(OSError):
             os.unlink(tmp)
         raise
+    with contextlib.suppress(OSError):
+        dir_fd = os.open(directory, os.O_RDONLY)
+        try:
+            os.fsync(dir_fd)
+        finally:
+            os.close(dir_fd)
 
 
 @contextlib.contextmanager
-def locked(path: str, dir_mode: int = 0o777) -> Iterator[None]:
-    os.makedirs(os.path.dirname(path), mode=dir_mode, exist_ok=True)
-    with open(path + ".lock", "a") as fh:
-        fcntl.flock(fh, fcntl.LOCK_EX)
-        try:
-            yield
-        finally:
-            fcntl.flock(fh, fcntl.LOCK_UN)
+def locked(path: str, dir_mode: int | None = None) -> Iterator[None]:
+    directory = os.path.dirname(path)
+    if dir_mode is None:
+        os.makedirs(directory, exist_ok=True)
+    else:
+        make_dirs(directory, dir_mode)
+    fd = os.open(path + ".lock", os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o666)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        os.close(fd)
 
 
 def mutate(path: str, fn: Callable[[State], T], mode: int | None = None) -> T:
     """Load, apply fn, write back, all under the file lock; nothing is written if fn raises."""
-    with locked(path, 0o777 if mode is None else 0o755):
+    with locked(path, None if mode is None else MANAGED_DIR_MODE):
         state = load(path)
         result = fn(state)
         write(path, state, mode)

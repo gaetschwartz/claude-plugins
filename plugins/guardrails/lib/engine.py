@@ -96,9 +96,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
             continue
         try:
             policy.validate_rule(rule)
-        except policy.Invalid as exc:
-            if rid in managed_ids:
-                print(f"guardrails: managed rule {rid} is invalid and ignored: {exc}", file=sys.stderr)
+        except policy.Invalid:
             continue
         if not policy.requirements_met(rule) or not policy.rule_matches(rule, command, cmds):
             continue
@@ -154,12 +152,10 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         gstate, gstate_ok = store.load(gpath), True
     except store.StateError:
         gstate, gstate_ok = {}, False
-    managed, managed_error = store.load_managed()
-    warnings: tuple[str, ...] = ()
-    if managed_error:
-        text = f"unreadable managed state, so managed rules are NOT enforced until it is fixed: {managed_error}"
-        print(f"guardrails: {text}", file=sys.stderr)
-        warnings = (f"guardrails: {text}",)
+    managed, managed_problems = store.load_managed()
+    warnings = tuple(f"guardrails: {problem}" for problem in managed_problems)
+    for warning in warnings:
+        print(warning, file=sys.stderr)
     managed_ids = frozenset(policy.origins("rules", managed, {}, {}))
     cwd = payload.get("cwd")
     try:

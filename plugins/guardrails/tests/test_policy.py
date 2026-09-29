@@ -135,12 +135,26 @@ class ManagedLayering(unittest.TestCase):
                 self.assertEqual(self.eff({"rules": {"r": {field: value}}}), base)
                 self.assertEqual(self.eff(None, {"rules": {"r": {field: value}}}), base)
 
-    def test_lower_layers_can_tighten_and_reword(self) -> None:
-        managed = {"rules": {"r": rule(action="warn", retry="same-command", modes=["re", "ops"], enabled=False)}}
-        g = {"rules": {"r": {"action": "deny", "retry": "none", "modes": ["re"], "enabled": True, "message": "g"}}}
+    def test_lower_layers_can_tighten_but_not_reword(self) -> None:
+        managed = {"rules": {"r": rule(action="warn", retry="same-command", modes=["re", "ops"], enabled=False,
+                                       messageShort="short", description="d")},
+                   "modes": {"re": {}, "ops": {}}}
+        g = {"rules": {"r": {"action": "deny", "retry": "none", "modes": ["re"], "enabled": True, "message": "g",
+                             "description": "gd"}}}
         eff = policy.effective_rules(managed, g, {"rules": {"r": {"messageShort": "s"}}})["r"]
         self.assertEqual((eff["action"], eff["retry"], eff["modes"], eff["enabled"]), ("deny", "none", ["re"], True))
-        self.assertEqual((eff["message"], eff["messageShort"]), ("g", "s"))
+        self.assertEqual((eff["message"], eff["messageShort"], eff["description"]), ("use docs", "short", "d"))
+
+    def test_non_managed_rules_can_still_be_reworded(self) -> None:
+        eff = policy.effective_rules({}, {"rules": {"r": rule()}}, {"rules": {"r": {"message": "p"}}})["r"]
+        self.assertEqual(eff["message"], "p")
+
+    def test_modes_not_declared_in_managed_are_dropped_from_managed_rules(self) -> None:
+        managed = {"rules": {"r": rule(modes=["re", "ghost"])}, "modes": {"re": {}}}
+        lower = {"modes": {"ghost": {"active": True}}, "rules": {"r": {"modes": ["re", "ghost"]}}}
+        for layers in ((lower, {}), ({}, lower)):
+            self.assertEqual(policy.effective_rules(managed, *layers)["r"]["modes"], ["re"])
+        self.assertEqual(policy.effective_rules({"rules": {"r": rule(modes=["re"])}}, {}, {})["r"]["modes"], [])
 
     def test_rule_without_modes_can_never_gain_any(self) -> None:
         managed = {"rules": {"r": rule()}}
@@ -196,16 +210,66 @@ class ManagedModes(unittest.TestCase):
         self.assertEqual(policy.active_modes(modes, {"modes": {}}), {"always": {"by": "user",
                                                                              "reason": "persistently active"}})
 
-    def test_lower_layers_can_add_modes_and_switch_managed_ones_on(self) -> None:
+    def test_global_can_add_modes_and_switch_managed_ones_on(self) -> None:
         g = {"modes": {"mine": {"agentMayEnable": True}, "re": {"active": True}}}
         modes = policy.effective_modes(self.MANAGED, g, {})
         self.assertTrue(modes["mine"]["agentMayEnable"])
         self.assertEqual((modes["re"]["active"], modes["re"]["description"]), (True, "m"))
 
+    def test_project_cannot_switch_a_managed_mode_on(self) -> None:
+        p = {"modes": {"re": {"active": True}, "mine": {"active": True}}}
+        for g in ({}, {"modes": {"re": {"active": False}}}):
+            modes = policy.effective_modes(self.MANAGED, g, p)
+            self.assertFalse(modes["re"]["active"])
+            self.assertTrue(modes["mine"]["active"])
+
+    def test_project_activation_of_a_global_mode_still_counts(self) -> None:
+        modes = policy.effective_modes({}, {"modes": {"m": {}}}, {"modes": {"m": {"active": True}}})
+        self.assertTrue(modes["m"]["active"])
+
+    def test_managed_and_global_activation_survive_a_project_layer(self) -> None:
+        p = {"modes": {"re": {"active": False}}}
+        g = {"modes": {"re": {"active": True}}}
+        self.assertTrue(policy.effective_modes(self.MANAGED, g, p)["re"]["active"])
+
     def test_agent_session_activation_respects_managed_lock(self) -> None:
         modes = policy.effective_modes(self.MANAGED, {"modes": {"re": {"agentMayEnable": True}}}, {})
         session = {"modes": {"re": {"by": "agent"}, "ops": {"by": "agent"}}}
         self.assertEqual(sorted(policy.active_modes(modes, session)), ["always", "ops"])
+
+
+class ManagedLayer(unittest.TestCase):
+    R = rule()
+
+    def test_no_sources_is_empty(self) -> None:
+        self.assertEqual(policy.managed_layer([]), ({"rules": {}, "modes": {}}, []))
+
+    def test_first_source_wins_and_later_ones_only_tighten_or_add(self) -> None:
+        first = {"rules": {"r": rule(action="warn", retry="same-command", modes=["m"]), "keep": rule()},
+                 "modes": {"m": {"agentMayEnable": False}}}
+        second = {"rules": {"r": {**rule(), "message": "second", "action": "deny", "retry": "none", "modes": [],
+                                  "enabled": False}, "new": rule()},
+                  "modes": {"m": {"agentMayEnable": True, "active": True}, "n": {}}}
+        layer, problems = policy.managed_layer([("a", first), ("b", second)])
+        self.assertEqual(problems, [])
+        r = layer["rules"]["r"]
+        self.assertEqual((r["action"], r["retry"], r["modes"], r["enabled"], r["message"]),
+                         ("deny", "none", [], True, "use docs"))
+        self.assertEqual(sorted(layer["rules"]), ["keep", "new", "r"])
+        self.assertEqual((layer["modes"]["m"]["agentMayEnable"], layer["modes"]["m"]["active"]), (False, True))
+        self.assertIn("n", layer["modes"])
+
+    def test_problems(self) -> None:
+        state = {"rules": {"bad": {"message": ""}, "ok": rule(modes=["ghost"]), "junk": 1}, "modes": ["x"]}
+        problems = policy.managed_layer([("/p", state)])[1]
+        self.assertEqual(len(problems), 4, problems)
+        self.assertTrue(any("rules entry 'junk' is not an object" in p for p in problems))
+        self.assertTrue(any("'modes' must be an object" in p for p in problems))
+        self.assertTrue(any("managed rule bad is invalid and ignored" in p for p in problems))
+        self.assertTrue(any("rule ok lists mode 'ghost'" in p for p in problems))
+
+    def test_non_dict_state_is_tolerated(self) -> None:
+        self.assertEqual(policy.managed_layer([("/p", [])])[0], {"rules": {}, "modes": {}})
 
 
 class Modes(unittest.TestCase):

@@ -23,7 +23,8 @@ guardrails mode on <name> --reason "<the user's own words>"
 - Exit 3 (refused) means the mode does not let agents switch it on, or a deny you hit already told you this. Give the
   user that exact command from the deny message, or if you only have the refusal:
   `python3 <resolved ${CLAUDE_SKILL_DIR}/../../lib/guard.py> mode on <name> --session-id <value of $CLAUDE_CODE_SESSION_ID>`
-- Modes marked active in the managed file cannot be switched off from here.
+- Modes marked active in the managed file cannot be switched off from here, and a project cannot switch on a mode the
+  managed file declares.
 - Exit 2 with "not declared" means no such mode exists. Declaring one is a configuration change for the
   guardrails:rules skill, and only if the user asks for it.
 

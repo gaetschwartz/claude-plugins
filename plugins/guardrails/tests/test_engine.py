@@ -1,7 +1,5 @@
 from __future__ import annotations  # noqa: I001
 
-import contextlib
-import io
 import json
 import os
 import unittest
@@ -198,10 +196,8 @@ class ManagedHook(Isolated):
         self.put(self.mpath, {"rules": {"no-pkill": dict(PKILL)}})
 
     def hook_stderr(self, command: str, session: str = "s1") -> tuple[dict[str, Any] | None, str]:
-        err = io.StringIO()
-        with contextlib.redirect_stderr(err):
-            out = self.hook(command, session)
-        return out, err.getvalue()
+        out = self.hook(command, session)
+        return out, self.hook_err.getvalue()
 
     def test_managed_rule_denies_with_origin_label(self) -> None:
         out = self.hook("pkill node")
@@ -278,7 +274,7 @@ class ManagedHook(Isolated):
         self.put(self.ppath, {"modes": {"incident": {"active": False}}})
         self.assertIsNone(self.hook("pkill node"))
 
-    def test_lower_layer_may_add_a_mode_to_nothing(self) -> None:
+    def test_lower_layer_mode_only_suspends_the_lower_layers_own_rule(self) -> None:
         self.put(self.gpath, {"rules": {"mine": {**PKILL, "modes": ["ops"]}},
                               "modes": {"ops": {"active": True}}})
         self.assertEqual(decision(self.hook("pkill node")), "deny")
@@ -307,13 +303,69 @@ class ManagedHook(Isolated):
         out, _ = self.hook_stderr("ls")
         self.assertIsNone(out)
 
-    def test_invalid_managed_rule_is_skipped_with_a_diagnostic(self) -> None:
+    def test_invalid_managed_rule_is_skipped_and_reported_once_per_session(self) -> None:
         self.put(self.mpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x"},
                                         "no-pkill": dict(PKILL)}})
         out, err = self.hook_stderr("pkill node")
+        assert out is not None
         self.assertEqual(decision(out), "deny")
+        self.assertIn("managed rule bad is invalid and ignored", out["systemMessage"])
         self.assertIn("managed rule bad is invalid and ignored", err)
-        self.assertNotIn("no-pkill", err)
+        self.assertNotIn("no-pkill", out["systemMessage"])
+        out, _ = self.hook_stderr("pkill again")
+        assert out is not None
+        self.assertNotIn("systemMessage", out)
+
+    def test_wrong_shape_managed_content_is_reported(self) -> None:
+        for content, needle in (({"rules": [PKILL]}, "'rules' must be an object"),
+                                ({"rules": {"a": "x"}, "modes": "m"}, "'modes' must be an object")):
+            with self.subTest(content=content):
+                self.put(self.mpath, content)
+                out = self.hook("ls", session=needle)
+                assert out is not None
+                self.assertIn(needle, out["systemMessage"])
+                self.assertIsNone(self.hook("ls", session=needle))
+
+    def test_managed_rule_naming_an_undeclared_mode_stays_enforced_and_is_reported(self) -> None:
+        self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "modes": ["ghost"]}}})
+        self.put(self.gpath, {"modes": {"ghost": {"active": True}},
+                              "sessions": {"s1": {"seenAt": store.now(), "modes": {"ghost": {"by": "user"}}}}})
+        self.put(self.ppath, {"modes": {"ghost": {"active": True}}})
+        out = self.hook("pkill node")
+        assert out is not None
+        self.assertEqual(decision(out), "deny")
+        self.assertIn("no-pkill lists mode 'ghost'", out["systemMessage"])
+
+    def test_project_cannot_switch_on_a_managed_mode(self) -> None:
+        self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "modes": ["incident"]}},
+                              "modes": {"incident": {"agentMayEnable": False}}})
+        self.put(self.ppath, {"modes": {"incident": {"active": True}}})
+        self.assertEqual(decision(self.hook("pkill node")), "deny")
+
+    def test_global_activation_of_a_managed_mode_is_the_users_own_and_counts(self) -> None:
+        self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "modes": ["incident"]}},
+                              "modes": {"incident": {"agentMayEnable": False}}})
+        self.put(self.gpath, {"modes": {"incident": {"active": True}}})
+        self.assertIsNone(self.hook("pkill node"))
+
+    def test_lower_layers_cannot_reword_a_managed_rule(self) -> None:
+        self.put(self.gpath, {"rules": {"no-pkill": {"message": "global words"}}})
+        self.put(self.ppath, {"rules": {"no-pkill": {"message": "project words", "messageShort": "s"}}})
+        text = reason(self.hook("pkill node"))
+        self.assertIn("[guardrails:no-pkill (managed)] No pkill.", text)
+        self.assertNotIn("words", text)
+
+    def test_unreadable_parent_directory_warns_and_keeps_other_layers(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root can read anything")
+        self.put(self.gpath, {"rules": {"no-strings": dict(STRINGS)}, "modes": dict(MODES)})
+        self.mpath.parent.chmod(0)
+        self.addCleanup(self.mpath.parent.chmod, 0o755)
+        out = self.hook("strings a")
+        assert out is not None
+        self.assertEqual(decision(out), "deny")
+        self.assertIn("NOT enforced", out["systemMessage"])
+
 
     def test_invalid_lower_layer_entry_for_managed_id_falls_back(self) -> None:
         self.put(self.ppath, {"rules": {"no-pkill": {"message": ""}}})
@@ -322,6 +374,44 @@ class ManagedHook(Isolated):
     def test_no_managed_file_changes_nothing(self) -> None:
         self.mpath.unlink()
         self.assertIsNone(self.hook("pkill node"))
+
+
+class ManagedSources(Isolated):
+    def setUp(self) -> None:
+        super().setUp()
+        self.put(self.dpath, {"rules": {"no-pkill": dict(PKILL)}})
+
+    def test_default_rules_apply_without_an_override(self) -> None:
+        del os.environ["GUARDRAILS_MANAGED_PATH"]
+        self.assertEqual(decision(self.hook("pkill node")), "deny")
+
+    def test_override_pointing_nowhere_leaves_the_default_enforced(self) -> None:
+        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.tmp / "nowhere" / "x.json")
+        self.assertEqual(decision(self.hook("pkill node")), "deny")
+
+    def test_empty_override_file_leaves_the_default_enforced(self) -> None:
+        self.put(self.mpath, {})
+        self.assertEqual(decision(self.hook("pkill node")), "deny")
+
+    def test_override_cannot_loosen_or_reword_a_default_rule(self) -> None:
+        self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "message": "Allowed.", "action": "warn",
+                                                     "retry": "same-command", "enabled": False}}})
+        for _ in range(2):
+            out = self.hook("pkill node")
+            self.assertEqual(decision(out), "deny")
+            self.assertIn("No pkill.", reason(out))
+
+    def test_override_adds_rules(self) -> None:
+        self.put(self.mpath, {"rules": {"no-strings": dict(STRINGS)}})
+        self.assertEqual(decision(self.hook("strings a")), "deny")
+        self.assertEqual(decision(self.hook("pkill a")), "deny")
+
+    def test_unreadable_override_still_enforces_the_default(self) -> None:
+        self.put(self.mpath, "{nope")
+        out = self.hook("pkill node")
+        assert out is not None
+        self.assertEqual(decision(out), "deny")
+        self.assertIn("NOT enforced", out["systemMessage"])
 
 
 class EndToEnd(Isolated):

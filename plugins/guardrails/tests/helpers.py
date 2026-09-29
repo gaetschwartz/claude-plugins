@@ -19,12 +19,14 @@ HOOKS = ROOT / "hooks"
 LIB = ROOT / "lib"
 sys.path.insert(0, str(LIB))
 
+import store
+
 SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR",
             "GUARDRAILS_MANAGED_PATH")
 
 
 class Isolated(unittest.TestCase):
-    """Global state under <tmp>/data, managed under <tmp>/managed, project root <tmp>/proj, no agent markers."""
+    """Global state under <tmp>/data, managed override under <tmp>/managed, stand-in platform default <tmp>/sysdefault, project root <tmp>/proj, no agent markers."""
 
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -34,6 +36,10 @@ class Isolated(unittest.TestCase):
         self.proj = self.tmp / "proj"
         self.proj.mkdir()
         self.mpath = self.tmp / "managed" / "guardrails.json"
+        self.dpath = self.tmp / "sysdefault" / "guardrails.json"
+        patch_default = mock.patch.object(store, "default_managed_path", return_value=str(self.dpath))
+        patch_default.start()
+        self.addCleanup(patch_default.stop)
         env = {k: v for k, v in os.environ.items() if k not in SCRUBBED}
         env.update(CLAUDE_PLUGIN_DATA=str(self.data), CLAUDE_PROJECT_DIR=str(self.proj),
                    GUARDRAILS_MANAGED_PATH=str(self.mpath))
@@ -62,7 +68,9 @@ class Isolated(unittest.TestCase):
         payload = {"session_id": session, "cwd": str(self.proj), "tool_name": "Bash",
                    "tool_input": {"command": command}}
         out = io.StringIO()
-        engine.run_hook(io.StringIO(json.dumps(payload)), out)
+        self.hook_err = io.StringIO()
+        with contextlib.redirect_stderr(self.hook_err):
+            engine.run_hook(io.StringIO(json.dumps(payload)), out)
         return json.loads(out.getvalue()) if out.getvalue() else None
 
     def cli(self, *argv: str, agent: bool = False) -> tuple[int, str, str]:
