@@ -7,41 +7,11 @@
 
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
+# shellcheck source=lock.sh
+source "$_LIB_DIR/setup/lock.sh"
 
 mode="${1:-first-run}"
 [[ "$mode" == first-run || "$mode" == update ]] || die "usage: bootstrap.sh first-run|update"
-
-LOCK="$DATA/.bootstrap.lock"
-LOCK_TIMEOUT="${LOCK_TIMEOUT:-120}"
-
-acquire_lock() {
-    local waited=0 holder moved
-    mkdir -p "$DATA"
-    until mkdir "$LOCK" 2>/dev/null; do
-        holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
-        if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
-            moved="$LOCK.stale.$$"
-            if mv "$LOCK" "$moved" 2>/dev/null; then
-                if [[ "$(cat "$moved/pid" 2>/dev/null || true)" == "$holder" ]]; then
-                    rm -rf "$moved"
-                else
-                    if [[ ! -e "$LOCK" ]]; then mv "$moved" "$LOCK" 2>/dev/null || rm -rf "$moved"; else rm -rf "$moved"; fi
-                fi
-            fi
-            continue
-        fi
-        (( waited < LOCK_TIMEOUT )) \
-            || die "timed out after ${LOCK_TIMEOUT}s waiting for another bootstrap (holder pid ${holder:-unknown}); remove $LOCK if it is stale"
-        (( waited > 0 )) || log "[bootstrap] another bootstrap is running; waiting"
-        sleep 1
-        waited=$((waited + 1))
-    done
-    trap release_lock EXIT
-    trap 'exit 1' INT TERM
-    printf '%s\n' "$$" > "$LOCK/pid"
-}
-
-release_lock() { rm -rf "$LOCK"; }
 
 remove_dead_tmp() {
     local d pid

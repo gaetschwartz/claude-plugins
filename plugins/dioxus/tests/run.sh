@@ -474,26 +474,73 @@ expect "dioxus cloned at the configured ref" test "$(git -C "$RACE/vendor/dioxus
 
 echo "bootstrap locking"
 LIVE="$TMP/live-holder"
-mkdir -p "$LIVE/.bootstrap.lock"
+mkdir -p "$LIVE"
 sleep 60 &
 holder=$!
-printf '%s\n' "$holder" > "$LIVE/.bootstrap.lock/pid"
+ln -s "$holder" "$LIVE/.bootstrap.owner"
 LOCK_TIMEOUT=2 run "$LIVE" search anything
 rc_isnt "waiting on a live holder times out" 0
 err_has "timeout message names the holder" "timed out after 2s"
-expect "timed-out waiter leaves the live holder's lock" test "$(cat "$LIVE/.bootstrap.lock/pid" 2>/dev/null)" = "$holder"
+expect "timed-out waiter leaves the live holder's lock" test "$(readlink "$LIVE/.bootstrap.owner" 2>/dev/null)" = "$holder"
 kill "$holder" 2>/dev/null
 wait "$holder" 2>/dev/null
 
 STALE="$TMP/stale-holder"
-mkdir -p "$STALE/.bootstrap.lock"
+mkdir -p "$STALE"
 true &
 dead=$!
 wait "$dead"
-printf '%s\n' "$dead" > "$STALE/.bootstrap.lock/pid"
+ln -s "$dead" "$STALE/.bootstrap.owner"
 run "$STALE" search "example number 1"
 rc_is "a dead holder's lock is taken over" 0
-expect "takeover leaves no stale lock directories" test -z "$(find "$STALE" -maxdepth 1 -name '.bootstrap.lock*')"
+expect "takeover leaves no lock files" test -z "$(find "$STALE" -maxdepth 1 -name '.bootstrap.*')"
+
+GUARDED="$TMP/guarded"
+mkdir -p "$GUARDED"
+sleep 60 &
+taker=$!
+ln -s "$dead" "$GUARDED/.bootstrap.owner"
+ln -s "$taker" "$GUARDED/.bootstrap.takeover"
+CLAUDE_PLUGIN_DATA="$GUARDED" LOCK_POLL=0.05 LOCK_TIMEOUT=1 bash "$HERE/lock-worker.sh" "$GUARDED/critical" "$GUARDED/log" 2>/dev/null
+rc_isnt_zero=$?
+expect "a waiter does not remove a dead lock while another takeover is in progress" test "$rc_isnt_zero" -ne 0 -a "$(readlink "$GUARDED/.bootstrap.owner")" = "$dead"
+kill "$taker" 2>/dev/null
+wait "$taker" 2>/dev/null
+
+WAITERS=8
+STRESS_RUNS=20
+stress_fail=0
+stress_kept=0
+for round in $(seq "$STRESS_RUNS"); do
+    SD="$TMP/stress-$round"
+    mkdir -p "$SD"
+    ln -s "$dead" "$SD/.bootstrap.owner"
+    : > "$SD/log"
+    pids=()
+    for _ in $(seq "$WAITERS"); do
+        CLAUDE_PLUGIN_DATA="$SD" LOCK_POLL=0.02 bash "$HERE/lock-worker.sh" "$SD/critical" "$SD/log" 2>/dev/null &
+        pids+=($!)
+    done
+    for p in "${pids[@]}"; do wait "$p" || stress_fail=$((stress_fail + 1)); done
+    [[ "$(grep -c '^DONE$' "$SD/log")" -eq "$WAITERS" && "$(grep -c OVERLAP "$SD/log")" -eq 0 ]] || stress_fail=$((stress_fail + 1))
+    [[ -z "$(find "$SD" -maxdepth 1 -name '.bootstrap.*')" ]] || stress_fail=$((stress_fail + 1))
+
+    sleep 60 &
+    live=$!
+    rm -f "$SD/.bootstrap.owner"
+    ln -s "$live" "$SD/.bootstrap.owner"
+    pids=()
+    for _ in $(seq "$WAITERS"); do
+        CLAUDE_PLUGIN_DATA="$SD" LOCK_POLL=0.02 LOCK_TIMEOUT=1 bash "$HERE/lock-worker.sh" "$SD/critical" "$SD/log2" 2>/dev/null &
+        pids+=($!)
+    done
+    for p in "${pids[@]}"; do wait "$p" || true; done
+    [[ "$(readlink "$SD/.bootstrap.owner")" == "$live" ]] || stress_kept=$((stress_kept + 1))
+    kill "$live" 2>/dev/null
+    wait "$live" 2>/dev/null
+done
+expect "stale lock takeover admits one waiter at a time across $STRESS_RUNS rounds of $WAITERS waiters" test "$stress_fail" -eq 0
+expect "no waiter removes a live holder's lock across $STRESS_RUNS rounds" test "$stress_kept" -eq 0
 
 TMPD="$TMP/tmp-cleanup"
 mkdir -p "$TMPD/vendor"
