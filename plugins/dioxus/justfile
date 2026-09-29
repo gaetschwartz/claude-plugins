@@ -1,0 +1,7 @@
+# Run the offline test suite
+test:
+    bash tests/run.sh
+
+# Lint the shell scripts
+check:
+    find . -name '*.sh' | xargs shellcheck -x -P SCRIPTDIR
