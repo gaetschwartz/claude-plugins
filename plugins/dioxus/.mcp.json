@@ -3,13 +3,13 @@
     "command": "uvx",
     "args": [
       "--from",
-      "git+https://github.com/oraios/serena",
+      "git+https://github.com/oraios/serena@v1.7.0",
       "serena",
       "start-mcp-server",
       "--project",
-      "${CLAUDE_PLUGIN_ROOT}/vendor/dioxus",
+      "${CLAUDE_PLUGIN_DATA}/vendor/dioxus",
       "--context",
-      "ide-assistant"
+      "claude-code"
     ]
   }
 }

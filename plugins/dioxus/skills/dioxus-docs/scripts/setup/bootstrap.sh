@@ -65,7 +65,8 @@ write_serena_project() {
     mkdir -p "$DIOXUS/.serena"
     cat > "$DIOXUS/.serena/project.yml" <<'YAML'
 project_name: dioxus
-language: rust
+language_servers:
+  - rust
 read_only: true
 ignored_paths:
   - target
@@ -75,8 +76,6 @@ ignored_paths:
   - Cargo.lock
   - notes
   - playwright-tests
-languages:
-  - rust
 YAML
 }
 
