@@ -1,44 +1,67 @@
 #!/usr/bin/env bash
-# Bootstrap or refresh the vendored Dioxus + docsite clones, then rebuild the index.
+# Clone or refresh the vendored Dioxus + docsite repos and rebuild the index.
 #
-# Idempotent: clones from scratch if a vendor dir is missing (first run after
-# the plugin is installed), otherwise `git pull --ff-only`. Also installs
-# rust-analyzer if missing (needed by the Serena MCP server) and warms its
-# workspace metadata.
-#
-# This script is normally auto-invoked by the user-facing skill scripts
-# (doc.sh, search.sh, show-example.sh) the first time they run, via
-# _lib.sh's `ensure_bootstrapped`. You can also run it directly to refresh
-# against upstream.
+# Usage: bootstrap.sh first-run|update
+#   first-run  clone whatever is missing, write the Serena project file, build the index.
+#   update     fetch and hard-reset both clones to upstream, then rebuild the index.
 
-# shellcheck source=_lib.sh
+# shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
-mkdir -p "$VENDOR"
+mode="${1:-first-run}"
+[[ "$mode" == first-run || "$mode" == update ]] || die "usage: bootstrap.sh first-run|update"
 
-if [[ ! -d "$DIOXUS/.git" ]]; then
-    log "[bootstrap] dioxus: missing — cloning v0.7 (shallow)"
-    git clone --depth=1 --branch v0.7 https://github.com/DioxusLabs/dioxus.git "$DIOXUS" 2>&1 | tail -5 >&2 || \
-        git clone --depth=1 https://github.com/DioxusLabs/dioxus.git "$DIOXUS" 2>&1 | tail -5 >&2
-else
-    log "[bootstrap] dioxus: pulling…"
-    git -C "$DIOXUS" pull --ff-only 2>&1 | tail -5 >&2
-fi
+LOCK="$DATA/.bootstrap.lock"
+LOCK_TIMEOUT=120
 
-if [[ ! -d "$DOCSITE/.git" ]]; then
-    log "[bootstrap] docsite: missing — cloning (shallow)"
-    git clone --depth=1 https://github.com/DioxusLabs/docsite.git "$DOCSITE" 2>&1 | tail -5 >&2
-else
-    log "[bootstrap] docsite: pulling…"
-    git -C "$DOCSITE" pull --ff-only 2>&1 | tail -5 >&2
-fi
+acquire_lock() {
+    local waited=0 holder
+    mkdir -p "$DATA"
+    until mkdir "$LOCK" 2>/dev/null; do
+        holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
+        if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
+            rm -rf "$LOCK"
+            continue
+        fi
+        (( waited < LOCK_TIMEOUT )) \
+            || die "timed out after ${LOCK_TIMEOUT}s waiting for another bootstrap (holder pid ${holder:-unknown}); remove $LOCK if it is stale"
+        (( waited > 0 )) || log "[bootstrap] another bootstrap is running; waiting"
+        sleep 1
+        waited=$((waited + 1))
+    done
+    printf '%s\n' "$$" > "$LOCK/pid"
+}
 
-log "[bootstrap] pruning docsite asset directories (binary, not used for text Q&A)"
-find "$DOCSITE/packages" -maxdepth 2 -type d -name assets -exec rm -rf {} + 2>/dev/null || true
+release_lock() { rm -rf "$LOCK"; }
 
-# Pre-create the .serena project config if it's missing (e.g. fresh clone).
-if [[ ! -f "$DIOXUS/.serena/project.yml" ]]; then
-    log "[bootstrap] writing default .serena/project.yml for Serena MCP"
+clone_repo() {
+    local name=$1 url=$2 ref=$3 dest=$4
+    local tmp="$VENDOR/.tmp-$name-$$"
+    local args=(--depth=1)
+    [[ -z "$ref" ]] || args+=(--branch "$ref")
+    rm -rf "$tmp" "$dest"
+    log "[bootstrap] $name: cloning ${ref:-default branch} from $url"
+    if ! git clone "${args[@]}" --quiet -- "$url" "$tmp" >&2; then
+        rm -rf "$tmp"
+        die "cloning $name from $url${ref:+ at ref $ref} failed; nothing was installed"
+    fi
+    mv "$tmp" "$dest"
+}
+
+reset_repo() {
+    local name=$1 ref=$2 dir=$3
+    log "[bootstrap] $name: fetching ${ref:-default branch}"
+    git -C "$dir" fetch --quiet --depth=1 origin "${ref:-HEAD}" >&2 \
+        || die "fetching $name failed"
+    git -C "$dir" reset --quiet --hard FETCH_HEAD >&2
+}
+
+prune_docsite_assets() {
+    find "$DOCSITE/packages" -maxdepth 2 -type d -name assets -exec rm -rf {} + 2>/dev/null || true
+}
+
+write_serena_project() {
+    [[ ! -f "$DIOXUS/.serena/project.yml" ]] || return 0
     mkdir -p "$DIOXUS/.serena"
     cat > "$DIOXUS/.serena/project.yml" <<'YAML'
 project_name: dioxus
@@ -55,51 +78,41 @@ ignored_paths:
 languages:
   - rust
 YAML
+}
+
+short_ref() {
+    printf '%s@%s\n' "$1" "$(git -C "$2" rev-parse --short HEAD)"
+}
+
+command -v git >/dev/null || die "git is required"
+
+trap release_lock EXIT
+trap 'exit 1' INT TERM
+acquire_lock
+mkdir -p "$VENDOR"
+rm -rf "$VENDOR"/.tmp-*
+
+if [[ "$mode" == first-run ]] && ! needs_bootstrap; then
+    exit 0
 fi
 
-log "[bootstrap] recording refs"
-{
-    printf 'DIOXUS_REF=%s@%s\n' \
-        "$(git -C "$DIOXUS" rev-parse --abbrev-ref HEAD)" \
-        "$(git -C "$DIOXUS" rev-parse --short HEAD)"
-    printf 'DOCSITE_REF=%s@%s\n' \
-        "$(git -C "$DOCSITE" rev-parse --abbrev-ref HEAD)" \
-        "$(git -C "$DOCSITE" rev-parse --short HEAD)"
-} > "$VENDOR/.ref"
-
-log "[bootstrap] rebuilding index"
-bash "$(dirname "${BASH_SOURCE[0]}")/build-index.sh"
-
-#
-# Ensure rust-analyzer is available for Serena MCP.
-# Try brew first (works cleanly on this host), fall back to rustup.
-#
-log "[bootstrap] checking rust-analyzer"
-if ! command -v rust-analyzer >/dev/null 2>&1 \
-   || ! rust-analyzer --version >/dev/null 2>&1; then
-    if command -v brew >/dev/null 2>&1; then
-        log "[bootstrap] installing rust-analyzer via brew"
-        brew install rust-analyzer 2>&1 | tail -3 >&2 || \
-            log "[bootstrap] WARN: brew install rust-analyzer failed"
-    elif command -v rustup >/dev/null 2>&1; then
-        log "[bootstrap] installing rust-analyzer via rustup"
-        rustup component add rust-analyzer 2>&1 | tail -3 >&2 || \
-            log "[bootstrap] WARN: rustup component add rust-analyzer failed"
-    else
-        log "[bootstrap] WARN: no brew or rustup found — install rust-analyzer manually for Serena MCP"
-    fi
+if [[ ! -d "$DIOXUS/.git" ]]; then
+    clone_repo dioxus "$DIOXUS_REPO_URL" "$DIOXUS_REF" "$DIOXUS"
+elif [[ "$mode" == update ]]; then
+    reset_repo dioxus "$DIOXUS_REF" "$DIOXUS"
 fi
 
-#
-# Warm rust-analyzer's understanding of the workspace by running cargo metadata.
-# This populates Cargo.lock and target/.rustc_info.json so the first MCP query is fast.
-#
-if command -v cargo >/dev/null 2>&1; then
-    log "[bootstrap] warming workspace metadata (cargo metadata, ~30s)"
-    (cd "$DIOXUS" && cargo metadata --format-version 1 --offline >/dev/null 2>&1) \
-      || (cd "$DIOXUS" && cargo metadata --format-version 1 >/dev/null 2>&1) \
-      || log "[bootstrap] WARN: cargo metadata failed; serena's first query will be slower"
+if [[ ! -d "$DOCSITE/.git" ]]; then
+    clone_repo docsite "$DOCSITE_REPO_URL" "" "$DOCSITE"
+elif [[ "$mode" == update ]]; then
+    reset_repo docsite "" "$DOCSITE"
 fi
 
-log "[bootstrap] done."
-log "[bootstrap] If the Serena MCP server failed to start (because vendor/dioxus didn't exist when the plugin loaded), run /reload-plugins in Claude Code to bring it up."
+prune_docsite_assets
+write_serena_project
+bash "$_LIB_DIR/setup/build-index.sh" >&2
+
+if [[ "$mode" == update ]]; then
+    printf 'dioxus=%s\n' "$(short_ref "$DIOXUS_REF" "$DIOXUS")"
+    printf 'docsite=%s\n' "$(short_ref "$(git -C "$DOCSITE" symbolic-ref --short -q HEAD || echo HEAD)" "$DOCSITE")"
+fi

@@ -1,82 +1,99 @@
 #!/usr/bin/env bash
-# Build the structured index over vendor/dioxus and vendor/docsite.
-# Produces four TSVs in $INDEX/. Idempotent.
-#
-# Usage: build-index.sh
+# Build docs.tsv and examples.tsv under $INDEX from the vendored clones.
+# Both files are replaced atomically, and only after row-count validation.
 
-# shellcheck source=_lib.sh
+# shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 
 require_dir "$DIOXUS"
 require_dir "$DOCSITE"
 mkdir -p "$INDEX"
 
-log "[build-index] writing TSVs to $INDEX"
+MIN_DOCS=50
+MIN_EXAMPLES=100
+tmp="$INDEX/.tmp-$$"
+trap 'rm -rf "$tmp"' EXIT
+rm -rf "$tmp"
+mkdir -p "$tmp"
 
-#
-# files.tsv  —  path \t kind \t one_line_summary
-#
-log "[build-index] files.tsv"
-{
-    # Source .rs under packages/*/src
-    fd -e rs --type f . "$DIOXUS/packages" 2>/dev/null \
-      | awk -v root="$DIOXUS/" 'index($0, root)==1 { sub(root, "vendor/dioxus/", $0); print }' \
+first_comment() {
+    awk '
+        /^\/\// {
+            line = $0
+            sub(/^\/\/[\/!]? ?/, "", line)
+            gsub(/\t/, " ", line)
+            if (line ~ /[^ ]/) { print substr(line, 1, 200); exit }
+            next
+        }
+        /^[[:space:]]*$/ { next }
+        /^#/ { next }
+        { exit }
+    ' "$1" 2>/dev/null || true
+}
+
+first_heading() {
+    awk '/^# / { sub(/^# /, ""); gsub(/\t/, " "); print substr($0, 1, 200); exit }' "$1" 2>/dev/null || true
+}
+
+build_docs() {
+    local slug title
+    awk '
+        /<!--/ { next }
+        {
+            while (match($0, /\]\([^)]+\.md\)/)) {
+                print substr($0, RSTART + 2, RLENGTH - 3)
+                $0 = substr($0, RSTART + RLENGTH)
+            }
+        }
+    ' "$DOCS_ROOT/SUMMARY.md" \
+      | LC_ALL=C sort -u \
       | while IFS= read -r rel; do
-            abs="$PLUGIN_ROOT/$rel"
-            summary=$(awk '
-                /^\/\/!/ { sub(/^\/\/! ?/, ""); if (length($0)>0) {print; exit} }
-                /^\/\/\// { sub(/^\/\/\/ ?/, ""); if (length($0)>0) {print; exit} }
-            ' "$abs" 2>/dev/null | head -c 200)
-            printf '%s\trust\t%s\n' "$rel" "$summary"
+            [[ -s "$DOCS_ROOT/$rel" ]] || continue
+            slug="${rel%.md}"
+            title="$(first_heading "$DOCS_ROOT/$rel")"
+            printf '%s\t%s\tvendor/docsite/docs-src/0.7/src/%s\n' "$slug" "${title:-${slug##*/}}" "$rel"
         done
+}
 
-    # Markdown under docsite/docs-src/0.7/src
-    fd -e md --type f . "$DOCS_ROOT" 2>/dev/null \
-      | awk -v root="$DOCSITE/" 'index($0, root)==1 { sub(root, "vendor/docsite/", $0); print }' \
-      | while IFS= read -r rel; do
-            abs="$PLUGIN_ROOT/$rel"
-            summary=$(awk '/^# / { sub(/^# /, ""); print; exit }' "$abs" 2>/dev/null | head -c 200)
-            printf '%s\tdoc\t%s\n' "$rel" "$summary"
-        done
-} > "$INDEX/files.tsv"
+build_examples() {
+    local root="$DIOXUS/examples" entry category name path src
+    {
+        find "$root" -mindepth 3 -maxdepth 3 -type f -name Cargo.toml
+        find "$root" -mindepth 2 -maxdepth 2 -type f -name '*.rs'
+    } \
+      | awk -v root="$root/" 'index($0, root) == 1 { print substr($0, length(root) + 1) }' \
+      | while IFS= read -r entry; do
+            category="${entry%%/*}"
+            case "$category" in scripts|assets) continue ;; esac
+            if [[ "$entry" == */Cargo.toml ]]; then
+                path="${entry%/Cargo.toml}"
+                name="${path##*/}"
+                src="$root/$path/src/main.rs"
+                [[ -f "$src" ]] || src="$root/$path/src/lib.rs"
+                [[ -f "$src" ]] || src="$(find "$root/$path" -name '*.rs' -type f | LC_ALL=C sort | head -n 1)"
+            else
+                path="$entry"
+                name="$(basename "$entry" .rs)"
+                src="$root/$entry"
+            fi
+            [[ -n "$name" ]] || continue
+            printf '%s\t%s\tvendor/dioxus/examples/%s\t%s\n' \
+                "$name" "$category" "$path" "$(first_comment "$src")"
+        done \
+      | LC_ALL=C sort -t $'\t' -k2,2 -k1,1
+}
 
-#
-# examples.tsv  —  name \t category \t path \t one_line_summary
-#
-log "[build-index] examples.tsv"
-fd -e rs --type f . "$DIOXUS/examples" 2>/dev/null \
-  | awk -v root="$DIOXUS/" 'index($0, root)==1 { sub(root, "vendor/dioxus/", $0); print }' \
-  | while IFS= read -r rel; do
-        abs="$PLUGIN_ROOT/$rel"
-        # category = first dir under examples/, name = basename minus .rs
-        rest="${rel#vendor/dioxus/examples/}"
-        category="${rest%%/*}"
-        name="$(basename "$rel" .rs)"
-        summary=$(awk '
-            /^\/\/!/ { sub(/^\/\/! ?/, ""); if (length($0)>0) {print; exit} }
-        ' "$abs" 2>/dev/null | head -c 200)
-        printf '%s\t%s\t%s\t%s\n' "$name" "$category" "$rel" "$summary"
-    done \
-  | LC_ALL=C sort -t $'\t' -k2,2 -k1,1 \
-  > "$INDEX/examples.tsv"
+log "[build-index] docs"
+build_docs > "$tmp/docs.tsv"
+log "[build-index] examples"
+build_examples > "$tmp/examples.tsv"
 
-#
-# docs.tsv  —  slug \t title \t path
-#
-log "[build-index] docs.tsv"
-fd -e md --type f . "$DOCS_ROOT" 2>/dev/null \
-  | awk -v root="$DOCS_ROOT/" 'index($0, root)==1 { sub(root, "", $0); print }' \
-  | while IFS= read -r rel; do
-        abs="$DOCS_ROOT/$rel"
-        slug="${rel%.md}"
-        title=$(awk '/^# / { sub(/^# /, ""); print; exit }' "$abs" 2>/dev/null | head -c 200)
-        # Path stored relative to plugin root for consistency with other TSVs
-        printf '%s\t%s\tvendor/docsite/docs-src/0.7/src/%s\n' "$slug" "$title" "$rel"
-    done \
-  | LC_ALL=C sort \
-  > "$INDEX/docs.tsv"
+docs_rows=$(awk 'END { print NR }' "$tmp/docs.tsv")
+examples_rows=$(awk 'END { print NR }' "$tmp/examples.tsv")
+if (( docs_rows <= MIN_DOCS || examples_rows <= MIN_EXAMPLES )); then
+    die "index looks wrong (docs=$docs_rows examples=$examples_rows, need more than $MIN_DOCS and $MIN_EXAMPLES); kept the previous index. The clones under $VENDOR may be incomplete."
+fi
 
-log "[build-index] done."
-log "  files:    $(wc -l < "$INDEX/files.tsv") rows"
-log "  examples: $(wc -l < "$INDEX/examples.tsv") rows"
-log "  docs:     $(wc -l < "$INDEX/docs.tsv") rows"
+mv "$tmp/docs.tsv" "$INDEX/docs.tsv"
+mv "$tmp/examples.tsv" "$INDEX/examples.tsv"
+log "[build-index] done: docs=$docs_rows examples=$examples_rows"
