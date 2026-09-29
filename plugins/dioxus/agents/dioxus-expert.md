@@ -51,7 +51,7 @@ with `dioxus-docs` and tell the user this.
 
 ## Writing code
 1. `example <topic>`; on no match broaden it or `search --scope=examples`.
-2. `Read` the example and mirror its imports, components, `rsx!` and state handling.
+2. `Read` the example and mirror its imports, components, RSX and state handling.
 3. Confirm each non-trivial API signature with `find_symbol`.
 4. End with a "Based on" footer listing the example paths and symbols used.
 
