@@ -16,7 +16,7 @@ The plugin puts `dioxus-docs` on the PATH of Claude's Bash tool. The `dioxus-doc
 |---|---|
 | `search <query> [--scope=docs\|src\|examples\|all] [--limit=N] [--regex]` | Fixed-string, smart-case search. |
 | `semantic <query> [--scope=docs\|src\|examples\|all] [--limit=N]` | Meaning-based search backed by [semble](https://github.com/MinishLab/semble). |
-| `read <slug-or-fragment> [--list]` | Print a book page with mdbook includes expanded. |
+| `read <slug-or-fragment-or-path> [--list]` | Print a book page with mdbook includes expanded. Also accepts the `vendor/docsite/...` page paths printed by `search` and `semantic`, with or without `.md` and a `:start-end` suffix. |
 | `example <pattern> [--list]` | Find a maintained example. |
 | `load <topic>` | Print a curated bundle of book pages. |
 | `update` | Fetch upstream and rebuild the index. |
@@ -48,7 +48,7 @@ The project file the plugin writes sets `read_only: true`, which removes Serena'
 
 ## Semantic search
 
-`dioxus-docs semantic "<question>"` finds passages by meaning instead of exact text, using [semble](https://github.com/MinishLab/semble) through `uvx` (so `uv` must be installed; no server or GPU). The first call downloads a ~32 MB model and builds an index for the scope, which is slow once; semble keeps its own cache and re-indexes files that changed, so `dioxus-docs update` needs no extra step. Scopes: `docs` (default: the 0.7 book plus its doc examples), `src` (framework packages), `examples`, or `all`. `--limit` defaults to 8. Scopes are limited to the 0.7 book so stale 0.4 to 0.6 pages do not compete.
+`dioxus-docs semantic "<question>"` finds passages by meaning instead of exact text, using [semble](https://github.com/MinishLab/semble) through `uvx` (so `uv` must be installed; no server or GPU). The first call downloads a ~32 MB model and builds an index for the scope, which is slow once; semble keeps its own cache and re-indexes files that changed, so `dioxus-docs update` needs no extra step. Scopes: `docs` (default: the 0.7 book plus its doc examples), `src` (framework packages), `examples`, or `all`. `--limit` defaults to 8. Scopes cover the 0.7 book only, and both `search` and `semantic` skip the stale `untested_*` doc-example directories (0.3 to 0.6) so old patterns do not compete. The migration samples under `untested_05` are still shown by `read` on the migration pages.
 
 ## Context7 fallback
 

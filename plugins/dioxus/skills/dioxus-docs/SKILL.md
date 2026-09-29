@@ -7,7 +7,7 @@ description: >
   fullstack server functions, or the dx CLI. Symbol lookups (definitions,
   references) go through the Serena MCP server shipped in the same plugin.
 user-invocable: false
-allowed-tools: Bash(dioxus-docs *)
+allowed-tools: Bash(dioxus-docs search *) Bash(dioxus-docs semantic *) Bash(dioxus-docs read *) Bash(dioxus-docs example *) Bash(dioxus-docs load *) Bash(dioxus-docs paths)
 paths: "**/*.rs, **/Cargo.toml, **/Dioxus.toml"
 ---
 
@@ -18,12 +18,12 @@ to stdout. `dioxus-docs --help` lists every subcommand and the `load` topics.
 
 | Subcommand | Use |
 |---|---|
-| `search <query> [--scope=docs\|src\|examples\|all] [--limit=N] [--regex]` | Fixed-string, smart-case search. Output is `path:line:text`, relative to the data dir. |
+| `search <query> [--scope=docs\|src\|examples\|all] [--limit=N] [--regex]` | Fixed-string, smart-case search. Output is `path:line:text`, relative to the data dir. Stale `untested_*` examples are skipped. |
 | `semantic <query> [--scope=docs\|src\|examples\|all] [--limit=N]` | Meaning-based search (semble, needs `uv`). Default scope `docs`, default limit 8. Output is `path:start-end` plus a snippet, relative to the data dir. |
-| `read <slug-or-fragment> [--list]` | Print a book page with mdbook includes expanded. Ambiguous input lists candidates. |
+| `read <slug-or-fragment-or-path> [--list]` | Print a book page with mdbook includes expanded. Ambiguous input lists candidates. Accepts the page paths `search` and `semantic` print, with or without `.md` and `:start-end`. |
 | `example <pattern> [--list]` | Find a maintained example under `examples/`. |
 | `load <topic>` | Print a curated bundle of book pages. No topic prints the topics with sizes. |
-| `update` | Fetch upstream and rebuild the index. |
+| `update` | Fetch upstream and rebuild the index. Needs the user's approval, as does `setup-serena`. |
 | `paths` | Print absolute `vendor=`, `docs=`, `examples=` and `data=` directories. |
 
 ## Which tool

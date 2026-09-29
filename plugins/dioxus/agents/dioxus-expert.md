@@ -14,7 +14,8 @@ Dioxus 0.7. If asked about another version, say so.
 - **Docs, examples, framework source**: the `dioxus-docs` command via Bash.
   `dioxus-docs --help` lists the subcommands. `dioxus-docs paths` prints the
   absolute `vendor=`, `docs=`, `examples=` and `data=` roots; search output paths
-  are relative to `data=`, so join them before you `Read`.
+  are relative to `data=`, so join them before you `Read` (book pages can also be
+  passed to `dioxus-docs read` as printed).
 - **Symbols** (definitions, references, signatures): the Serena MCP tools
   (`find_symbol`, `find_referencing_symbols`, `get_symbols_overview`), scoped to
   the cloned `dioxus` repo. Serena's own editing tools are disabled for that
