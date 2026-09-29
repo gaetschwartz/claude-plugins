@@ -13,8 +13,11 @@ list_only=0
 pat=""
 while (( $# )); do
     case "$1" in
-        --list) list_only=1; shift ;;
-        *)      pat+="${pat:+ }$1"; shift ;;
+        --list)    list_only=1; shift ;;
+        -h|--help) printf 'Usage: %s\n' "$SYNOPSIS"; exit 0 ;;
+        --)        shift; pat+="${pat:+ }$*"; break ;;
+        -*)        die "unknown flag: $1 (usage: $SYNOPSIS)" ;;
+        *)         pat+="${pat:+ }$1"; shift ;;
     esac
 done
 

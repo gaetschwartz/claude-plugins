@@ -23,7 +23,8 @@ while (( $# )); do
             if [[ "$1" == --scope ]]; then scope=$2; else limit=$2; fi
             shift 2 ;;
         --regex)   regex=1; shift ;;
-        --)        shift; query+="$*"; break ;;
+        -h|--help) printf 'Usage: %s\n' "$SYNOPSIS"; exit 0 ;;
+        --)        shift; query+="${query:+ }$*"; break ;;
         -*)        die "unknown flag: $1 (usage: $SYNOPSIS)" ;;
         *)         query+="${query:+ }$1"; shift ;;
     esac

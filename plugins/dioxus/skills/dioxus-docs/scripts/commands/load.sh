@@ -76,6 +76,16 @@ case "${1:-}" in
         exit 0 ;;
 esac
 
+topic="${1:-}"
+if [[ "$topic" == -* ]]; then
+    die "unknown flag: $topic (usage: $PROG load [<topic>])"
+fi
+if [[ -n "$topic" ]] && { ! [[ "$topic" =~ ^[a-z]+$ ]] || ! declare -F "topic_$topic" >/dev/null; }; then
+    log "unknown topic: $topic"
+    log "topics: $(list_names | paste -sd, - | sed 's/,/, /g')"
+    exit 1
+fi
+
 ensure_bootstrapped
 
 tmp="$(mktemp -d)"
@@ -113,17 +123,9 @@ list_topics() {
     done
 }
 
-topic="${1:-}"
-
 if [[ -z "$topic" ]]; then
     list_topics
     exit 0
-fi
-
-if ! [[ "$topic" =~ ^[a-z]+$ ]] || ! declare -F "topic_$topic" >/dev/null; then
-    log "unknown topic: $topic"
-    list_topics >&2
-    exit 1
 fi
 
 build_bundle "$topic"

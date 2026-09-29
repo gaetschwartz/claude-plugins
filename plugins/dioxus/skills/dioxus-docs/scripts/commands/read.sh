@@ -13,12 +13,18 @@ list_only=0
 q=""
 while (( $# )); do
     case "$1" in
-        --list) list_only=1; shift ;;
-        *)      q+="${q:+ }$1"; shift ;;
+        --list)    list_only=1; shift ;;
+        -h|--help) printf 'Usage: %s\n' "$SYNOPSIS"; exit 0 ;;
+        --)        shift; q+="${q:+ }$*"; break ;;
+        -*)        die "unknown flag: $1 (usage: $SYNOPSIS)" ;;
+        *)         q+="${q:+ }$1"; shift ;;
     esac
 done
 
 [[ -n "$q" ]] || die "usage: $SYNOPSIS"
+if [[ "$q" =~ ^(.*):[0-9]+(-[0-9]+)?$ ]]; then q="${BASH_REMATCH[1]}"; fi
+q="${q#"$DOCS_ROOT"/}"
+q="${q#"${DOCS_ROOT#"$DATA"/}"/}"
 q="${q%.md}"
 
 ensure_bootstrapped

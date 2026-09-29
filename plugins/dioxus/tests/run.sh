@@ -160,6 +160,8 @@ err_has "per-file cap noted" "per file"
 run "$DATA" search -- --scope=docs
 rc_is "-- ends flag parsing: exit 0" 0
 err_has "-- ends flag parsing: query is literal" "no matches for: --scope=docs"
+run "$DATA" search foo -- bar baz
+err_has "-- joins words before and after with spaces" "no matches for: foo bar baz"
 run "$DATA" search use_signal --limit abc
 rc_isnt "non-numeric --limit rejected" 0
 err_has "bad --limit message" "limit"
@@ -337,6 +339,42 @@ err_has "semantic without uvx names uv" "uv is required"
 err_has "semantic without uvx links the install page" "docs.astral.sh/uv"
 expect "semantic without uvx never bootstraps" test ! -e "$NOBOOT/vendor"
 
+echo "argument errors never bootstrap"
+DEAD_URLS=(DIOXUS_REPO_URL=file:///nonexistent DOCSITE_REPO_URL=file:///nonexistent)
+expect_no_bootstrap() {
+    local name=$1 rc_want=$2; shift 2
+    local d
+    d="$(mktemp -d "$TMP/nb.XXXXXX")"
+    env "${DEAD_URLS[@]}" CLAUDE_PLUGIN_DATA="$d" bash "$DISPATCH" "$@" >"$TMP/out" 2>"$TMP/err"
+    RC=$?
+    OUT="$(cat "$TMP/out")"
+    ERR="$(cat "$TMP/err")"
+    expect "$name: exit $rc_want" test "$RC" -eq "$rc_want"
+    expect "$name: no vendor dir" test ! -e "$d/vendor"
+}
+expect_no_bootstrap "read --help" 0 read --help
+out_has "read --help prints usage" "Usage: dioxus-docs read"
+expect_no_bootstrap "read -h" 0 read -h
+expect_no_bootstrap "read --bogus" 1 read --bogus
+err_has "read --bogus names the flag" "unknown flag: --bogus"
+expect_no_bootstrap "read without a query" 1 read
+expect_no_bootstrap "example -h" 0 example -h
+out_has "example -h prints usage" "Usage: dioxus-docs example"
+expect_no_bootstrap "example --bogus" 1 example --bogus
+expect_no_bootstrap "load nope" 1 load nope
+err_has "load nope lists topics" "topics:"
+expect_no_bootstrap "load a b" 1 load 'a b'
+expect_no_bootstrap "load ../x" 1 load ../x
+expect_no_bootstrap "load --list" 1 load --list
+expect_no_bootstrap "search --help" 0 search --help
+expect_no_bootstrap "semantic --help" 0 semantic --help
+run "$DATA" read --bogus
+rc_is "read --bogus on a bootstrapped dir exits 1" 1
+run "$DATA" read -- --bogus
+err_has "read -- treats the rest as the query" "no matches for: --bogus"
+run "$DATA" example -- --bogus
+err_has "example -- treats the rest as the query" "no matches for: --bogus"
+
 echo "bootstrap against local repos"
 FAKE="$TMP/fake"
 mkdir -p "$FAKE"
@@ -349,6 +387,7 @@ rc_isnt "failed clone exits non-zero" 0
 expect "failed clone leaves no repo" test ! -d "$BAD/vendor/dioxus/.git"
 expect "failed clone leaves no tmp dir" no_tmp_under "$BAD"
 err_has "failed clone message names the repo" "dioxus"
+err_has "failed clone reports the bootstrap failure" "bootstrap failed"
 expect "failed clone releases the lock" test ! -e "$BAD/.bootstrap.lock"
 
 RACE="$TMP/race"
@@ -367,6 +406,42 @@ expect "concurrent bootstraps leave no lock" test ! -e "$RACE/.bootstrap.lock"
 expect "concurrent bootstraps leave no tmp dirs" no_tmp_under "$RACE"
 expect "fresh bootstrap writes no vendor/.ref or files.tsv" test ! -e "$RACE/vendor/.ref" -a ! -e "$RACE/index/files.tsv"
 expect "dioxus cloned at the configured ref" test "$(git -C "$RACE/vendor/dioxus" symbolic-ref --short HEAD)" = v0.7
+
+echo "bootstrap locking"
+LIVE="$TMP/live-holder"
+mkdir -p "$LIVE/.bootstrap.lock"
+sleep 60 &
+holder=$!
+printf '%s\n' "$holder" > "$LIVE/.bootstrap.lock/pid"
+LOCK_TIMEOUT=2 run "$LIVE" search anything
+rc_isnt "waiting on a live holder times out" 0
+err_has "timeout message names the holder" "timed out after 2s"
+expect "timed-out waiter leaves the live holder's lock" test "$(cat "$LIVE/.bootstrap.lock/pid" 2>/dev/null)" = "$holder"
+kill "$holder" 2>/dev/null
+wait "$holder" 2>/dev/null
+
+STALE="$TMP/stale-holder"
+mkdir -p "$STALE/.bootstrap.lock"
+true &
+dead=$!
+wait "$dead"
+printf '%s\n' "$dead" > "$STALE/.bootstrap.lock/pid"
+run "$STALE" search "example number 1"
+rc_is "a dead holder's lock is taken over" 0
+expect "takeover leaves no stale lock directories" test -z "$(find "$STALE" -maxdepth 1 -name '.bootstrap.lock*')"
+
+TMPD="$TMP/tmp-cleanup"
+mkdir -p "$TMPD/vendor"
+sleep 60 &
+alive=$!
+mkdir "$TMPD/vendor/.tmp-dioxus-$alive" "$TMPD/vendor/.tmp-dioxus-$dead" "$TMPD/vendor/.tmp-odd-name"
+run "$TMPD" search "example number 1"
+rc_is "bootstrap with leftover temp dirs succeeds" 0
+expect "temp dir of a live pid is kept" test -d "$TMPD/vendor/.tmp-dioxus-$alive"
+expect "temp dir of a dead pid is removed" test ! -e "$TMPD/vendor/.tmp-dioxus-$dead"
+expect "temp dir without a pid suffix is removed" test ! -e "$TMPD/vendor/.tmp-odd-name"
+kill "$alive" 2>/dev/null
+wait "$alive" 2>/dev/null
 
 echo "update"
 printf '// brand new example\nfn main() {}\n' > "$FAKE/dioxus/examples/01-demos/fresh.rs"

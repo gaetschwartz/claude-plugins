@@ -26,6 +26,7 @@ while (( $# )); do
             (( $# >= 2 )) || arg_error "$1 needs a value"
             if [[ "$1" == --scope ]]; then scope=$2; else limit=$2; fi
             shift 2 ;;
+        -h|--help) printf 'Usage: %s\n' "$SYNOPSIS"; exit 0 ;;
         --)        shift; query+="${query:+ }$*"; break ;;
         -*)        arg_error "unknown flag: $1" ;;
         *)         query+="${query:+ }$1"; shift ;;

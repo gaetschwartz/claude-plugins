@@ -12,15 +12,22 @@ mode="${1:-first-run}"
 [[ "$mode" == first-run || "$mode" == update ]] || die "usage: bootstrap.sh first-run|update"
 
 LOCK="$DATA/.bootstrap.lock"
-LOCK_TIMEOUT=120
+LOCK_TIMEOUT="${LOCK_TIMEOUT:-120}"
 
 acquire_lock() {
-    local waited=0 holder
+    local waited=0 holder moved
     mkdir -p "$DATA"
     until mkdir "$LOCK" 2>/dev/null; do
         holder="$(cat "$LOCK/pid" 2>/dev/null || true)"
         if [[ -n "$holder" ]] && ! kill -0 "$holder" 2>/dev/null; then
-            rm -rf "$LOCK"
+            moved="$LOCK.stale.$$"
+            if mv "$LOCK" "$moved" 2>/dev/null; then
+                if [[ "$(cat "$moved/pid" 2>/dev/null || true)" == "$holder" ]]; then
+                    rm -rf "$moved"
+                else
+                    if [[ ! -e "$LOCK" ]]; then mv "$moved" "$LOCK" 2>/dev/null || rm -rf "$moved"; else rm -rf "$moved"; fi
+                fi
+            fi
             continue
         fi
         (( waited < LOCK_TIMEOUT )) \
@@ -29,10 +36,24 @@ acquire_lock() {
         sleep 1
         waited=$((waited + 1))
     done
+    trap release_lock EXIT
+    trap 'exit 1' INT TERM
     printf '%s\n' "$$" > "$LOCK/pid"
 }
 
 release_lock() { rm -rf "$LOCK"; }
+
+remove_dead_tmp() {
+    local d pid
+    for d in "$VENDOR"/.tmp-*; do
+        [[ -e "$d" ]] || continue
+        pid="${d##*-}"
+        if [[ "$pid" =~ ^[0-9]+$ ]] && kill -0 "$pid" 2>/dev/null; then
+            continue
+        fi
+        rm -rf "$d"
+    done
+}
 
 clone_repo() {
     local name=$1 url=$2 ref=$3 dest=$4
@@ -85,11 +106,9 @@ short_ref() {
 
 command -v git >/dev/null || die "git is required"
 
-trap release_lock EXIT
-trap 'exit 1' INT TERM
 acquire_lock
 mkdir -p "$VENDOR"
-rm -rf "$VENDOR"/.tmp-*
+remove_dead_tmp
 
 if [[ "$mode" == first-run ]] && ! needs_bootstrap; then
     exit 0
