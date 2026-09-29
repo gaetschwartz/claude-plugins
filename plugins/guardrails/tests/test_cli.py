@@ -2,6 +2,9 @@ from __future__ import annotations
 
 import json
 import os
+import shlex
+import stat
+from pathlib import Path
 
 from helpers import Isolated
 
@@ -210,7 +213,7 @@ class Status(Isolated):
         code, out, _ = self.cli("status")
         self.assertEqual(code, 0)
         for expected in ("no-strings [global] deny retry: program=strings", "nm [project] deny: program=nm",
-                         "reverse-engineering: inactive; agent may enable: yes; RE", "rule bad:",
+                         "reverse-engineering [global]: inactive; agent may enable: yes; RE", "rule bad:",
                          "mode 'ghost' is not declared"):
             self.assertIn(expected, out)
 
@@ -272,7 +275,7 @@ class RuleTest(Isolated):
         self.cli("rule", "set", "no-strings", "action=deny", "--project")
         code, out, _ = self.cli("rule", "test", "--id", "no-strings", "strings a")
         self.assertEqual(code, 0)
-        self.assertIn("rule no-strings: deny retry modes=reverse-engineering", out)
+        self.assertIn("rule no-strings [global+project]: deny retry modes=reverse-engineering", out)
         self.assertIn(line("match", "strings a"), out)
 
     def test_unknown_id(self) -> None:
@@ -296,3 +299,232 @@ class RuleTest(Isolated):
         draft = '{"match": {"program": "strings"}, "message": "docs", "enabled": false}'
         out = self.cli("rule", "test", "--json", draft, "strings a")[1]
         self.assertIn("note: rule is disabled", out)
+
+
+MANAGED_RULE = '{"match": {"program": "pkill"}, "message": "No pkill."}'
+
+
+class ManagedScope(Isolated):
+    def managed(self, *argv: str, agent: bool = False) -> tuple[int, str, str]:
+        return self.cli(*argv, "--scope", "managed", agent=agent)
+
+    def test_add_set_rm_round_trip(self) -> None:
+        code, out, _ = self.managed("rule", "add", "no-pkill", "--json", RULE, "--reason", "policy")
+        self.assertEqual(code, 0)
+        self.assertIn(f"added rule no-pkill in {self.mpath}", out)
+        self.assertFalse(self.gpath.exists())
+        self.assertEqual(stat.S_IMODE(self.mpath.stat().st_mode), 0o644)
+        self.assertEqual(self.get(self.mpath)["rules"]["no-pkill"]["setBy"]["reason"], "policy")
+        self.assertEqual(self.managed("rule", "set", "no-pkill", "action=warn", "modes=")[0], 0)
+        rule = self.get(self.mpath)["rules"]["no-pkill"]
+        self.assertEqual((rule["action"], rule["modes"]), ("warn", []))
+        self.assertEqual(self.managed("rule", "rm", "no-pkill")[0], 0)
+        self.assertEqual(self.get(self.mpath)["rules"], {})
+
+    def test_creates_missing_directory(self) -> None:
+        self.assertFalse(self.mpath.parent.exists())
+        self.assertEqual(self.managed("rule", "add", "x", "--json", RULE)[0], 0)
+        self.assertTrue(self.mpath.is_file())
+
+    def test_set_and_rm_need_an_existing_managed_rule(self) -> None:
+        self.assertEqual(self.managed("rule", "set", "ghost", "action=deny")[0], 2)
+        self.assertEqual(self.managed("rule", "rm", "ghost")[0], 2)
+
+    def test_always_enforced_note_only_without_modes(self) -> None:
+        _, out, _ = self.managed("rule", "add", "bare", "--json", MANAGED_RULE)
+        self.assertIn("note: managed rule bare lists no modes, so it is always enforced", out)
+        _, out, _ = self.managed("rule", "add", "modal", "--json", RULE)
+        self.assertNotIn("always enforced", out)
+        _, out, _ = self.managed("rule", "set", "modal", "modes=")
+        self.assertIn("always enforced", out)
+        _, out, _ = self.cli("rule", "add", "local", "--json", MANAGED_RULE)
+        self.assertNotIn("always enforced", out)
+
+    def test_set_and_rm_refused_from_other_scopes(self) -> None:
+        self.managed("rule", "add", "no-strings", "--json", RULE)
+        before = self.mpath.read_text()
+        for scope in ("global", "project"):
+            for argv in (("rule", "set", "no-strings", "action=warn"), ("rule", "rm", "no-strings")):
+                with self.subTest(scope=scope, verb=argv[1]):
+                    code, _, err = self.cli(*argv, "--scope", scope)
+                    self.assertEqual(code, 3)
+                    self.assertIn("--scope managed", err)
+        self.assertEqual(self.cli("rule", "set", "no-strings", "action=warn", "--project")[0], 3)
+        self.assertEqual(self.mpath.read_text(), before)
+        self.assertFalse(self.gpath.exists())
+        self.assertFalse(self.ppath.exists())
+
+    def test_add_from_other_scope_notes_it_can_only_tighten(self) -> None:
+        self.managed("rule", "add", "no-strings", "--json", RULE)
+        code, out, _ = self.cli("rule", "add", "no-strings", "--json", RULE, "--scope", "project")
+        self.assertEqual(code, 0)
+        self.assertIn("also a managed rule", out)
+
+    def test_project_flag_conflicts_with_managed_scope(self) -> None:
+        code, _, err = self.cli("rule", "add", "x", "--json", RULE, "--project", "--scope", "managed")
+        self.assertEqual(code, 2)
+        self.assertIn("conflicts", err)
+        self.assertEqual(self.cli("rule", "add", "x", "--json", RULE, "--project", "--scope", "project")[0], 0)
+
+    def test_scope_flag_selects_global_and_project(self) -> None:
+        self.assertEqual(self.cli("rule", "add", "g", "--json", RULE, "--scope", "global")[0], 0)
+        self.assertEqual(self.cli("rule", "add", "p", "--json", RULE, "--scope", "project")[0], 0)
+        self.assertEqual(list(self.get(self.gpath)["rules"]), ["g"])
+        self.assertEqual(list(self.get(self.ppath)["rules"]), ["p"])
+        self.assertFalse(self.mpath.exists())
+
+    def test_default_scope_is_never_managed(self) -> None:
+        self.cli("rule", "add", "g", "--json", RULE)
+        self.cli("mode", "declare", "m")
+        self.cli("preset", "install", "docs-first")
+        self.assertFalse(self.mpath.exists())
+
+    def test_agent_still_needs_as_user(self) -> None:
+        code, _, err = self.managed("rule", "add", "x", "--json", RULE, agent=True)
+        self.assertEqual(code, 3)
+        self.assertIn("--as-user", err)
+        self.assertFalse(self.mpath.exists())
+        self.assertEqual(self.managed("rule", "add", "x", "--json", RULE, "--as-user", agent=True)[0], 0)
+        self.assertEqual(self.get(self.mpath)["rules"]["x"]["setBy"]["by"], "agent")
+
+    def test_mode_declare_activate_and_undeclare(self) -> None:
+        code, out, _ = self.managed("mode", "declare", "incident", "--description", "firefighting")
+        self.assertEqual(code, 0)
+        self.assertIn(str(self.mpath), out)
+        mode = self.get(self.mpath)["modes"]["incident"]
+        self.assertEqual((mode["agentMayEnable"], mode["active"]), (False, False))
+        self.assertEqual(self.managed("mode", "on", "incident")[0], 0)
+        self.assertTrue(self.get(self.mpath)["modes"]["incident"]["active"])
+        self.assertEqual(self.managed("mode", "off", "incident")[0], 0)
+        self.assertFalse(self.get(self.mpath)["modes"]["incident"]["active"])
+        self.assertEqual(self.managed("mode", "undeclare", "incident")[0], 0)
+        self.assertEqual(self.get(self.mpath)["modes"], {})
+
+    def test_mode_on_managed_needs_managed_declaration(self) -> None:
+        self.cli("mode", "declare", "incident")
+        code, _, err = self.managed("mode", "on", "incident")
+        self.assertEqual(code, 2)
+        self.assertIn("not declared", err)
+
+    def test_lower_scope_can_switch_a_managed_mode_on_but_not_off_the_managed_activation(self) -> None:
+        self.managed("mode", "declare", "incident")
+        self.assertEqual(self.cli("mode", "on", "incident", "--scope", "global")[0], 0)
+        self.assertTrue(self.get(self.gpath)["modes"]["incident"]["active"])
+        self.managed("mode", "on", "incident")
+        code, out, _ = self.cli("mode", "off", "incident", "--scope", "project")
+        self.assertEqual(code, 0)
+        self.assertIn("managed scope keeps mode incident on", out)
+        self.assertIn("ACTIVE", self.cli("status")[1])
+
+    def test_session_mode_on_uses_managed_declaration_and_agent_lock(self) -> None:
+        os.environ["CLAUDE_CODE_SESSION_ID"] = "s1"
+        self.managed("mode", "declare", "incident")
+        code, _, _ = self.cli("mode", "on", "incident", "--reason", "x", "--as-user", agent=True)
+        self.assertEqual(code, 3)
+        self.assertEqual(self.cli("mode", "on", "incident")[0], 0)
+        self.assertIn("incident", self.get(self.gpath)["sessions"]["s1"]["modes"])
+
+    def test_preset_install(self) -> None:
+        code, out, _ = self.managed("preset", "install", "process-safety")
+        self.assertEqual(code, 0)
+        self.assertIn(f"installed preset process-safety into {self.mpath}", out)
+        self.assertIn("rule no-pkill: added", out)
+        self.assertNotIn("always enforced", out.split("no-pkill")[1].split("\n")[0])
+        self.assertIn("rule kill-9: added (no modes: always enforced)", out)
+        state = self.get(self.mpath)
+        self.assertEqual(sorted(state["rules"]), ["kill-9", "no-pkill"])
+        self.assertIn("incident", state["modes"])
+        self.assertFalse(self.gpath.exists())
+        self.assertIn("rule kill-9: unchanged", self.managed("preset", "install", "process-safety")[1])
+
+    def test_status_labels_origins(self) -> None:
+        self.managed("rule", "add", "no-strings", "--json", RULE)
+        self.managed("rule", "add", "bare", "--json", MANAGED_RULE)
+        self.managed("mode", "declare", "reverse-engineering")
+        self.cli("rule", "add", "no-strings", "--json", RULE)
+        self.cli("rule", "add", "mine", "--json", MANAGED_RULE, "--project")
+        code, out, _ = self.cli("status")
+        self.assertEqual(code, 0)
+        for expected in (f"managed state: {self.mpath}", "no-strings [managed+global] deny retry",
+                         "bare [managed] deny ALWAYS ENFORCED", "mine [project] deny",
+                         "reverse-engineering [managed]: inactive"):
+            self.assertIn(expected, out)
+
+    def test_status_without_managed_file(self) -> None:
+        self.assertIn(f"managed state: {self.mpath} (absent)", self.cli("status")[1])
+
+    def test_status_reports_unreadable_managed_file(self) -> None:
+        self.put(self.mpath, "{nope")
+        code, out, _ = self.cli("status")
+        self.assertEqual(code, 0)
+        self.assertIn("unreadable managed state file (managed rules are not enforced until it is fixed)", out)
+
+    def test_status_reports_invalid_managed_rule(self) -> None:
+        self.put(self.mpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x"}}})
+        self.assertIn("rule bad:", self.cli("status")[1])
+
+    def test_status_notes_managed_rules_survive_disabled_hook(self) -> None:
+        self.managed("rule", "add", "bare", "--json", MANAGED_RULE)
+        self.cli("disable")
+        self.assertIn("hook enabled:  no (disabled by user); managed rules stay enforced", self.cli("status")[1])
+
+    def test_rule_test_shows_origin(self) -> None:
+        self.managed("rule", "add", "no-strings", "--json", RULE)
+        out = self.cli("rule", "test", "--id", "no-strings", "strings a")[1]
+        self.assertIn("rule no-strings [managed]:", out)
+
+    def test_corrupt_managed_file_is_not_overwritten(self) -> None:
+        self.put(self.mpath, "{nope")
+        self.assertEqual(self.managed("rule", "add", "x", "--json", RULE)[0], 2)
+        self.assertEqual(self.mpath.read_text(), "{nope")
+
+
+class ManagedNotWritable(Isolated):
+    def setUp(self) -> None:
+        super().setUp()
+        if os.geteuid() == 0:
+            self.skipTest("root ignores permissions")
+
+    def lock_down(self, path: Path) -> None:
+        path.mkdir(parents=True, exist_ok=True)
+        path.chmod(0o555)
+        self.addCleanup(path.chmod, 0o755)
+
+    def assert_sudo_hint(self, err: str, *argv: str) -> None:
+        self.assertIn("error:", err)
+        self.assertIn("not writable", err)
+        self.assertIn("Re-run with sudo: sudo python3", err)
+        self.assertIn(shlex.join(argv), err)
+
+    def test_absent_file_in_read_only_directory(self) -> None:
+        self.lock_down(self.tmp / "ro")
+        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.tmp / "ro" / "sub" / "guardrails.json")
+        argv = ("rule", "add", "x", "--json", RULE, "--scope", "managed")
+        code, _, err = self.cli(*argv)
+        self.assertEqual(code, 2)
+        self.assert_sudo_hint(err, *argv)
+        self.assertFalse((self.tmp / "ro" / "sub").exists())
+
+    def test_existing_file_in_read_only_directory_is_untouched(self) -> None:
+        self.put(self.mpath, {"rules": {}})
+        self.mpath.parent.chmod(0o555)
+        self.addCleanup(self.mpath.parent.chmod, 0o755)
+        for argv in (("rule", "add", "x", "--json", RULE), ("mode", "declare", "m"), ("preset", "install", "docs-first")):
+            with self.subTest(argv=argv):
+                code, _, err = self.cli(*argv, "--scope", "managed")
+                self.assertEqual(code, 2)
+                self.assert_sudo_hint(err, *argv, "--scope", "managed")
+        self.assertEqual(self.get(self.mpath), {"rules": {}})
+
+    def test_read_only_file(self) -> None:
+        self.put(self.mpath, {"rules": {}})
+        self.mpath.chmod(0o444)
+        self.addCleanup(self.mpath.chmod, 0o644)
+        code, _, err = self.cli("mode", "on", "m", "--scope", "managed")
+        self.assertEqual(code, 2)
+        self.assertIn("sudo", err)
+
+    def test_other_scopes_are_unaffected(self) -> None:
+        self.lock_down(self.tmp / "ro")
+        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.tmp / "ro" / "guardrails.json")
+        self.assertEqual(self.cli("rule", "add", "x", "--json", RULE)[0], 0)

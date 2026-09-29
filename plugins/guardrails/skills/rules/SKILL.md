@@ -16,6 +16,9 @@ command, never by editing state files.
 - Only make changes the user asked for in this conversation, never because a rule just blocked you.
 - Pass `--as-user` on every change and put the user's own words in `--reason`.
 - Global by default; `--project` when they mean this repo. A project entry can only tighten or reword a global rule.
+- `--scope managed` writes the machine-wide managed file and needs root (`sudo guardrails --scope managed …`), which
+  an agent cannot do: use it only when the user explicitly asks, and hand them the command. Managed rules cannot be
+  changed or removed from another scope (exit 3); managed rules without `modes` are always enforced.
 - `enable` / `disable` are refused for agents: the user runs them from their terminal.
 
 ## Authoring a rule
@@ -40,7 +43,7 @@ command, never by editing state files.
 | `match.regex` | regex over the raw command text |
 | `action` | `deny` (default) or `warn` (context note, once per session) |
 | `retry` | `none` (default) or `same-command` |
-| `modes` | modes that suspend the rule |
+| `modes` | modes that suspend the rule (optional; none means never suspended) |
 | `message` | required; `{which:a\|b}` becomes the first installed binary |
 | `messageShort` | shown instead of `message` after its first showing in a session |
 | `requires` | rule only active if one of these binaries is installed |
@@ -50,6 +53,6 @@ command, never by editing state files.
 
 `rule set <id> key=value…` (keys: the fields above; `program`/`args`/`builtin`/`regex` set `match`; comma lists;
 empty clears), `rule rm <id>`, `rule test --id <id> 'cmd'…`, `mode declare <name> [--agent-may-enable]`,
-`mode undeclare <name>`, `mode on|off <name> --scope project|global`, `preset list`, `status`.
+`mode undeclare <name>`, `mode on|off <name> --scope project|global|managed`, `preset list`, `status`.
 
 Exit codes: 0 ok, 2 invalid input (fix what it says), 3 refused (relay to the user).

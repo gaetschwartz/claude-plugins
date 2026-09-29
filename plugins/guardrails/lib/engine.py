@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import sys
 from typing import IO, Any
 
 import policy
@@ -50,7 +51,7 @@ def hints(rule: policy.Rule, modes: dict[str, policy.Mode], session_id: str) -> 
 
 
 def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode], session: Session,
-            shown_before: set[str], session_id: str) -> tuple[str, bool]:
+            shown_before: set[str], session_id: str, managed_ids: frozenset[str] = frozenset()) -> tuple[str, bool]:
     """Render texts (messageShort once the full message was shown), merging rules that render identically."""
     changed = False
     groups: dict[str, list[str]] = {}
@@ -64,14 +65,15 @@ def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode],
                 text = policy.render(short)
             elif remember(session, "shown", digest(full)):
                 changed = True
-        groups.setdefault(text, []).append(rid)
+        groups.setdefault(text, []).append(f"{rid} (managed)" if rid in managed_ids else rid)
         tails.setdefault(text, hints(rule, modes, session_id))
     paragraphs = [f"[guardrails:{', '.join(ids)}] {text}{tails[text]}" for text, ids in groups.items()]
     return "\n\n".join(paragraphs), changed
 
 
 def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, policy.Mode],
-             session: Session, session_id: str) -> tuple[Output | None, bool]:
+             session: Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
+             warnings: tuple[str, ...] = ()) -> tuple[Output | None, bool]:
     try:
         cmds: list[SimpleCommand] | None = simple_commands(command)
     except ValueError:
@@ -81,6 +83,10 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     shown_before = {x for x in shown if isinstance(x, str)} if isinstance(shown, list) else set()
     changed = False
     notices: list[str] = []
+    for warning in warnings:
+        if remember(session, "reported", digest(warning)):
+            changed = True
+            notices.append(warning)
     denies: list[tuple[str, policy.Rule]] = []
     warns: list[tuple[str, policy.Rule]] = []
 
@@ -90,7 +96,9 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
             continue
         try:
             policy.validate_rule(rule)
-        except policy.Invalid:
+        except policy.Invalid as exc:
+            if rid in managed_ids:
+                print(f"guardrails: managed rule {rid} is invalid and ignored: {exc}", file=sys.stderr)
             continue
         if not policy.requirements_met(rule) or not policy.rule_matches(rule, command, cmds):
             continue
@@ -114,7 +122,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
 
     output: Output = {}
     if denies:
-        text, composed = compose(denies + warns, modes, session, shown_before, session_id)
+        text, composed = compose(denies + warns, modes, session, shown_before, session_id, managed_ids)
         changed = changed or composed
         output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                         "permissionDecisionReason": text}
@@ -122,7 +130,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
         fresh = [(rid, rule) for rid, rule in warns if remember(session, "warned", rid)]
         if fresh:
             changed = True
-            text, _ = compose(fresh, modes, session, shown_before, session_id)
+            text, _ = compose(fresh, modes, session, shown_before, session_id, managed_ids)
             output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "additionalContext": text}
     if notices:
         output["systemMessage"] = "\n".join(notices)
@@ -142,34 +150,53 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         return
 
     gpath = store.global_state_path()
-    gstate = store.load(gpath)
-    if gstate.get("enabled", True) is False:
-        return
+    try:
+        gstate, gstate_ok = store.load(gpath), True
+    except store.StateError:
+        gstate, gstate_ok = {}, False
+    managed, managed_error = store.load_managed()
+    warnings: tuple[str, ...] = ()
+    if managed_error:
+        text = f"unreadable managed state, so managed rules are NOT enforced until it is fixed: {managed_error}"
+        print(f"guardrails: {text}", file=sys.stderr)
+        warnings = (f"guardrails: {text}",)
+    managed_ids = frozenset(policy.origins("rules", managed, {}, {}))
     cwd = payload.get("cwd")
     try:
         pstate = store.load(store.project_state_path(cwd if isinstance(cwd, str) else None))
     except store.StateError:
         pstate = {}
-    if not policy.effective_rules(gstate, pstate):
+
+    def layers(g: store.State) -> tuple[dict[str, policy.Rule], dict[str, policy.Mode]]:
+        killed = not gstate_ok or g.get("enabled", True) is False
+        args = (managed, {}, {}) if killed else (managed, g, pstate)
+        return policy.effective_rules(*args), policy.effective_modes(*args)
+
+    if not layers(gstate)[0] and not warnings:
         return
 
     sid = str(payload.get("session_id") or "nosession")
-    try:
-        with store.locked(gpath):
-            gstate = store.load(gpath)
-            sessions_raw = gstate.get("sessions")
-            sessions = sessions_raw if isinstance(sessions_raw, dict) else {}
-            session_raw = sessions.get(sid)
-            session = session_raw if isinstance(session_raw, dict) else {}
-            output, changed = evaluate(command, policy.effective_rules(gstate, pstate),
-                                       policy.effective_modes(gstate, pstate), session, sid)
-            if changed:
-                session["seenAt"] = store.now()
-                sessions[sid] = session
-                gstate["sessions"] = sessions
-                store.write(gpath, gstate)
-    except OSError:
-        output, _ = evaluate(command, policy.effective_rules(gstate, pstate),
-                             policy.effective_modes(gstate, pstate), {}, sid)
+    output: Output | None = None
+    stateless = not gstate_ok
+    if gstate_ok:
+        try:
+            with store.locked(gpath):
+                gstate = store.load(gpath)
+                sessions_raw = gstate.get("sessions")
+                sessions = sessions_raw if isinstance(sessions_raw, dict) else {}
+                session_raw = sessions.get(sid)
+                session = session_raw if isinstance(session_raw, dict) else {}
+                rules, modes = layers(gstate)
+                output, changed = evaluate(command, rules, modes, session, sid, managed_ids, warnings)
+                if changed:
+                    session["seenAt"] = store.now()
+                    sessions[sid] = session
+                    gstate["sessions"] = sessions
+                    store.write(gpath, gstate)
+        except OSError:
+            stateless = True
+    if stateless:
+        rules, modes = layers(gstate)
+        output, _ = evaluate(command, rules, modes, {}, sid, managed_ids, warnings)
     if output:
         json.dump(output, stdout)

@@ -14,7 +14,8 @@ A rule matches a command (`program`, `args`, `builtin`, raw `regex`) and says wh
   context, once per session).
 - `retry: same-command`: the identical command, re-issued in the same session, is allowed. That is the escape hatch
   for the cases a rule cannot anticipate.
-- `modes`: session modes that suspend the rule, e.g. `reverse-engineering` for `strings`.
+- `modes`: session modes that suspend the rule, e.g. `reverse-engineering` for `strings`. Optional; a rule without
+  modes is never suspended.
 - `requires`: only active when one of these binaries is installed.
 - `messageShort`: shown instead of `message` once the full message has been seen in the session.
 
@@ -32,13 +33,58 @@ explicit request (`--as-user`).
 |---|---|
 | global | `~/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` (`${CLAUDE_PLUGIN_DATA}`) |
 | project | `<project>/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` |
+| managed | `/Library/Application Support/ClaudeCode/guardrails.json` (macOS), `/etc/claude-code/guardrails.json` (Linux), `C:\Program Files\ClaudeCode\guardrails.json` (Windows); override with `GUARDRAILS_MANAGED_PATH` |
 
-Project entries can add rules, and for a global rule id can only: tighten `action`/`retry`, re-enable it, remove
+Layers stack managed > global > project. Project entries can add rules, and for a global rule id can only: tighten `action`/`retry`, re-enable it, remove
 suspending modes, and reword `message`/`messageShort`/`description`. What a global rule matches (`match`,
 `requires`) cannot be changed by a project entry; an override that does not validate falls back to the global rule
 unchanged. A project can also switch a declared mode on for itself (`active`), which suspends the rules that list
 that mode. Session state (retry acknowledgements, modes, warnings shown) lives in the global file and is pruned
 after 7 days.
+
+## Managed scope
+
+The managed file has the same schema as the other state files and sits above both: it is for rules an organisation or
+machine owner wants enforced no matter what a user or project configures. A missing file is an empty layer.
+
+Lower layers are merged over managed entries with the same tightening-only rule that governs project over global.
+They can add rules and modes of their own, but cannot change a managed rule's `match`/`requires`, loosen its
+`action`/`retry`, disable it, add suspending `modes`, make a mode agent-enablable when managed says it is not, or
+switch off a managed mode that is `active`. An override that does not validate falls back to the managed entry. A
+managed rule without `modes` can never be suspended.
+
+Writing the file is governed by OS permissions only, so agents cannot change it without root. Manage it with:
+
+```
+sudo guardrails --scope managed rule add <id> --json '<rule>' --reason "…"
+```
+
+`rule add|set|rm`, `mode declare|undeclare|on|off` and `preset install` accept `--scope global|project|managed`; the
+default is unchanged and managed is never the default. When the file (or its directory, if absent) is not writable the
+CLI says so and prints the `sudo` command to re-run. Under root the parent directory is created and the file is
+written mode 0644 atomically. Session-level mode activation stays session state in the global file.
+
+`set` and `rm` on a managed rule from another scope are refused with a pointer to `--scope managed`. `status`,
+`rule test` and hook deny/warn output show where a rule came from.
+
+An unreadable or invalid managed file is not treated as empty and never turns the guard off: the layer is skipped, a
+warning is shown once per session (and on stderr), and the global and project layers keep being enforced. Individual
+invalid managed rules are skipped with a diagnostic. Managed rules also apply when the global hook is disabled.
+
+The guard only sees the Bash tool and is not a security boundary. To make it hard to bypass, pair it with managed
+Claude Code settings; guardrails does not manage these, they are shown here for reference:
+
+```json
+{
+  "enabledPlugins": { "guardrails@gaetans-claude-plugins": true },
+  "allowManagedHooksOnly": true,
+  "strictKnownMarketplaces": [{ "source": "github", "repo": "gaetschwartz/claude-plugins" }],
+  "allowManagedPermissionRulesOnly": true,
+  "permissions": { "deny": ["Write(/etc/claude-code/**)"] }
+}
+```
+
+`allowManagedHooksOnly` exempts hooks from force-enabled plugins, so the guardrails hook keeps running.
 
 ## Presets
 
@@ -53,7 +99,7 @@ after 7 days.
 An agent runs the CLI as `guardrails <verb>` (the plugin's `bin/` is on the Bash tool's PATH); from your own terminal
 use `python3 <plugin dir>/lib/guard.py <verb>` (`--help` for the full
 list: `status`, `rule add|set|rm|test`, `mode declare|undeclare|on|off`, `preset list|show|install`,
-`enable|disable`). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
+`enable|disable`; changes take `--scope global|project|managed`). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
 `enable`/`disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample
 commands without changing anything.
 

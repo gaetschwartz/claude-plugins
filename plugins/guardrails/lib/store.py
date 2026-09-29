@@ -9,12 +9,20 @@ import json
 import os
 import re
 import subprocess
+import sys
 import tempfile
 from collections.abc import Iterator
 from typing import Any, Callable, TypeVar
 
 PLUGIN = "guardrails"
 MARKETPLACE = "gaetans-claude-plugins"
+MANAGED_ENV = "GUARDRAILS_MANAGED_PATH"
+MANAGED_DEFAULTS = {
+    "darwin": "/Library/Application Support/ClaudeCode/guardrails.json",
+    "win32": r"C:\Program Files\ClaudeCode\guardrails.json",
+}
+MANAGED_LINUX = "/etc/claude-code/guardrails.json"
+MANAGED_MODE = 0o644
 SESSION_TTL_DAYS = 7
 MAX_SESSIONS = 50
 HERE = os.path.dirname(os.path.abspath(__file__))
@@ -25,6 +33,10 @@ T = TypeVar("T")
 
 class StateError(Exception):
     """A state file exists but cannot be used; it must never be silently overwritten."""
+
+
+class NotWritable(StateError):
+    """A state file (or the directory it would be created in) is not writable by this user."""
 
 
 def now() -> str:
@@ -46,6 +58,28 @@ def global_state_path() -> str:
     if data:
         return os.path.join(data, "state.json")
     return os.path.join(os.path.expanduser("~"), ".claude", "plugins", "data", plugin_id(), "state.json")
+
+
+def managed_path() -> str:
+    return os.environ.get(MANAGED_ENV) or MANAGED_DEFAULTS.get(sys.platform, MANAGED_LINUX)
+
+
+def load_managed() -> tuple[State, str | None]:
+    """The managed layer and, when the file is unusable, why it was skipped (never raises)."""
+    try:
+        return load(managed_path()), None
+    except StateError as exc:
+        return {}, str(exc)
+
+
+def ensure_writable(path: str) -> None:
+    probe = os.path.dirname(os.path.abspath(path))
+    while not os.path.exists(probe) and os.path.dirname(probe) != probe:
+        probe = os.path.dirname(probe)
+    if not os.access(probe, os.W_OK | os.X_OK):
+        raise NotWritable(f"cannot write {path}: directory {probe} is not writable")
+    if os.path.exists(path) and not os.access(path, os.W_OK):
+        raise NotWritable(f"cannot write {path}: file is not writable")
 
 
 def project_root(cwd: str | None = None) -> str | None:
@@ -102,17 +136,20 @@ def prune(sessions: object) -> dict[str, Any]:
     return kept
 
 
-def write(path: str, state: State) -> None:
+def write(path: str, state: State, mode: int | None = None) -> None:
+    """Atomic write; with mode, the file gets those permissions and a missing directory is created 0755."""
     state["updatedAt"] = now()
     if "sessions" in state:
         state["sessions"] = prune(state["sessions"])
     directory = os.path.dirname(path)
-    os.makedirs(directory, exist_ok=True)
+    os.makedirs(directory, mode=0o755 if mode is not None else 0o777, exist_ok=True)
     fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:
             json.dump(state, fh, indent=2, sort_keys=True)
             fh.write("\n")
+        if mode is not None:
+            os.chmod(tmp, mode)
         os.replace(tmp, path)
     except BaseException:
         with contextlib.suppress(OSError):
@@ -121,8 +158,8 @@ def write(path: str, state: State) -> None:
 
 
 @contextlib.contextmanager
-def locked(path: str) -> Iterator[None]:
-    os.makedirs(os.path.dirname(path), exist_ok=True)
+def locked(path: str, dir_mode: int = 0o777) -> Iterator[None]:
+    os.makedirs(os.path.dirname(path), mode=dir_mode, exist_ok=True)
     with open(path + ".lock", "a") as fh:
         fcntl.flock(fh, fcntl.LOCK_EX)
         try:
@@ -131,10 +168,10 @@ def locked(path: str) -> Iterator[None]:
             fcntl.flock(fh, fcntl.LOCK_UN)
 
 
-def mutate(path: str, fn: Callable[[State], T]) -> T:
+def mutate(path: str, fn: Callable[[State], T], mode: int | None = None) -> T:
     """Load, apply fn, write back, all under the file lock; nothing is written if fn raises."""
-    with locked(path):
+    with locked(path, 0o777 if mode is None else 0o755):
         state = load(path)
         result = fn(state)
-        write(path, state)
+        write(path, state, mode)
     return result

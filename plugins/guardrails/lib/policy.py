@@ -1,4 +1,4 @@
-"""Rule and mode schema: validation, global/project layering, matching and message rendering."""
+"""Rule and mode schema: validation, managed/global/project layering, matching and message rendering."""
 
 from __future__ import annotations
 
@@ -128,10 +128,10 @@ def with_defaults(rule: Rule) -> Rule:
 
 
 def merge_rule(base: Rule, override: Rule) -> Rule:
-    """Layer a project entry onto a defaulted global rule; only tightening changes apply.
+    """Layer a lower-precedence entry onto a defaulted rule from a higher layer; only tightening changes apply.
 
-    A project override can never change what a global rule matches: 'match' and 'requires'
-    are ignored, and a merge that fails validation falls back to the global rule unchanged.
+    An override can never change what the rule matches: 'match' and 'requires' are ignored, and a
+    merge that fails validation falls back to the base rule unchanged.
     """
     out = dict(base)
     for key in ("message", "messageShort", "description"):
@@ -156,10 +156,26 @@ def _entries(state: object, key: str) -> dict[str, dict[str, Any]]:
     return {str(k): v for k, v in view(state, key).items() if isinstance(v, dict)}
 
 
-def effective_rules(global_state: object, project_state: object) -> dict[str, Rule]:
-    rules = {rid: with_defaults(r) for rid, r in _entries(global_state, "rules").items()}
+LAYERS = ("managed", "global", "project")
+
+
+def origins(key: str, managed: object, global_state: object, project_state: object) -> dict[str, list[str]]:
+    """Entry id (of 'rules' or 'modes') → the layers that define it, highest precedence first."""
+    out: dict[str, list[str]] = {}
+    for layer, state in zip(LAYERS, (managed, global_state, project_state)):
+        for name in _entries(state, key):
+            out.setdefault(name, []).append(layer)
+    return out
+
+
+def effective_rules(managed: object, global_state: object, project_state: object) -> dict[str, Rule]:
+    """Fold the layers in precedence order; each later layer may only tighten what an earlier one defined."""
+    layers = [managed, global_state]
     if not isinstance(project_state, dict) or project_state.get("enabled", True) is not False:
-        for rid, r in _entries(project_state, "rules").items():
+        layers.append(project_state)
+    rules: dict[str, Rule] = {}
+    for state in layers:
+        for rid, r in _entries(state, "rules").items():
             rules[rid] = merge_rule(rules[rid], r) if rid in rules else with_defaults(r)
     return rules
 
@@ -169,18 +185,19 @@ def _mode(m: dict[str, Any]) -> Mode:
             "active": m.get("active") is True}
 
 
-def effective_modes(global_state: object, project_state: object) -> dict[str, Mode]:
-    modes = {name: _mode(m) for name, m in _entries(global_state, "modes").items()}
-    for name, m in _entries(project_state, "modes").items():
-        base = modes.get(name)
-        if base is None:
-            modes[name] = _mode(m)
-            continue
-        modes[name] = {
-            "description": str(m.get("description") or base["description"]),
-            "agentMayEnable": base["agentMayEnable"] and m.get("agentMayEnable", True) is not False,
-            "active": base["active"] or m.get("active") is True,
-        }
+def merge_mode(base: Mode, override: dict[str, Any]) -> Mode:
+    return {
+        "description": str(override.get("description") or base["description"]),
+        "agentMayEnable": base["agentMayEnable"] and override.get("agentMayEnable", True) is not False,
+        "active": base["active"] or override.get("active") is True,
+    }
+
+
+def effective_modes(managed: object, global_state: object, project_state: object) -> dict[str, Mode]:
+    modes: dict[str, Mode] = {}
+    for state in (managed, global_state, project_state):
+        for name, m in _entries(state, "modes").items():
+            modes[name] = merge_mode(modes[name], m) if name in modes else _mode(m)
     return modes
 
 

@@ -19,11 +19,12 @@ HOOKS = ROOT / "hooks"
 LIB = ROOT / "lib"
 sys.path.insert(0, str(LIB))
 
-SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR")
+SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR",
+            "GUARDRAILS_MANAGED_PATH")
 
 
 class Isolated(unittest.TestCase):
-    """Global state under <tmp>/data, project root <tmp>/proj, and no agent markers in the environment."""
+    """Global state under <tmp>/data, managed under <tmp>/managed, project root <tmp>/proj, no agent markers."""
 
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -32,8 +33,10 @@ class Isolated(unittest.TestCase):
         self.data = self.tmp / "data"
         self.proj = self.tmp / "proj"
         self.proj.mkdir()
+        self.mpath = self.tmp / "managed" / "guardrails.json"
         env = {k: v for k, v in os.environ.items() if k not in SCRUBBED}
-        env.update(CLAUDE_PLUGIN_DATA=str(self.data), CLAUDE_PROJECT_DIR=str(self.proj))
+        env.update(CLAUDE_PLUGIN_DATA=str(self.data), CLAUDE_PROJECT_DIR=str(self.proj),
+                   GUARDRAILS_MANAGED_PATH=str(self.mpath))
         patcher = mock.patch.dict(os.environ, env, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)

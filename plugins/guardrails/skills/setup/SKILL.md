@@ -21,7 +21,7 @@ below changes configuration on the user's behalf, so each one carries `--as-user
 
 1. Ask (AskUserQuestion, multiSelect) what kind of work happens here: general development, reverse-engineering or
    binary analysis, infrastructure / ops, other. Then ask the scope: every project (global) or only this project
-   (`--project`).
+   (`--project`). Managed (machine-wide, root only) is never offered here.
 2. Suggest presets:
 
    | work | presets |
