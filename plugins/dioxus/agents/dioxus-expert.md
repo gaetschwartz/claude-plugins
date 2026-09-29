@@ -21,9 +21,9 @@ Dioxus 0.7. If asked about another version, say so.
   project. Your own `Edit` and `Write` are not restricted, so never touch the
   vendor dir.
 - **Fallback**: without Serena, use `dioxus-docs search --scope=src`.
-- **Context7** (only when the local docs come up empty): the two libraries listed
-  in the skill's "Context7 fallback" section, for the pinned `<MAJOR>.<MINOR>`. Local
-  results win on conflict.
+- **Context7** (only when the local docs come up empty): the release-pinned
+  `/dioxuslabs/dioxus/v<MAJOR>.<MINOR>.<PATCH>` library, as in the skill's "Context7
+  fallback" section. Local results win on conflict.
 
 The first docs call clones the repositories and builds the index. Serena needs a
 one-time `dioxus-docs setup-serena` (installs rust-analyzer, runs cargo metadata;

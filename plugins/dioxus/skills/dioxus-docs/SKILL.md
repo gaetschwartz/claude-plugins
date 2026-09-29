@@ -40,16 +40,11 @@ If Serena is unavailable, fall back to `search --scope=src`.
 
 ## Context7 fallback
 
-When the local docs do not answer, and Context7 MCP tools are available, query
-both libraries for the pinned `<MAJOR>.<MINOR>` (0.7 today):
-
-- Prose and guides: `/llmstxt/dioxuslabs_learn_<MAJOR>_<MINOR>_llms-full_txt`
-- Framework source, pinned to a release tag: `/dioxuslabs/dioxus/v<MAJOR>.<MINOR>.<PATCH>`
-
-Call `resolve-library-id` if a query says the ID is not found; a release that is
-not indexed yet has no library, so say so rather than substituting another
-version. Local `read`/`search` results win on conflict. Context7 snippets can
-carry stale pre-0.7 code (`cx: Scope`) and stray `ANCHOR` comments.
+When the local docs do not answer and Context7 MCP tools are available, query
+the framework source pinned to a release tag: `/dioxuslabs/dioxus/v<MAJOR>.<MINOR>.<PATCH>`
+(`resolve-library-id` lists the tags). A tag that is not indexed has no library;
+say so rather than substituting another version. Local `read`/`search` results
+win on conflict.
 
 ## First run
 

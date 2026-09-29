@@ -51,7 +51,7 @@ The project file the plugin writes sets `read_only: true`, which removes Serena'
 
 ## Semantic search (opt-in)
 
-When the local docs come up empty, the skill and agent fall back to Context7 if it is installed (not bundled): `/llmstxt/dioxuslabs_learn_<MAJOR>_<MINOR>_llms-full_txt` for the guides and `/dioxuslabs/dioxus/v<MAJOR>.<MINOR>.<PATCH>` for release-pinned source.
+When the local docs come up empty, the skill and agent fall back to Context7 if it is installed (not bundled): the release-pinned source library `/dioxuslabs/dioxus/v<MAJOR>.<MINOR>.<PATCH>`.
 
 `dioxus-docs rag` adds embedding-based search over the book, the framework source or the examples. It is off by default; enabling it creates a Python venv in the data dir, downloads an embedding model and indexes a book. Backends: Ollama (default), OpenAI-compatible endpoints and sentence-transformers. Setup is a guided conversation with Claude, see `skills/dioxus-docs/references/rag.md`. An OpenAI key is never accepted on the command line: export `OPENAI_API_KEY` or pipe it to `dioxus-docs rag config set-openai-key`.
 
