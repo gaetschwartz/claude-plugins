@@ -1,10 +1,10 @@
 {
   "name": "dioxus",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "author": {
     "name": "Gaëtan Schwartz"
   },
-  "description": "Dioxus 0.7 SME: bundled source + docsite + Serena MCP for symbols + dioxus-docs skill (doc/example/topic-load + opt-in RAG with Ollama/OpenAI/sentence-transformers backends) + dioxus-expert subagent (Q&A, codegen, review).",
+  "description": "Dioxus 0.7 expert: local docs, example and source search, Serena MCP for Rust symbols, and a dioxus-expert subagent that cites its sources.",
   "keywords": [
     "dioxus",
     "rust",
