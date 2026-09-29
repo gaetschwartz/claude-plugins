@@ -79,4 +79,5 @@ the command that would fix each issue; the caller decides whether to run it.
 
 Where relevant, point the caller at `chezmoi:update` (pull and integrate remote changes)
 or `chezmoi:push` (capture, commit and publish local changes). Use `chezmoi diff <path>`
-yourself when the content of a drift matters to the answer.
+yourself when the content of a drift matters to the answer. It shows what `apply` would do,
+so an edit to the deployed file appears inverted; add `--reverse` for what `re-add` would write.

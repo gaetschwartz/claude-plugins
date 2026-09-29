@@ -54,7 +54,9 @@ With `autoCommit`/`autoPush` on, `chezmoi add`/`edit` may already have committed
 Check `chezmoi git -- log --oneline '@{u}..HEAD'` before assuming there is anything to do.
 
 **3. Commit what is staged-worthy.** Follow the repo's existing commit style — read
-`chezmoi git -- log --oneline -10` first. Stage explicitly; a chezmoi source tree can hold
+`chezmoi git -- log --oneline -10` first. Write the message from `chezmoi git -- diff`,
+which shows what changed in the source. Never from `chezmoi diff`, which reads the other
+way: a line you added to the deployed file shows there as `-`. Stage explicitly; a chezmoi source tree can hold
 generated or machine-local files you do not want in the commit.
 
 **4. Push.**

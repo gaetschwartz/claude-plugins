@@ -29,7 +29,7 @@ template, paths relative to `$HOME`) rather than wrapping the file in `{{ if }}`
 
 - `chezmoi execute-template < <source>.tmpl` renders a file.
 - `chezmoi cat <path>` shows what apply would write.
-- `chezmoi diff <path>` compares that against the current file.
+- `chezmoi diff <path>` shows what apply would change in the current file.
 
 ## Footguns
 
@@ -38,4 +38,4 @@ template, paths relative to `$HOME`) rather than wrapping the file in `{{ if }}`
 - A missing key is an error, and `| default` does not rescue it. Guard with
   `{{ if hasKey . "work" }}`.
 - `re-add` skips templates. An edit made to the deployed file has to be ported into the
-  template by hand; `chezmoi diff <path>` shows what differs.
+  template by hand; `chezmoi diff --reverse <path>` shows the edit as `+` lines.

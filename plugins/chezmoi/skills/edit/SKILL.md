@@ -42,6 +42,11 @@ question, and it is a safety check ("would remove template attribute", "has chan
 chezmoi last wrote it"). Resolve what it is warning about. Never add `--force` to make it
 go away: that answers yes to overwriting.
 
+## Reading `chezmoi diff`
+
+`chezmoi diff <path>` shows what `apply` would do to the home file, so a line added to the
+deployed file appears as `-`. `--reverse` shows what `re-add` would write.
+
 ## After
 
 `chezmoi diff <path>` should be empty. The change is only local until pushed

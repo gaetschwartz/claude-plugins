@@ -363,7 +363,9 @@ def post(payload):
         payload.get("hook_event_name") or "PostToolUse",
         "That tool call left chezmoi-managed files out of sync with their source:\n"
         + "\n".join(lines)
-        + f"\n\nReview with `chezmoi diff` before acting.{git_note()} Raise this with "
+        + "\n\nReview with `chezmoi diff --reverse <path>`, which shows what `re-add` would "
+        "write. Plain `chezmoi diff` shows what `apply` would do, so an edit to the deployed "
+        f"file appears inverted there.{git_note()} Raise this with "
         "the user rather than running a mutating chezmoi command unprompted."
         + disclaimer,
     )
