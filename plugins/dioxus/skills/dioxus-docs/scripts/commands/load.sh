@@ -1,105 +1,131 @@
 #!/usr/bin/env bash
-# Load a curated topic bundle of Dioxus 0.7 doc pages from the vendored docsite.
-#
-# Usage: load.sh <topic>
-#   Topics: state, ui, fullstack, router, all
-#
-# Output: a single concatenated markdown stream with per-file headers, suitable
-# for front-loading into agent context before writing or reviewing Dioxus code.
+# Usage: load.sh [<topic>]
+#   With a topic: prints the topic's pages as one markdown stream (mdbook includes expanded).
+#   Without: lists topics with size estimates. Unknown topic: same list, exit 1.
+# A topic is any topic_<name> function below.
 
-# shellcheck source=_lib.sh
+# shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
+
+topic_state() {
+    files=(
+        essentials/basics/hooks.md
+        essentials/basics/signals.md
+        essentials/basics/effects.md
+        essentials/basics/resources.md
+        essentials/basics/reactivity.md
+        essentials/basics/hoisting.md
+        essentials/basics/context.md
+        essentials/basics/collections.md
+        essentials/basics/async.md
+        essentials/basics/error_handling.md
+        essentials/basics/suspense.md
+        essentials/advanced/custom_hooks.md
+        essentials/advanced/lifecycle.md
+    )
+}
+
+topic_ui() {
+    files=(
+        essentials/ui/rsx.md
+        essentials/ui/elements.md
+        essentials/ui/attributes.md
+        essentials/ui/conditional.md
+        essentials/ui/iteration.md
+        essentials/ui/components.md
+        essentials/ui/render.md
+        essentials/basics/event_handlers.md
+    )
+}
+
+topic_fullstack() {
+    files=(
+        essentials/fullstack/project_setup.md
+        essentials/fullstack/server_functions.md
+        essentials/fullstack/ssr.md
+        essentials/fullstack/websockets.md
+        essentials/fullstack/streaming.md
+        essentials/fullstack/streams.md
+        essentials/fullstack/forms.md
+        essentials/fullstack/errors.md
+        essentials/fullstack/middleware.md
+        essentials/fullstack/axum.md
+        essentials/fullstack/authentication.md
+        essentials/fullstack/native.md
+    )
+}
+
+topic_router() {
+    files=(
+        essentials/router/routes.md
+        essentials/router/navigation.md
+        essentials/router/layouts.md
+    )
+}
+
+list_names() {
+    compgen -A function topic_ | sed 's/^topic_//'
+}
+
+case "${1:-}" in
+    --names)
+        list_names | paste -sd, - | sed 's/,/, /g'
+        exit 0 ;;
+    -h|--help|help)
+        printf 'Usage: %s load [<topic>]\nTopics: %s\n' "$PROG" "$(list_names | paste -sd, - | sed 's/,/, /g')"
+        exit 0 ;;
+esac
+
 ensure_bootstrapped
 
-topic="${1:-all}"
-case "$topic" in
-    1|hooks|signals|effects|stores|collections|state) topic="state" ;;
-    2|rsx|ui)                                          topic="ui" ;;
-    3|ssr|server|websockets|fullstack)                 topic="fullstack" ;;
-    4|routing|router)                                  topic="router" ;;
-    5|all)                                             topic="all" ;;
-    -h|--help|help)
-        cat >&2 <<'EOF'
-Usage: load.sh <topic>
-Topics: state, ui, fullstack, router, all
-EOF
-        exit 0
-        ;;
-    *) die "unknown topic: $topic (valid: state, ui, fullstack, router, all)" ;;
-esac
+tmp="$(mktemp -d)"
+trap 'rm -rf "$tmp"' EXIT
 
-case "$topic" in
-    state)
-        files=(
-            essentials/basics/hooks.md
-            essentials/basics/signals.md
-            essentials/basics/effects.md
-            essentials/basics/resources.md
-            essentials/basics/reactivity.md
-            essentials/basics/hoisting.md
-            essentials/basics/context.md
-            essentials/basics/collections.md
-            essentials/advanced/custom_hooks.md
-            essentials/advanced/lifecycle.md
-        ) ;;
-    ui)
-        files=(
-            essentials/ui/rsx.md
-            essentials/ui/elements.md
-            essentials/ui/attributes.md
-            essentials/ui/conditional.md
-            essentials/ui/iteration.md
-            essentials/ui/components.md
-            essentials/ui/render.md
-            essentials/basics/event_handlers.md
-        ) ;;
-    fullstack)
-        files=(
-            essentials/fullstack/server_functions.md
-            essentials/fullstack/ssr.md
-            essentials/fullstack/websockets.md
-            essentials/fullstack/streaming.md
-            essentials/fullstack/streams.md
-            essentials/fullstack/forms.md
-            essentials/fullstack/errors.md
-            essentials/fullstack/middleware.md
-            essentials/fullstack/axum.md
-        ) ;;
-    router)
-        files=(
-            essentials/router/routes.md
-            essentials/router/navigation.md
-            essentials/router/layouts.md
-            essentials/router/nested.md
-        ) ;;
-    all)
-        files=(
-            essentials/basics/hooks.md
-            essentials/basics/signals.md
-            essentials/basics/effects.md
-            essentials/basics/resources.md
-            essentials/basics/hoisting.md
-            essentials/basics/context.md
-            essentials/basics/event_handlers.md
-            essentials/basics/collections.md
-            essentials/ui/rsx.md
-            essentials/ui/components.md
-            essentials/ui/conditional.md
-            essentials/ui/iteration.md
-        ) ;;
-esac
+build_bundle() {
+    local topic=$1 f
+    files=()
+    "topic_$topic"
+    for f in "${files[@]}"; do
+        [[ -f "$DOCS_ROOT/$f" ]] || die "topic '$topic' lists a page that is missing from the docs clone: $f"
+    done
+    {
+        printf '# Dioxus 0.7 Docs, topic: %s (%d pages)\n\n' "$topic" "${#files[@]}"
+        for f in "${files[@]}"; do
+            printf -- '---\n## %s (%s)\n\n' "$(basename "$f" .md)" "$f"
+            print_page "$DOCS_ROOT/$f"
+            printf '\n'
+        done
+    } > "$tmp/$topic.md"
+}
 
-echo "# Dioxus 0.7 Docs — topic: $topic (${#files[@]} files)"
-echo
+describe() {
+    local bytes
+    bytes=$(( $(wc -c < "$tmp/$1.md") ))
+    printf '%s\t%d bytes\t~%d tokens\t%d pages' "$1" "$bytes" $(( bytes / 4 )) "${#files[@]}"
+}
 
-for f in "${files[@]}"; do
-    echo "---"
-    echo "## $(basename "$f" .md) ($f)"
-    echo
-    if [[ -f "$DOCS_ROOT/$f" ]]; then
-        cat "$DOCS_ROOT/$f"
-    else
-        log "WARNING: missing vendor/docsite/docs-src/0.7/src/$f"
-    fi
-    echo
-done
+list_topics() {
+    local t
+    for t in $(list_names); do
+        build_bundle "$t"
+        describe "$t"
+        printf '\n'
+    done
+}
+
+topic="${1:-}"
+
+if [[ -z "$topic" ]]; then
+    list_topics
+    exit 0
+fi
+
+if ! [[ "$topic" =~ ^[a-z]+$ ]] || ! declare -F "topic_$topic" >/dev/null; then
+    log "unknown topic: $topic"
+    list_topics >&2
+    exit 1
+fi
+
+build_bundle "$topic"
+log "[load] $(describe "$topic")"
+cat "$tmp/$topic.md"

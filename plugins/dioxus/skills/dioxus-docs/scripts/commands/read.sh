@@ -1,54 +1,59 @@
 #!/usr/bin/env bash
-# Look up and print a Dioxus 0.7 doc page by slug or title fragment.
-#
-# Usage: doc.sh <slug-or-fragment> [--list]
-#   Default behavior: cat the matched doc page to stdout.
-#   --list: list candidate matches as TSV (slug \t title \t relpath).
+# Usage: read.sh <slug-or-fragment> [--list]
+#   Prints the matched doc page (mdbook includes expanded) to stdout.
+#   --list, or more than one match: prints candidates as TSV (slug, title, path).
+# Match order: exact slug, exact basename, then substring of slug or title.
 
-# shellcheck source=_lib.sh
+# shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
-ensure_bootstrapped
+
+SYNOPSIS="$PROG read <slug-or-fragment> [--list]"
 
 list_only=0
 q=""
-while (( "$#" )); do
+while (( $# )); do
     case "$1" in
         --list) list_only=1; shift ;;
         *)      q+="${q:+ }$1"; shift ;;
     esac
 done
 
-[[ -n "$q" ]] || die "usage: doc.sh <slug-or-fragment> [--list]"
-require_file "$INDEX/docs.tsv"
+[[ -n "$q" ]] || die "usage: $SYNOPSIS"
+q="${q%.md}"
 
-# Try exact slug match first.
-exact=$(awk -F'\t' -v q="$q" '$1==q' "$INDEX/docs.tsv")
+ensure_bootstrapped
 
-if [[ -n "$exact" ]]; then
-    matches="$exact"
-else
-    matches=$(awk -F'\t' -v q="$q" '
-        BEGIN { IGNORECASE=1 }
-        index(tolower($1), tolower(q)) || index(tolower($2), tolower(q))
-    ' "$INDEX/docs.tsv")
-fi
+matches=$(awk -F'\t' -v q="$q" '
+    BEGIN { q = tolower(q) }
+    {
+        slug = tolower($1)
+        base = slug
+        sub(/.*\//, "", base)
+        if (slug == q) tier = 1
+        else if (base == q) tier = 2
+        else if (index(slug, q) || index(tolower($2), q)) tier = 3
+        else next
+        rows[tier] = rows[tier] $0 "\n"
+        if (!best || tier < best) best = tier
+    }
+    END { if (best) printf "%s", rows[best] }
+' "$INDEX/docs.tsv")
 
 if [[ -z "$matches" ]]; then
-    log "[doc] no matches for: $q"
+    log "[read] no matches for: $q"
     exit 1
 fi
 
-n=$(printf '%s\n' "$matches" | wc -l)
+n=$(printf '%s\n' "$matches" | awk 'END { print NR }')
 
-if (( list_only )) || (( n > 1 )); then
-    if (( ! list_only )) && (( n > 1 )); then
-        log "[doc] $n candidates — listing instead of catting. Re-run with a more specific slug."
+if (( list_only || n > 1 )); then
+    if (( ! list_only )); then
+        log "[read] $n candidates; listing instead of printing. Re-run with a more specific slug."
     fi
     printf '%s\n' "$matches"
     exit 0
 fi
 
-# Single match: emit a citation header to stderr, content to stdout.
-path=$(printf '%s\n' "$matches" | awk -F'\t' '{print $3}')
-log "[doc] $path"
-cat "$PLUGIN_ROOT/$path"
+path=$(printf '%s\n' "$matches" | awk -F'\t' '{ print $3 }')
+log "[read] $path"
+print_page "$DATA/$path"
