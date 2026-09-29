@@ -1,10 +1,16 @@
 #!/usr/bin/env python3
 """Render `semble search --format json` as `path:start-end` headers plus snippets,
-dropping stale untested_* results and keeping the first --limit."""
+dropping stale results and keeping the first --limit."""
 import argparse
 import json
 import os
 import sys
+
+
+def fail(message: str) -> int:
+    print(f"ERROR: {message}", file=sys.stderr)
+    print("hint: rerun the query; if it persists, check `uvx --from 'semble[mcp]' semble --version`", file=sys.stderr)
+    return 1
 
 
 def main() -> int:
@@ -12,35 +18,43 @@ def main() -> int:
     ap.add_argument("--data", required=True)
     ap.add_argument("--query", required=True)
     ap.add_argument("--limit", type=int, required=True)
+    ap.add_argument("--stale-prefix", required=True)
     ap.add_argument("roots", nargs="+")
     args = ap.parse_args()
 
-    payload = json.load(sys.stdin)
-    repos = payload.get("repos")
+    try:
+        payload = json.load(sys.stdin)
+        entries = payload.get("results", [])
+        repos = payload.get("repos")
+    except (ValueError, AttributeError):
+        return fail("semble returned unexpected output")
+
     results = []
-    for r in payload.get("results", []):
-        rel = r["file_path"]
+    for r in entries:
+        rel = r.get("file_path")
+        content = r.get("content")
+        if not rel or content is None:
+            continue
         root = args.roots[0]
         if repos:
             label, _, rel = rel.partition("/")
-            root = repos[label]
-        if any(part.startswith("untested_") for part in rel.split("/")):
+            root = repos.get(label)
+            if root is None:
+                continue
+        if any(part.startswith(args.stale_prefix) for part in rel.split("/")):
             continue
-        r["_path"] = os.path.join(root, rel)
-        results.append(r)
+        results.append((os.path.join(root, rel), r.get("start_line", 1), r.get("end_line", 1), content))
     results = results[: args.limit]
     if not results:
         print(f"no matches for: {args.query}", file=sys.stderr)
         return 0
 
     blocks = []
-    for r in results:
-        path = r["_path"]
+    for path, start, end, content in results:
         shown = os.path.relpath(path, args.data)
         if shown.startswith(".."):
             shown = path
-        header = f"{shown}:{r['start_line']}-{r['end_line']}"
-        blocks.append(f"{header}\n{r['content'].rstrip()}\n")
+        blocks.append(f"{shown}:{start}-{end}\n{content.rstrip()}\n")
     print("\n".join(blocks), end="")
     return 0
 

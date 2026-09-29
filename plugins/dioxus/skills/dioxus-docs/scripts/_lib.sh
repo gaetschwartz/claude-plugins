@@ -14,6 +14,7 @@ INDEX="$DATA/index"
 DIOXUS="$VENDOR/dioxus"
 DOCSITE="$VENDOR/docsite"
 export DOCS_ROOT="$DOCSITE/docs-src/0.7/src"
+export STALE_PREFIX="untested_"
 
 DIOXUS_REF="${DIOXUS_REF:-v0.7}"
 DIOXUS_REPO_URL="${DIOXUS_REPO_URL:-https://github.com/DioxusLabs/dioxus.git}"

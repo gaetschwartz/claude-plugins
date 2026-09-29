@@ -2,7 +2,7 @@
 # Usage: search.sh <query> [--scope=docs|src|examples|all] [--limit=N] [--regex]
 #
 # Output: <path>:<line>:<matched line>, with paths relative to the data dir.
-# The query is a fixed string unless --regex is given. Smart-case.
+# The query is a fixed string unless --regex is given. Smart-case. Stale untested_* dirs are skipped.
 
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
@@ -51,7 +51,8 @@ mode=()
 # Ask rg for one match beyond the cap so truncated files can be detected.
 rc=0
 hits=$(rg --no-heading --line-number --color=never --smart-case --no-messages \
-          --max-count $((PER_FILE_CAP + 1)) ${mode[@]+"${mode[@]}"} -e "$query" -- "${paths[@]}") || rc=$?
+          --sort path --glob "!$STALE_PREFIX*" --max-count $((PER_FILE_CAP + 1)) \
+          ${mode[@]+"${mode[@]}"} -e "$query" -- "${paths[@]}") || rc=$?
 
 if [[ -z "$hits" ]]; then
     (( rc <= 1 )) || exit "$rc"

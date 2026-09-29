@@ -179,6 +179,23 @@ rc_is "--regex with a valid pattern exits 0" 0
 expect "--regex with a valid pattern finds hits" test -n "$OUT"
 run "$DATA" search use_signal --scope=docs --limit 100000
 out_has "docs scope reaches docs-router doc_examples" "doc_examples"
+run "$DATA" search use_state --scope=docs --limit 100000
+out_lacks "search skips untested_ doc examples" "untested_"
+run "$DATA" search use_state --limit 100000
+out_lacks "search skips untested_ under every scope" "untested_"
+run "$DATA" search use_signal --scope=docs --limit 100000
+rc_is "docs search for ordering exits 0" 0
+first="$OUT"
+expect "search output is sorted by path" test "$(printf '%s\n' "$OUT" | cut -d: -f1 | uniq | LC_ALL=C sort -c 2>&1 | wc -l | tr -d ' ')" -eq 0
+for _ in 1 2 3 4; do
+    run "$DATA" search use_signal --scope=docs --limit 100000
+    [[ "$OUT" == "$first" ]] || break
+done
+expect "search output is identical across runs" test "$OUT" = "$first"
+run "$DATA" search use_signal --scope=docs --limit 5
+first="$OUT"
+run "$DATA" search use_signal --scope=docs --limit 5
+expect "search --limit picks the same hits every time" test "$OUT" = "$first"
 
 echo "read"
 run "$DATA" read routes
@@ -199,6 +216,16 @@ run "$DATA" read index
 rc_is "bare 'index' exits 0" 0
 run "$DATA" read zzz-no-such-page
 rc_is "read no match exits 1" 1
+run "$DATA" read essentials/router/routes
+expect "slug read has content" test -n "$OUT"
+SLUG_OUT="$OUT"
+REL_DOCS="vendor/docsite/docs-src/0.7/src"
+for form in "$REL_DOCS/essentials/router/routes.md" "$REL_DOCS/essentials/router/routes" \
+            "$REL_DOCS/essentials/router/routes.md:10-20" "$DATA/$REL_DOCS/essentials/router/routes.md" \
+            "$DATA/$REL_DOCS/essentials/router/routes.md:7" "essentials/router/routes.md"; do
+    run "$DATA" read "$form"
+    expect "read accepts path form $form" test "$RC" -eq 0 -a "$OUT" = "$SLUG_OUT"
+done
 
 echo "load"
 run "$DATA" load
@@ -233,12 +260,15 @@ mkdir -p "$STUB"
 cat > "$STUB/uvx" <<'STUBEOF'
 #!/usr/bin/env bash
 printf '%s\n' "$@" > "$UVX_ARGV"
+[[ -z "${UVX_STDERR:-}" ]] || printf '%s\n' "$UVX_STDERR" >&2
 if [[ -n "${UVX_JSON:-}" ]]; then cat "$UVX_JSON"; else printf '{"query": "q", "results": []}\n'; fi
+exit "${UVX_RC:-0}"
 STUBEOF
 chmod +x "$STUB/uvx"
 export UVX_ARGV="$TMP/uvx.argv"
 argv_has()   { grep -qxF -- "$1" "$UVX_ARGV"; }
 argv_lacks() { ! grep -qF -- "$1" "$UVX_ARGV"; }
+argv_after() { grep -A1 -x -- "$1" "$UVX_ARGV" | tail -n 1; }
 DOCS_SRC="$DATA/vendor/docsite/docs-src/0.7/src"
 DOC_EX="$DATA/vendor/docsite/packages/docs-router/src/doc_examples"
 PKGS="$DATA/vendor/dioxus/packages"
@@ -318,6 +348,41 @@ out_has "semantic keeps the second current hit" "KEEP2"
 out_lacks "semantic honours the limit after filtering" "KEEP3"
 UVX_JSON="$TMP/stale.json" PATH="$STUB:$PATH" run "$DATA" semantic q --limit=5
 out_has "semantic returns all current hits when fewer than the limit" "KEEP3"
+
+PATH="$STUB:$PATH" run "$DATA" semantic 'plain words'
+expect "semantic puts -- directly before the query" test "$(argv_after --)" = "plain words"
+PATH="$STUB:$PATH" run "$DATA" semantic -- -foo
+rc_is "semantic -- -foo exits 0" 0
+expect "semantic -- -foo passes the query after --" test "$(argv_after --)" = "-foo"
+PATH="$STUB:$PATH" run "$DATA" semantic -- --release
+rc_is "semantic -- --release exits 0" 0
+expect "semantic -- --release passes the query after --" test "$(argv_after --)" = "--release"
+
+printf '{"query": "q", "results": [{"file_path": "gone/x.rs", "start_line": 1, "end_line": 2, "content": "LOST"}, {"file_path": "hooks/src/nocontent.rs", "start_line": 1, "end_line": 2}, {"file_path": "hooks/src/ok.rs", "start_line": 4, "end_line": 5, "content": "FINE"}], "repos": {"hooks": "%s"}}\n' "$PKGS" > "$TMP/partial.json"
+UVX_JSON="$TMP/partial.json" PATH="$STUB:$PATH" run "$DATA" semantic q --scope=src
+rc_is "semantic tolerates unresolved labels and missing content" 0
+out_has "semantic keeps well-formed hits beside malformed ones" "FINE"
+out_lacks "semantic skips hits with an unresolved label" "LOST"
+out_lacks "semantic skips hits without content" "nocontent"
+err_lacks "semantic malformed hits produce no traceback" "Traceback"
+
+printf 'this is not json\n' > "$TMP/garbage.json"
+UVX_JSON="$TMP/garbage.json" PATH="$STUB:$PATH" run "$DATA" semantic q
+rc_isnt "semantic with bad JSON fails" 0
+err_has "semantic bad JSON is reported" "semble returned unexpected output"
+err_lacks "semantic bad JSON has no traceback" "Traceback"
+expect "semantic bad JSON error is short" test "$(lines_of "$ERR")" -le 3
+
+UVX_RC=3 UVX_STDERR="boom from uv" PATH="$STUB:$PATH" run "$DATA" semantic q
+rc_isnt "semantic with a failing uvx fails" 0
+err_has "semantic surfaces semble's own stderr" "boom from uv"
+err_has "semantic names the failing step" "semble search failed"
+err_lacks "semantic uvx failure has no traceback" "Traceback"
+expect "semantic uvx failure prints no results" test -z "$OUT"
+UVX_STDERR="WARNING: Language Foo not found, skipping" PATH="$STUB:$PATH" run "$DATA" semantic q
+err_lacks "semantic drops semble's language warnings" "WARNING: Language"
+UVX_STDERR="something else" PATH="$STUB:$PATH" run "$DATA" semantic q
+err_has "semantic passes other semble stderr through" "something else"
 
 MISSING="$TMP/semantic-missing"
 mkdir -p "$MISSING/vendor/dioxus/.git" "$MISSING/vendor/docsite/.git" "$MISSING/index"

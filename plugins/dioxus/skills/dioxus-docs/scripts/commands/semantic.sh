@@ -60,6 +60,16 @@ done
 fetch=$(( limit * OVERFETCH ))
 (( fetch <= MAX_FETCH )) || fetch=$MAX_FETCH
 (( fetch >= limit )) || fetch=$limit
+raw=$(mktemp "${TMPDIR:-/tmp}/dioxus-semantic.XXXXXX")
+serr=$(mktemp "${TMPDIR:-/tmp}/dioxus-semantic.XXXXXX")
+trap 'rm -f "$raw" "$serr"' EXIT
+
+rc=0
 uvx --from 'semble[mcp]' semble search -k "$fetch" --content all \
     --max-snippet-lines "$SNIPPET_LINES" --format json -- "$query" "${paths[@]}" \
-    | python3 "$_LIB_DIR/lib/render_semantic.py" --data "$DATA" --query "$query" --limit "$limit" "${paths[@]}"
+    >"$raw" 2>"$serr" || rc=$?
+grep -v '^WARNING: Language ' "$serr" >&2 || true
+(( rc == 0 )) || die "semble search failed (exit $rc); check that uv works: uvx --from 'semble[mcp]' semble --help"
+
+python3 "$_LIB_DIR/lib/render_semantic.py" --data="$DATA" --query="$query" --limit="$limit" \
+    --stale-prefix="$STALE_PREFIX" "${paths[@]}" <"$raw"
