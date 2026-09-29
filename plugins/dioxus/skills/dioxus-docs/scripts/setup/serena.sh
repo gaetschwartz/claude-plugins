@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Prepare the vendored Dioxus clone for the Serena MCP server. Idempotent.
-
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 

@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Usage: example.sh <name-or-pattern> [--list]
-#   Prints the path of each matching example (a file, or a directory for multi-file crates).
-#   --list: prints matches as TSV (name, category, path, summary).
-# Pattern is a case-insensitive substring of name, category or summary.
-
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Symlink locks (ln -s is atomic, target = owner pid); dead-owner removal is serialized by TAKEOVER and re-verified under it.
+# ln -s is atomic and its target records the owner pid; dead-owner removal is serialized by TAKEOVER.
 
 LOCK="$DATA/.bootstrap.owner"
 TAKEOVER="$DATA/.bootstrap.takeover"

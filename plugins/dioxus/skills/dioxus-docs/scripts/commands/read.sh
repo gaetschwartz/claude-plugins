@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# Usage: read.sh <slug-or-fragment> [--list]
-#   Prints the matched doc page (mdbook includes expanded) to stdout.
-#   --list, or more than one match: prints candidates as TSV (slug, title, path).
-# Match order: exact slug, exact basename, then substring of slug or title.
-# Also accepts the page paths that search, semantic and example print (optional :start-end).
-
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 

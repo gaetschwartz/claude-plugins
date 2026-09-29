@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# Clone or refresh the vendored Dioxus + docsite repos and rebuild the index.
-#
-# Usage: bootstrap.sh first-run|update
-#   first-run  clone whatever is missing, write the Serena project file, build the index.
-#   update     fetch and hard-reset both clones to upstream, then rebuild the index.
-
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 # shellcheck source=lock.sh

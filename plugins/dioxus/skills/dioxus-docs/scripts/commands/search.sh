@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Usage: search.sh <query> [--scope=docs|src|examples|all] [--limit=N] [--regex]
-#
-# Output: <path>:<line>:<matched line>, with paths relative to the data dir.
-# The query is a fixed string unless --regex is given. Smart-case. Stale untested_* dirs are skipped.
-
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 

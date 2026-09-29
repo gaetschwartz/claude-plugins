@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Shared helpers for dioxus-docs scripts. Sourced by every command and setup script.
-
 set -euo pipefail
 
 PROG="dioxus-docs"

@@ -1,10 +1,4 @@
 #!/usr/bin/env bash
-# Usage: semantic.sh <query> [--scope=docs|src|examples|all] [--limit=N]
-#
-# Output: <path>:<start>-<end> then the snippet, paths relative to the data dir.
-# Backed by semble via uvx; semble caches and refreshes its own indexes.
-# Results under untested_* directories (old doc versions) are dropped.
-
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 

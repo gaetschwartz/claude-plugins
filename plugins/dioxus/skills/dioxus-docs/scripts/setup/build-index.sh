@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Build docs.tsv and examples.tsv under $INDEX from the vendored clones.
-# Both files are replaced atomically, and only after row-count validation.
-
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 

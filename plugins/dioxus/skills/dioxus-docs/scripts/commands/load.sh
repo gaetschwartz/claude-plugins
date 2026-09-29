@@ -1,9 +1,4 @@
 #!/usr/bin/env bash
-# Usage: load.sh [<topic>]
-#   With a topic: prints the topic's pages as one markdown stream (mdbook includes expanded).
-#   Without: lists topics with size estimates. Unknown topic: same list, exit 1.
-# A topic is any topic_<name> function below.
-
 # shellcheck source=../_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/../_lib.sh"
 

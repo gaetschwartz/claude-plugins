@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
-# Offline test suite for the dioxus-docs scripts. Plain bash, no framework.
-#
-# Usage: tests/run.sh
-# Env:   DIOXUS_TEST_VENDOR  directory holding shallow clones dioxus/ and docsite/
-#                            (default: fresh shallow clones from GitHub, once)
+# DIOXUS_TEST_VENDOR: directory holding shallow clones dioxus/ and docsite/ (default: fetched from GitHub once)
 
 set -u
 export PYTHONDONTWRITEBYTECODE=1
@@ -37,7 +33,6 @@ contains() { [[ "$1" == *"$2"* ]]; }
 not() { ! "$@"; }
 lines_of() { printf '%s\n' "$1" | awk 'NF' | wc -l | tr -d ' '; }
 
-# run <data-dir> <args...>: sets OUT, ERR, RC
 run() {
     local data=$1; shift
     CLAUDE_PLUGIN_DATA="$data" bash "$DISPATCH" "$@" >"$TMP/out" 2>"$TMP/err"
@@ -233,7 +228,7 @@ out_lacks "read migration page has no raw include" '{{#include'
 run "$DATA" read 'rout\145s'
 rc_is "read query escapes are not interpreted" 1
 err_has "read query escapes stay literal" 'no matches for: rout\145s'
-run "$DATA" read 'routes\'
+run "$DATA" read "routes\\"
 rc_is "read query ending in a backslash is a plain miss" 1
 run "$DATA" example 'count\145r'
 rc_is "example pattern escapes are not interpreted" 1

@@ -1,6 +1,4 @@
 #!/usr/bin/env bash
-# Takes the bootstrap lock, then enters a critical section that must never overlap.
-# Usage: lock-worker.sh <critical-dir> <log>
 set -u
 critical=$1 log=$2
 scripts="$(cd "$(dirname "${BASH_SOURCE[0]}")/../skills/dioxus-docs/scripts" && pwd)"

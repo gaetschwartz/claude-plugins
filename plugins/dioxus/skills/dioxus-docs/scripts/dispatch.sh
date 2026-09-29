@@ -1,7 +1,4 @@
 #!/usr/bin/env bash
-# Single entry point for the dioxus-docs command. Usage, help and unknown
-# subcommands never touch the network or the data directory.
-
 # shellcheck source=_lib.sh
 source "$(dirname "${BASH_SOURCE[0]}")/_lib.sh"
 

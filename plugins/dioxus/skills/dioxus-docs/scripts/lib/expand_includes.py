@@ -1,8 +1,6 @@
 #!/usr/bin/env python3
 """Expand mdbook `{{#include path[:anchor]}}` directives in a markdown page.
 
-Usage: expand_includes.py --docsite DIR PAGE
-
 Include paths are resolved relative to the page; a path into `docs-router/`
 falls back to DIR/packages/docs-router/. An anchor selects the lines between
 `ANCHOR: name` and `ANCHOR_END: name`. Anchor marker lines are always dropped.
