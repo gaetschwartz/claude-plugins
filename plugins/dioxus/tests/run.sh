@@ -316,7 +316,7 @@ rm -f "$UVX_ARGV"
 PATH="$STUB:$PATH" run "$DATA" semantic "dynamic route segments"
 rc_is "semantic default exits 0" 0
 expect "semantic default runs semble search" test "$(sed -n '1p;3,4p' "$UVX_ARGV" | tr '\n' ' ')" = "--from semble search "
-expect "semantic pins semble to an exact version" test "$(sed -n '2p' "$UVX_ARGV" | grep -cE '^semble==[0-9]+\.[0-9]+\.[0-9]+$')" -eq 1
+expect "semantic runs the latest semble" test "$(sed -n '2p' "$UVX_ARGV")" = "semble"
 expect "semantic asks for no extras" argv_lacks "[mcp]"
 expect "semantic passes the query" argv_has "dynamic route segments"
 expect "semantic searches all content types" test "$(grep -A1 -x -- '--content' "$UVX_ARGV" | tail -n 1)" = all

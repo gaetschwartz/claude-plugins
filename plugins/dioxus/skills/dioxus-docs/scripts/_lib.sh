@@ -14,7 +14,6 @@ DOCSITE="$VENDOR/docsite"
 export DOCS_ROOT="$DOCSITE/docs-src/0.7/src"
 export STALE_PREFIX="untested_"
 
-export SEMBLE_SPEC="semble==0.6.1"
 DIOXUS_REF="${DIOXUS_REF:-v0.7}"
 DIOXUS_REPO_URL="${DIOXUS_REPO_URL:-https://github.com/DioxusLabs/dioxus.git}"
 DOCSITE_REPO_URL="${DOCSITE_REPO_URL:-https://github.com/DioxusLabs/docsite.git}"

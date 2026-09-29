@@ -58,7 +58,7 @@ serr=$(mktemp "${TMPDIR:-/tmp}/dioxus-semantic.XXXXXX")
 trap 'rm -f "$raw" "$serr"' EXIT
 
 rc=0
-uvx --from "$SEMBLE_SPEC" semble search -k "$fetch" --content all \
+uvx --from semble semble search -k "$fetch" --content all \
     --max-snippet-lines "$SNIPPET_LINES" --format json -- "$query" "${paths[@]}" \
     >"$raw" 2>"$serr" || rc=$?
 grep -v '^WARNING: Language ' "$serr" >&2 || true
