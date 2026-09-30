@@ -1,82 +1,68 @@
-"""AST evaluation of match.ast rules; needs ast-grep-py, so it runs under `uv run --with` (see astrun.py).
+"""AST evaluation of match.ast rules through the ast-grep binary.
 
-Protocol: one JSON request on stdin, one JSON response on stdout. Wrapper look-through works by rewriting the
-source (dropping the wrapper's own words, or replacing a shell string by its content) and re-parsing, so
-relations such as `inside` still see the real surroundings.
+Wrapper look-through works by rewriting the source (dropping the wrapper's own words, or replacing a shell string by
+its content) and re-parsing, so relations such as `inside` still see the real surroundings.
 """
 
 from __future__ import annotations
 
 import json
 import re
-import sys
+import time
 from typing import Any
+
+import ansic
+from astcli import Cli, Node, RuleError, Src, Unavailable
 
 MAX_DEPTH = 16
 MAX_UNITS = 512
-CONTEXT_KINDS = frozenset({"pipeline", "command_substitution", "process_substitution"})
+EXPANSION_BUDGET = 0.5
+CONTEXT = {"any": [{"kind": "pipeline"}, {"kind": "command_substitution"}, {"kind": "process_substitution"}],
+           "stopBy": "end"}
 REDIRECTS = frozenset({"file_redirect", "heredoc_redirect", "herestring_redirect"})
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
 DQ_ESCAPE = re.compile(r'\\([\\"$`])')
 WORD_ESCAPE = re.compile(r"\\(.)")
 SIMPLE_WORD = re.compile(r"[A-Za-z0-9_.+@%:,=-]+")
 TRAILING_HOLE = re.compile(r"^(.*\S)\s+\$\$\$$", re.DOTALL)
+REWRITABLE = re.compile(r"['\"\\/=]")
+YAML_UNSAFE = re.compile("[\x7f-\x9f\u2028\u2029\ufeff]")
+LEAF_KINDS = ("word", "command_name", "raw_string", "number")
 
 Rule = dict[str, Any]
 Table = dict[str, dict[str, Any]]
 
 
-def sg_root(src: str) -> Any:
-    from ast_grep_py import SgRoot  # ty: ignore[unresolved-import]
+class Unit:
+    """One tree to evaluate: the command as written, its normalised form, or a rewrite exposed by a wrapper."""
 
-    return SgRoot(src, "bash").root()
+    __slots__ = ("hi", "label", "lo", "src", "tree")
 
+    def __init__(self, src: str, lo: int = -1, hi: int = -1, label: str = "", tree: Node | None = None) -> None:
+        self.src, self.lo, self.hi, self.label, self.tree = src, lo, hi, label, tree
 
-def version() -> str:
-    from importlib.metadata import version as dist_version
-
-    return dist_version("ast-grep-py")
-
-
-def span(node: Any) -> tuple[int, int]:
-    rng = node.range()
-    return rng.start.index, rng.end.index
+    @property
+    def derived(self) -> bool:
+        return self.lo >= 0
 
 
-def has_errors(root: Any, deep: bool = True) -> bool:
-    """ERROR nodes, or (when deep) zero-width nodes the parser invented to recover (MISSING)."""
-    if root.find({"rule": {"kind": "ERROR"}}) is not None:
-        return True
-    if not deep:
-        return False
-    stack = [root]
-    while stack:
-        node = stack.pop()
-        lo, hi = span(node)
-        if lo == hi and node.kind() not in ("program", "heredoc_body") and node is not root:
-            return True
-        stack.extend(node.children())
-    return False
-
-
-def dequote(node: Any) -> str:
-    kind, text = node.kind(), node.text()
+def dequote(node: Node) -> str:
+    kind, text = node.kind, node.text()
     if kind == "raw_string":
         return text[1:-1]
     if kind == "string":
         return DQ_ESCAPE.sub(r"\1", text[1:-1])
     if kind == "ansi_c_string":
-        return text[2:-1]
+        return ansic.decode(text[2:-1])
     if kind == "word":
         return WORD_ESCAPE.sub(r"\1", text)
     if kind == "concatenation":
-        return "".join(dequote(c) for c in node.children() if c.is_named())
+        return "".join(dequote(c) for c in node.named_children())
     return text
 
 
-def is_flag(node: Any) -> bool:
-    text = node.text()
-    return node.kind() in ("word", "number", "concatenation") and text.startswith("-")
+def is_flag(node: Node) -> bool:
+    return node.kind in ("word", "number", "concatenation") and node.text().startswith("-")
 
 
 def cluster_takes_value(word: str, flags: set[str]) -> bool:
@@ -94,25 +80,23 @@ def shell_flag_matches(word: str, flag: str) -> bool:
     return len(flag) == 2 and re.fullmatch(r"-[A-Za-z]*" + re.escape(flag[1]) + r"[A-Za-z]*", word) is not None
 
 
-def command_parts(node: Any) -> tuple[Any, list[Any]] | None:
+def command_parts(node: Node) -> tuple[Node, list[Node]] | None:
     """(command_name node, argument nodes without redirects) of a `command` node."""
-    name = node.field("name")
+    name = next((c for c in node.children if c.field == "name"), None)
     if name is None:
         return None
     seen = False
     args = []
-    for child in node.children():
-        if not child.is_named():
-            continue
+    for child in node.named_children():
         if not seen:
-            seen = child.range() == name.range() and child.kind() == "command_name"
+            seen = child is name and child.kind == "command_name"
             continue
-        if child.kind() not in REDIRECTS:
+        if child.kind not in REDIRECTS:
             args.append(child)
     return name, args
 
 
-def resolve(entry: dict[str, Any], args: list[Any]) -> tuple[str, Any] | None:
+def resolve(entry: dict[str, Any], args: list[Node]) -> tuple[str, Any] | None:
     """("command", index of the wrapped command's first word) or ("shell", script text); None when nothing runs."""
     with_value = set(entry.get("flagsWithValue", ()))
     inert = set(entry.get("noCommandFlags", ()))
@@ -162,26 +146,36 @@ def apply_edits(src: str, edits: list[tuple[int, int, str]]) -> str:
     return src
 
 
-def normalise(src: str) -> str:
+def commands_of(tree: Node) -> list[Node]:
+    return [n for n in tree.walk() if n.kind == "command"]
+
+
+def normalise(src: str, tree: Node) -> str:
     """Drop what precedes the command name without changing what runs: VAR=value prefixes, directories, quotes."""
     edits: list[tuple[int, int, str]] = []
-    for cmd in sg_root(src).find_all({"rule": {"kind": "command"}}):
+    for cmd in commands_of(tree):
         parts = command_parts(cmd)
         if parts is None:
             continue
         name = parts[0]
-        name_lo, name_hi = span(name)
-        assigns = [c for c in cmd.children() if c.kind() == "variable_assignment"]
+        assigns = [c for c in cmd.named_children() if c.kind == "variable_assignment"]
         if assigns:
-            edits.append((span(assigns[0])[0], name_lo, ""))
-        inner = [c for c in name.children() if c.is_named()]
+            edits.append((assigns[0].lo, name.lo, ""))
+        inner = name.named_children()
         plain = simple_word(dequote(inner[0])) if len(inner) == 1 else None
         if plain is not None and plain != name.text():
-            edits.append((name_lo, name_hi, plain))
+            edits.append((name.lo, name.hi, plain))
     return apply_edits(src, edits)
 
 
-def variants(src: str, root: Any, table: Table, within: tuple[int, int] | None = None
+def normalise_shell(script: str, cli: Cli) -> str:
+    """normalise() of a shell string; without quotes, slashes or assignments there is nothing to rewrite."""
+    if not REWRITABLE.search(script):
+        return script
+    return normalise(script, cli.dump([Src(script)])[0])
+
+
+def variants(src: str, tree: Node, table: Table, cli: Cli, within: tuple[int, int] | None = None
              ) -> list[tuple[str, int, int, str]]:
     """(rewritten source, region start, region end, label) for each wrapper command in the tree.
 
@@ -189,14 +183,12 @@ def variants(src: str, root: Any, table: Table, within: tuple[int, int] | None =
     handled from the original tree, and expanding their combinations would grow without bound.
     """
     out = []
-    for cmd in root.find_all({"rule": {"kind": "command"}}):
+    for cmd in commands_of(tree):
         parts = command_parts(cmd)
         if parts is None:
             continue
-        if within is not None:
-            c_lo, c_hi = span(cmd)
-            if not (c_lo < within[1] and c_hi > within[0]):
-                continue
+        if within is not None and not (cmd.lo < within[1] and cmd.hi > within[0]):
+            continue
         name, args = parts
         base = name.text().strip("\"'").rsplit("/", 1)[-1]
         entry = table.get(base)
@@ -205,52 +197,74 @@ def variants(src: str, root: Any, table: Table, within: tuple[int, int] | None =
         found = resolve(entry, args)
         if found is None:
             continue
-        cmd_lo, cmd_hi = span(cmd)
-        name_lo = span(name)[0]
         if found[0] == "command":
             first = args[found[1]]
-            first_hi = span(first)[1]
             word = simple_word(dequote(first)) or first.text()
-            out.append((src[:name_lo] + word + src[first_hi:], name_lo, name_lo + len(word) + cmd_hi - first_hi,
-                        base))
+            out.append((src[:name.lo] + word + src[first.hi:], name.lo, name.lo + len(word) + cmd.hi - first.hi, base))
         else:
-            replacement = "{ " + normalise(found[1]) + "\n}"
-            out.append((src[:cmd_lo] + replacement + src[cmd_hi:], cmd_lo, cmd_lo + len(replacement), base))
+            replacement = "{ " + normalise_shell(found[1], cli) + "\n}"
+            out.append((src[:cmd.lo] + replacement + src[cmd.hi:], cmd.lo, cmd.lo + len(replacement), base))
     return out
 
 
-def unit_trees(command: str, table: Table) -> tuple[list[tuple[Any, int, int, str, str]], bool]:
-    """Every tree to evaluate: (root, region lo, region hi, label, source); region -1 for the command itself."""
-    root = sg_root(command)
-    units = [(root, -1, -1, "", command)]
+def mentions_wrapper(src: str, table: Table) -> bool:
+    return any(name in src for name in table)
+
+
+def parse_units(units: list[Unit], cli: Cli, wanted: list[bool], until: float | None = None) -> bool:
+    """Parse the wanted units; False when `until` passed first."""
+    chosen = [u for u, want in zip(units, wanted) if want]
+    trees = cli.dump([Src(u.src) for u in chosen], "ast", until)
+    for unit, tree in zip(chosen, trees):
+        unit.tree = tree
+    return len(trees) == len(chosen)
+
+
+def unit_trees(command: str, table: Table, cli: Cli, everything: bool = False) -> tuple[list[Unit], bool]:
+    """Every tree to evaluate; `everything` parses units even when nothing in them can be rewritten or unwrapped.
+
+    Parsing costs a process, so a unit whose text has no wrapper name (and, for the command itself, nothing that
+    normalise() would rewrite) is left without a tree: it can expose no further unit.
+    """
+    first = Unit(command)
+    parse_units([first], cli, [everything or bool(REWRITABLE.search(command)) or mentions_wrapper(command, table)])
+    units = [first]
     seen = {command}
-    base_src, base_root = command, root
-    plain = normalise(command)
+    base = first
+    plain = normalise(command, first.tree) if first.tree else command
     if plain != command:
-        base_src, base_root = plain, sg_root(plain)
-        units.append((base_root, -1, -1, "", plain))
+        base = Unit(plain)
+        parse_units([base], cli, [True])
+        units.append(base)
         seen.add(plain)
-    queue: list[tuple[str, Any, int, tuple[int, int] | None]] = [(base_src, base_root, 0, None)]
+    until = time.monotonic() + EXPANSION_BUDGET
+    frontier = [base]
     limited = False
-    while queue and not limited:
-        src, tree, depth, within = queue.pop(0)
-        for new_src, lo, hi, label in variants(src, tree, table, within):
-            if new_src in seen:
-                continue
-            if depth + 1 > MAX_DEPTH or len(units) >= MAX_UNITS:
-                limited = True
+    level = 0
+    while frontier and not limited:
+        if time.monotonic() > until and any(u.tree for u in frontier):
+            limited = True
+            break
+        fresh: list[Unit] = []
+        for unit in frontier:
+            within = (unit.lo, unit.hi) if unit.derived else None
+            found = variants(unit.src, unit.tree, table, cli, within) if unit.tree else []
+            for new_src, lo, hi, label in found:
+                if new_src in seen:
+                    continue
+                if level + 1 > MAX_DEPTH or len(units) + len(fresh) >= MAX_UNITS:
+                    limited = True
+                    break
+                seen.add(new_src)
+                fresh.append(Unit(new_src, lo, hi, label))
+            if limited:
                 break
-            seen.add(new_src)
-            new_root = sg_root(new_src)
-            units.append((new_root, lo, hi, label, new_src))
-            queue.append((new_src, new_root, depth + 1, (lo, hi)))
+        units.extend(fresh)
+        complete = parse_units(fresh, cli, [everything or mentions_wrapper(u.src, table) for u in fresh], until)
+        limited = limited or not complete
+        frontier = fresh
+        level += 1
     return units, limited
-
-
-def kind_of(node: Any, derived: bool) -> str:
-    if derived or any(a.kind() in CONTEXT_KINDS for a in node.ancestors()):
-        return "wrapped"
-    return "direct"
 
 
 def widen(rule: Any) -> Any:
@@ -270,18 +284,40 @@ def widen(rule: Any) -> Any:
     return {"all": [either, rest] if rest else [either], **keep}
 
 
-def prepare(rules: dict[str, Rule]) -> tuple[dict[str, Rule], dict[str, str]]:
+def document(rule_id: str, rule: Any) -> str:
+    """One ast-grep rule document; JSON is valid YAML, and the characters YAML treats as line breaks stay escaped."""
+    text = json.dumps({"id": rule_id, "language": "bash", "rule": rule}, ensure_ascii=False)
+    return YAML_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
+
+
+def rule_text(live: dict[str, Rule]) -> tuple[str, dict[str, str]]:
+    """(ast-grep rules for every live rule plus its in-context twin, rule id per generated id)."""
+    docs, owners = [], {}
+    for i, (rid, rule) in enumerate(live.items()):
+        docs.append(document(f"g{i}", rule))
+        docs.append(document(f"g{i}c", {"all": [rule, {"inside": CONTEXT}]}))
+        owners[f"g{i}"] = rid
+    return "\n---\n".join(docs), owners
+
+
+def prepare(rules: dict[str, Rule], cli: Cli) -> tuple[dict[str, Rule], dict[str, str]]:
     """(rules ready to run, compile error per rule id)."""
-    probe = sg_root("true")
+    if not rules:
+        return {}, {}
+    widened = {rid: widen(rule) for rid, rule in rules.items()}
+    try:
+        cli.check(rule_text(widened)[0])
+        return widened, {}
+    except RuleError:
+        pass
     ready: dict[str, Rule] = {}
     errors: dict[str, str] = {}
     for rid, rule in rules.items():
-        for candidate in (widen(rule), rule):
+        for candidate in (widened[rid], rule):
             try:
-                probe.find({"rule": candidate})
-            except Exception as exc:  # noqa: BLE001
-                lines = [ln.strip() for ln in str(exc).splitlines() if ln.strip()] or [type(exc).__name__]
-                errors[rid] = lines[-1] if lines[0].startswith("cannot get matcher") else lines[0]
+                cli.check(document("g", candidate))
+            except RuleError as exc:
+                errors[rid] = str(exc)
                 continue
             ready[rid] = candidate
             errors.pop(rid, None)
@@ -293,70 +329,102 @@ def best(current: str | None, new: str) -> str:
     return "direct" if "direct" in (current, new) else new
 
 
-def evaluate(request: dict[str, Any]) -> dict[str, Any]:
-    rules: dict[str, Rule] = request.get("rules") or {}
-    live, errors = prepare(rules)
+def verdicts_of(units: list[Unit], lexed: list[dict[str, Any]], hits: list[list[Any]], owners: dict[str, str],
+                live: dict[str, Rule]) -> dict[str, str | None]:
     verdicts: dict[str, str | None] = {rid: None for rid in live}
-    units, limited = unit_trees(request["command"], request.get("wrappers") or {})
-    broken = any(has_errors(u[0], u[1] < 0) for u in units)
-    for root, lo, hi, _label, _src in units:
-        for rid, rule in live.items():
-            for node in root.find_all({"rule": rule}):
-                if lo >= 0:
-                    n_lo, n_hi = span(node)
-                    if not (n_lo < hi and n_hi > lo):
-                        continue
-                verdicts[rid] = best(verdicts[rid], kind_of(node, lo >= 0))
-    for item in request.get("lexed") or ():
-        root = sg_root(item["src"])
-        for rid, rule in live.items():
-            for node in root.find_all({"rule": rule}):
-                verdicts[rid] = best(verdicts[rid], "wrapped" if item.get("wrapped") else kind_of(node, False))
-    return {"ok": True, "verdicts": verdicts, "errors": errors, "broken": broken, "limited": limited,
-            "version": version()}
+    for at, found in enumerate(hits):
+        in_context = {(h.rule, h.lo, h.hi) for h in found if h.rule.endswith("c")}
+        unit = units[at] if at < len(units) else None
+        for hit in found:
+            if hit.rule.endswith("c"):
+                continue
+            if unit is None:
+                tagged = lexed[at - len(units)].get("wrapped") or (hit.rule + "c", hit.lo, hit.hi) in in_context
+                kind = "wrapped" if tagged else "direct"
+            elif unit.derived:
+                if not (hit.lo < unit.hi and hit.hi > unit.lo):
+                    continue
+                kind = "wrapped"
+            else:
+                kind = "wrapped" if (hit.rule + "c", hit.lo, hit.hi) in in_context else "direct"
+            rid = owners[hit.rule]
+            verdicts[rid] = best(verdicts[rid], kind)
+    return verdicts
 
 
-def dump(node: Any, depth: int, out: list[list[Any]]) -> None:
-    if node.is_named():
-        leaf = node.is_leaf() or node.kind() in ("word", "command_name", "raw_string", "number")
-        out.append([depth, node.kind(), node.text() if leaf else None])
-    for child in node.children():
-        dump(child, depth + 1 if node.is_named() else depth, out)
+def evaluate(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
+    rules: dict[str, Rule] = request.get("rules") or {}
+    command = request["command"].replace("\x00", " ")
+    lexed: list[dict[str, Any]] = list(request.get("lexed") or ())
+    live: dict[str, Rule] = {rid: widen(rule) for rid, rule in rules.items()}
+    errors: dict[str, str] = {}
+    units, limited = unit_trees(command, request.get("wrappers") or {}, cli) if rules else ([], False)
+    sources = [Src(u.src) for u in units] + [Src(item["src"]) for item in lexed]
+    hits: list[list[Any]] = []
+    while live:
+        text, owners = rule_text(live)
+        try:
+            hits = cli.scan(text, sources)
+            break
+        except RuleError:
+            live, errors = prepare(rules, cli)
+    else:
+        owners = {}
+        hits = [[] for _ in sources]
+    return {"ok": True, "verdicts": verdicts_of(units, lexed, hits, owners, live), "errors": errors,
+            "limited": limited, "version": cli.version}
 
 
-def tree(request: dict[str, Any]) -> dict[str, Any]:
-    units, limited = unit_trees(request["command"], request.get("wrappers") or {})
-    shown = []
-    for root, lo, _hi, label, src in units:
-        nodes: list[list[Any]] = []
-        dump(root, 0, nodes)
-        shown.append({"label": label if lo >= 0 else "", "src": src, "nodes": nodes, "broken": has_errors(root)})
-    return {"ok": True, "units": shown, "limited": limited, "version": version()}
+def with_depth(root: Node) -> list[tuple[Node, int]]:
+    out: list[tuple[Node, int]] = []
+    stack = [(root, 0)]
+    while stack:
+        node, depth = stack.pop()
+        out.append((node, depth))
+        stack.extend((child, depth + 1) for child in reversed(node.children))
+    return out
 
 
-def handle(request: dict[str, Any]) -> dict[str, Any]:
+def broken(cst: Node) -> bool:
+    """ERROR nodes, or zero-width nodes the parser invented to recover (MISSING)."""
+    return any(n.kind == "ERROR" or (n.lo == n.hi and n is not cst and n.kind not in ("program", "heredoc_body"))
+               for n in cst.walk())
+
+
+def rows(ast: Node, cst: Node) -> list[list[Any]]:
+    """[depth, kind, text or None] per named node; the complete dump says which ones have no child at all."""
+    flat = cst.walk()
+    at = 0
+    out: list[list[Any]] = []
+    for node, depth in with_depth(ast):
+        key = (node.kind, node.lo, node.hi, node.missing)
+        while at < len(flat) and (flat[at].kind, flat[at].lo, flat[at].hi, flat[at].missing) != key:
+            at += 1
+        if at >= len(flat):
+            raise Unavailable("ast-grep printed two parse trees that disagree")
+        partner = flat[at]
+        at += 1
+        out.append([depth, node.kind, node.text() if not partner.children or node.kind in LEAF_KINDS else None])
+    return out
+
+
+def tree(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
+    units, limited = unit_trees(request["command"].replace("\x00", " "), request.get("wrappers") or {}, cli, True)
+    sources = [Src(u.src) for u in units]
+    complete = cli.dump(sources, "cst")
+    shown = [{"label": u.label if u.derived else "", "src": u.src, "nodes": rows(u.tree or complete[i], complete[i]),
+              "broken": broken(complete[i])} for i, u in enumerate(units)]
+    return {"ok": True, "units": shown, "limited": limited, "version": cli.version}
+
+
+def handle(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
     op = request.get("op")
     if op == "eval":
-        return evaluate(request)
+        return evaluate(request, cli)
     if op == "tree":
-        return tree(request)
+        return tree(request, cli)
     if op == "check":
-        return {"ok": True, "errors": prepare(request.get("rules") or {})[1], "version": version()}
+        return {"ok": True, "errors": prepare(request.get("rules") or {}, cli)[1], "version": cli.version}
     if op == "ping":
-        return {"ok": True, "version": version()}
+        return {"ok": True, "version": cli.version}
     return {"ok": False, "error": f"unknown op {op!r}"}
-
-
-def main() -> int:
-    for extra in sys.argv[1:]:
-        sys.path.insert(0, extra)
-    try:
-        response = handle(json.load(sys.stdin))
-    except Exception as exc:  # noqa: BLE001
-        response = {"ok": False, "error": f"{type(exc).__name__}: {exc}"}
-    json.dump(response, sys.stdout)
-    return 0
-
-
-if __name__ == "__main__":
-    sys.exit(main())

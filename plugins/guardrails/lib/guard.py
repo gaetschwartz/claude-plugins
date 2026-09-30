@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""guardrails entry point: no arguments → PreToolUse hook reading stdin; `warm` → SessionStart cache warm-up; other arguments → CLI (see --help)."""
+"""guardrails entry point: no arguments → PreToolUse hook reading stdin; `warm` → SessionStart engine warm-up; other arguments → CLI (see --help)."""
 
 from __future__ import annotations
 
@@ -13,10 +13,9 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import engine
 
 HOOK_BUDGET = 7.0
-VENV_FAILED = "--venv-failed"
 
 
-def hook(data: str, notes: tuple[str, ...]) -> None:
+def hook(data: str) -> None:
     import watchdog
 
     out = io.StringIO()
@@ -24,7 +23,7 @@ def hook(data: str, notes: tuple[str, ...]) -> None:
     fast = False
     watchdog.start(HOOK_BUDGET)
     try:
-        engine.run_hook(io.StringIO(data), out, notes)
+        engine.run_hook(io.StringIO(data), out)
         sys.stdout.write(out.getvalue())
         return
     except watchdog.Expired:
@@ -42,9 +41,8 @@ def hook(data: str, notes: tuple[str, ...]) -> None:
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if not args or args == [VENV_FAILED]:
-        notes = ("guardrails: the venv python failed, so this call ran under the system python.",) if args else ()
-        hook(sys.stdin.read(), notes)
+    if not args:
+        hook(sys.stdin.read())
         return 0
     if args == ["warm"]:
         try:
@@ -53,13 +51,11 @@ def main(argv: list[str] | None = None) -> int:
             pass
         return 0
     if len(args) == 2 and args[0] == "warm-install":
-        import astrun
+        import astbin
 
-        astrun.BUILD_ALLOWED = True
         try:
-            astrun.maintain(args[1] or None)
-            astrun.ensure(args[1] or None, 120.0)
-        except astrun.Unavailable:
+            astbin.install(args[1], respect_backoff=True)
+        except (astbin.InstallError, astbin.Unavailable, OSError):
             pass
         return 0
     import cli

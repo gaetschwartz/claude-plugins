@@ -21,6 +21,7 @@ class Evaluation:
     def __init__(self, degraded: str | None = None, oversize: bool = False) -> None:
         self.kinds: dict[str, str | None] = {}
         self.degraded = degraded
+        self.missing = False
         self.invalid: dict[str, str] = {}
         self.approx: dict[str, list[str]] = {}
         self.approx_reason = ""
@@ -33,14 +34,18 @@ class Evaluation:
         out = [(text, text) for text in self.rejected]
         out += [(f"ast-invalid:{rid}", f"guardrails: match.ast rule {rid} does not compile ({why}) and is skipped")
                for rid, why in sorted(self.invalid.items())]
-        if self.degraded:
+        if self.degraded and self.missing:
+            import astbin
+
+            out.append((DEGRADED_KEY, astbin.notice(self.degraded)))
+        elif self.degraded:
             text = (f"guardrails: the AST matcher is unavailable ({self.degraded}). Rules with match.ast are applied "
-                    "only when the command mentions one of their command names; every other rule is unaffected. "
-                    "It needs the hash-pinned ast-grep-py venv that the session-start warm-up builds.")
+                    "only when the command mentions one of their command names; every other rule is unaffected.")
             out.append((DEGRADED_KEY, text))
         if self.limited:
-            text = ("guardrails: a command nests wrappers or shells too deeply to analyse completely, so rules with "
-                    "match.ast are applied only when it mentions their command names.")
+            text = ("guardrails: a command nests wrappers or shells too deeply to analyse completely (or expands into "
+                    "too many variants), so rules with match.ast are applied only when it mentions their command "
+                    "names.")
             out.append((LIMITED_KEY, text))
         if self.oversize:
             text = (f"guardrails: a command larger than {MAX_PARSE // 1024} KiB is not parsed, so rules are applied "
@@ -153,6 +158,7 @@ def _evaluate(command: str, rules: dict[str, policy.Rule], table: wrapper_table.
         response = astrun.call(request, state_dir)
     except astrun.Unavailable as exc:
         ev.degraded = str(exc)
+        ev.missing = isinstance(exc, astrun.Missing)
         ev.rejected = astrun.take_rejected()
         apply_mentions(ev, command, rules, ast_rids, f"the AST matcher is unavailable: {exc}")
         return ev

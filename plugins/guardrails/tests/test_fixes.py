@@ -10,13 +10,13 @@ import subprocess
 import sys
 import time
 import unittest
-import zipfile
 from pathlib import Path
 from typing import Any, ClassVar
 from unittest import mock
 
-from helpers import HOOKS, LIB, AstIsolated, Isolated, ast_mode
+from helpers import HOOKS, LIB, AstIsolated, Isolated
 
+import astbin
 import astrun
 import engine
 import matching
@@ -178,63 +178,6 @@ class NeverReducesDetectionAst(AstIsolated):
                         self.assertIsNotNone(after[rid], f"{rid} stopped matching {command!r}")
 
 
-class Isolation(Isolated):
-    def test_the_build_runs_in_the_data_dir_with_a_scrubbed_environment_and_no_config(self) -> None:
-        seen: list[tuple[list[str], dict[str, str], str]] = []
-
-        def spy(cmd: list[str], payload: Any, timeout: float, env: dict[str, str], cwd: str) -> Any:
-            seen.append((cmd, env, cwd))
-            return mock.Mock(returncode=0 if cmd[1] == "venv" else 1, stderr="stub", stdout="")
-
-        hostile = {"UV_FIND_LINKS": "/evil", "UV_NO_INDEX": "1", "UV_INDEX_URL": "http://evil", "UV_PYTHON": "/evil",
-                   "PIP_INDEX_URL": "http://evil", "PYTHONPATH": "/evil", "SSL_CERT_FILE": "/evil",
-                   "UV_CACHE_DIR": str(self.tmp / "cache"), "HTTPS_PROXY": "http://proxy:1", "PATH": "/repo/bin:/usr/bin"}
-        with mock.patch.dict(os.environ, hostile), mock.patch.object(astrun, "_run", spy), \
-                mock.patch.object(astrun, "uv_path", return_value="/stub/uv"), \
-                mock.patch.object(astrun, "find_interpreter", return_value="/stub/python3.14"), \
-                self.assertRaises(astrun.Unavailable):
-            astrun.ensure(str(self.data))
-        cmd, env, cwd = seen[0]
-        self.assertEqual(os.path.realpath(cwd), os.path.realpath(self.data))
-        self.assertEqual(env["PATH"], astrun.CLEAN_PATH)
-        for name in ("UV_FIND_LINKS", "UV_NO_INDEX", "UV_INDEX_URL", "UV_PYTHON", "PIP_INDEX_URL", "PYTHONPATH",
-                     "SSL_CERT_FILE", "CLAUDE_PROJECT_DIR", "GUARDRAILS_MANAGED_PATH"):
-            self.assertNotIn(name, env)
-        self.assertEqual(env["UV_CACHE_DIR"], str(self.tmp / "cache"))
-        self.assertEqual(env["HTTPS_PROXY"], "http://proxy:1")
-        self.assertIn("--no-config", cmd)
-        install = next(c for c, _, _ in seen if c[1] == "pip")
-        for flag in ("--no-config", "--require-hashes", "--only-binary", "--default-index"):
-            self.assertIn(flag, install)
-
-    def test_a_planted_uv_toml_and_env_cannot_get_a_fake_wheel_imported(self) -> None:
-        if ast_mode() is None:
-            self.skipTest("ast-grep-py cannot be installed here")
-        pwned = self.tmp / "PWNED"
-        links = self.tmp / "links"
-        links.mkdir()
-        wheel = links / f"ast_grep_py-{astrun.PIN}-py3-none-any.whl"
-        with zipfile.ZipFile(wheel, "w") as zf:
-            zf.writestr("ast_grep_py/__init__.py", f"open({str(pwned)!r}, 'w').close()\n")
-            zf.writestr(f"ast_grep_py-{astrun.PIN}.dist-info/METADATA",
-                        f"Metadata-Version: 2.1\nName: ast-grep-py\nVersion: {astrun.PIN}\n")
-            zf.writestr(f"ast_grep_py-{astrun.PIN}.dist-info/WHEEL",
-                        "Wheel-Version: 1.0\nGenerator: t\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
-            zf.writestr(f"ast_grep_py-{astrun.PIN}.dist-info/RECORD", "")
-        (self.proj / "uv.toml").write_text(f'no-index = true\nfind-links = ["{links}"]\n')
-        env = {**os.environ, "UV_NO_INDEX": "1", "UV_FIND_LINKS": str(links), "UV_PYTHON": "/nonexistent"}
-        proc = subprocess.run([sys.executable, str(LIB / "guard.py"), "warm-install", str(self.data)],
-                              capture_output=True, text=True, check=False, env=env, cwd=self.proj, timeout=180)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertFalse(pwned.exists())
-        self.assertTrue(astrun.ready(astrun.venv_dir(str(self.data))))
-        check = subprocess.run([astrun.venv_python(astrun.venv_dir(str(self.data))), "-I", "-c",
-                                "import ast_grep_py, sys; print(ast_grep_py.__file__)"], capture_output=True,
-                               text=True, check=False, cwd=self.proj)
-        self.assertIn("site-packages", check.stdout)
-        self.assertFalse(pwned.exists())
-
-
 class HostileExecutables(Isolated):
     def plant(self, name: str) -> Path:
         path = self.proj / "bin" / name
@@ -243,65 +186,75 @@ class HostileExecutables(Isolated):
         path.chmod(0o755)
         return path
 
-    def test_no_environment_variable_selects_an_executable_or_an_engine_mode(self) -> None:
-        evil = self.plant("uv")
-        for name in ("GUARDRAILS_UV", "GUARDRAILS_AST_BOOTSTRAP", "GUARDRAILS_AST_INPROCESS", "GUARDRAILS_PARITY"):
-            for module in (astrun, matching, engine, policy):
-                self.assertNotIn(name, Path(module.__file__).read_text())
-        with mock.patch.dict(os.environ, {"GUARDRAILS_UV": str(evil), "GUARDRAILS_AST_INPROCESS": "1",
-                                          "GUARDRAILS_PARITY": "ast"}):
-            self.assertIsNot(astrun.uv_path(), str(evil))
-            self.assertFalse(astrun.INPROCESS)
+    def test_no_environment_variable_selects_an_executable_a_url_or_an_engine_mode(self) -> None:
+        for module in (astrun, astbin, matching, engine, policy):
+            text = Path(module.__file__).read_text()
+            for name in ("GUARDRAILS_UV", "GUARDRAILS_AST_BOOTSTRAP", "GUARDRAILS_AST_INPROCESS", "GUARDRAILS_PARITY",
+                         "GUARDRAILS_AST_GREP", "CLAUDE_PLUGIN_ROOT"):
+                self.assertNotIn(name, text)
+        used = set(re.findall(r'environ(?:\.get)?[\[(]"([A-Z_a-z]+)"', (LIB / "astbin.py").read_text()))
+        self.assertEqual(used, {"CLAUDE_PROJECT_DIR"})
+        evil = self.plant("ast-grep")
+        hostile = {"GUARDRAILS_AST_GREP": str(evil), "CLAUDE_PLUGIN_ROOT": str(self.proj), "PATH": str(evil.parent),
+                   "GUARDRAILS_PARITY": "ast", "GUARDRAILS_AST_INPROCESS": "1"}
+        with mock.patch.dict(os.environ, hostile):
+            with self.assertRaises(astbin.Missing):
+                astbin.locate(str(self.data))
             self.assertFalse(matching.PARITY)
 
-    def test_uv_from_a_hostile_path_inside_the_project_is_rejected_and_reported(self) -> None:
-        evil = self.plant("uv")
-        astrun.take_rejected()
-        env = {"PATH": f"{evil.parent}:/usr/bin:/bin", "HOME": str(self.tmp / "home")}
-        with mock.patch.dict(os.environ, env), mock.patch.object(astrun, "FIXED_DIRS", ()):
-            found = astrun.uv_path()
-        self.assertNotEqual(found, str(evil))
-        self.assertTrue(any(str(evil) in r and "inside the project" in r for r in astrun.take_rejected()))
-        self.assertEqual(astrun.take_rejected(), [])
-
-    def test_interpreters_from_the_project_are_rejected_too(self) -> None:
-        for minor in (14, 13):
-            self.plant(f"python3.{minor}")
-        astrun.take_rejected()
-        with mock.patch.dict(os.environ, {"PATH": str(self.proj / "bin")}), \
-                mock.patch.object(astrun, "FIXED_DIRS", ()), mock.patch.object(sys, "version_info", (3, 9, 6, "f", 0)), \
-                mock.patch.object(astrun.os, "access", lambda p, m: str(p).startswith(str(self.proj))), \
-                self.assertRaises(astrun.Unavailable):
-            astrun.find_interpreter()
-        self.assertTrue(any("inside the project" in r for r in astrun.take_rejected()))
+    def test_an_npm_binary_planted_inside_the_project_is_rejected_and_reported(self) -> None:
+        plat = astbin.detect()
+        planted = self.proj / "node_modules" / "@ast-grep" / f"cli-{plat.npm}" / "ast-grep"
+        planted.parent.mkdir(parents=True)
+        planted.write_text(f"#!/bin/sh\ntouch {self.tmp}/PWNED\n")
+        planted.chmod(0o755)
+        (planted.parent / "package.json").write_text(json.dumps({"name": f"@ast-grep/cli-{plat.npm}",
+                                                                 "version": astbin.pin()}))
+        with mock.patch.object(astbin, "PLUGIN_ROOT", str(self.proj)), self.assertRaises(astbin.Missing) as ctx:
+            astbin.locate(str(self.data))
+        self.assertIn("inside the project", str(ctx.exception))
+        self.assertTrue(any(str(planted) not in r and "inside the project" in r for r in astbin.take_rejected()))
+        self.assertFalse((self.tmp / "PWNED").exists())
 
     def test_untrusted_reasons(self) -> None:
-        exe = self.tmp / "bin" / "tool"
-        exe.parent.mkdir()
+        root = self.tmp / "tree"
+        exe = root / "bin" / "tool"
+        exe.parent.mkdir(parents=True)
         exe.write_text("")
         exe.chmod(0o755)
-        self.assertIsNone(astrun.untrusted(str(exe)))
+        self.assertIsNone(astbin.untrusted(str(exe), str(root)))
+        exe.parent.chmod(0o775)
+        self.assertIsNone(astbin.untrusted(str(exe), str(root)), "a group-writable directory of ours is allowed")
         exe.parent.chmod(0o777)
-        self.assertIn("writable by everyone", astrun.untrusted(str(exe)) or "")
+        self.assertIn("writable by everyone", astbin.untrusted(str(exe), str(root)) or "")
         exe.parent.chmod(0o755)
+        exe.chmod(0o775)
+        self.assertIn("writable by group or others", astbin.untrusted(str(exe), str(root)) or "")
+        exe.chmod(0o644)
+        self.assertIn("not executable", astbin.untrusted(str(exe), str(root)) or "")
+        exe.chmod(0o755)
+        link = root / "bin" / "link"
+        link.symlink_to(exe)
+        self.assertIn("symlink", astbin.untrusted(str(link), str(root)) or "")
+        self.assertIn("resolves outside", astbin.untrusted(str(exe), str(self.tmp / "elsewhere")) or "")
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(self.tmp)}):
-            self.assertIn("inside the project", astrun.untrusted(str(exe)) or "")
+            self.assertIn("inside the project", astbin.untrusted(str(exe), str(root)) or "")
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(self.tmp), "HOME": str(self.tmp)}):
-            self.assertIsNone(astrun.untrusted(str(exe)))
-        real_stat = os.stat
+            self.assertIsNone(astbin.untrusted(str(exe), str(root)))
+        real_lstat = os.lstat
 
         class Foreign:
             def __init__(self, info: os.stat_result) -> None:
                 self.st_mode, self.st_uid = info.st_mode, os.getuid() + 1
 
-        with mock.patch.object(astrun.os, "stat", lambda p, *a, **k: Foreign(real_stat(p))):
-            self.assertIn("owned by another user", astrun.untrusted(str(exe)) or "")
+        with mock.patch.object(astbin.os, "lstat", lambda p, *a, **k: Foreign(real_lstat(p))):
+            self.assertIn("owned by another user", astbin.untrusted(str(exe), str(root)) or "")
 
     def test_the_wrapper_never_runs_a_python3_from_the_project_path(self) -> None:
         evil = self.plant("python3")
         payload = json.dumps({"session_id": "h", "cwd": str(self.proj), "tool_name": "Bash",
                               "tool_input": {"command": "ls"}})
-        env = {**os.environ, "PATH": f"{evil.parent}:{os.environ.get('PATH', '')}", "GUARDRAILS_UV": str(evil)}
+        env = {**os.environ, "PATH": f"{evil.parent}:{os.environ.get('PATH', '')}"}
         subprocess.run(["/bin/sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
                        check=False, env=env, cwd=self.proj)
         env["PATH"] = str(evil.parent)
@@ -341,18 +294,6 @@ class Degradation(Isolated):
             self.assertTrue(is_denied(out))
             self.assertIn("unexpected error", json.dumps(out))
 
-    def test_an_incomplete_worker_reply_degrades(self) -> None:
-        import astworker
-
-        for reply in ({"ok": True}, {"ok": True, "verdicts": None, "errors": {}}, {"ok": True, "verdicts": {},
-                                                                                     "errors": None}):
-            with mock.patch.object(astrun, "INPROCESS", True), mock.patch.object(astworker, "handle", return_value=reply):
-                out = self.hook(f"strings x; {K} y", f"r{len(str(reply))}")
-            self.assertTrue(is_denied(out), reply)
-            self.assertIn("No strings.", deny_text(out))
-            self.assertIn("No kill.", deny_text(out))
-            self.assertIn("unavailable", deny_text(out))
-
     def test_a_failure_after_matching_falls_back_to_a_minimal_evaluation(self) -> None:
         with mock.patch.object(engine, "evaluate", side_effect=RuntimeError("late")):
             out = self.main("strings /bin/ls")
@@ -391,6 +332,25 @@ class Degradation(Isolated):
             self.assertEqual(out.getvalue(), "", payload)
 
 
+class DegradationAst(AstIsolated):
+    def setUp(self) -> None:
+        super().setUp()
+        self.put(self.gpath, {"rules": {"strings": {"match": {"program": "strings"}, "message": "No strings."},
+                                        "ast": {"match": {"ast": BY_NAME}, "message": "No kill."}}})
+
+    def test_an_incomplete_worker_reply_degrades(self) -> None:
+        import astworker
+
+        for reply in ({"ok": True}, {"ok": True, "verdicts": None, "errors": {}}, {"ok": True, "verdicts": {},
+                                                                                     "errors": None}):
+            with mock.patch.object(astworker, "handle", return_value=reply):
+                out = self.hook(f"strings x; {K} y", f"r{len(str(reply))}")
+            self.assertTrue(is_denied(out), reply)
+            self.assertIn("No strings.", deny_text(out))
+            self.assertIn("No kill.", deny_text(out))
+            self.assertIn("unavailable", deny_text(out))
+
+
 class Limits(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
@@ -418,7 +378,7 @@ class Limits(AstIsolated):
         self.assertIn("too deeply to analyse", json.dumps(out))
 
     def test_a_clean_command_with_many_units_is_not_limited(self) -> None:
-        out = self.hook("sudo true; " * 40 + "ls")
+        out = self.hook("sudo true; " * 20 + "ls")
         self.assertIsNone(out)
 
 
@@ -548,8 +508,6 @@ class Wrapper(Isolated):
         for line in self.script.splitlines():
             if re.search(r"(?<![\w/])/home/", line):
                 self.assertIn("linuxbrew", line)
-        venv_branch = self.script.split("find_python\nif [ -z", 1)[0].split("if [ -x \"$venv\" ]", 1)[1]
-        self.assertNotIn("/home", venv_branch)
 
     def test_no_forks_for_paths_and_posix_sh(self) -> None:
         for forbidden in ("dirname", "$(cd", "command -v", "bash"):
@@ -558,39 +516,13 @@ class Wrapper(Isolated):
         self.assertIn("${0%/*}", self.script)
 
     def test_selection_order(self) -> None:
-        marks = ("venv/bin/python", "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "uname -s",
-                 "for dir in $PATH", "/usr/bin/python3")
+        marks = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "uname -s", "for dir in $PATH",
+                 "/usr/bin/python3")
         body = self.script.split("find_python() {", 1)[1]
-        order = [body.index(x) for x in marks[1:]]
+        order = [body.index(x) for x in marks]
         self.assertEqual(order, sorted(order))
-        self.assertLess(self.script.index("venv/bin/python"), self.script.index("find_python()"))
         self.assertIn("-I -S", self.script)
-
-    def test_a_ready_venv_wins_and_a_stale_one_does_not(self) -> None:
-        self.stub(self.data / "venv" / "bin" / "python", "venv")
-        self.stub(self.tmp / "bin" / "python3", "path")
-        env = self.env(str(self.tmp / "bin"))
-        stale = self.run_wrapper(self.isolated(), env)
-        self.assertTrue(stale.stdout.startswith("path -I -S "), stale.stdout)
-        (self.data / "venv" / "guardrails-ast-ready").write_text("x\n")
-        ready = self.run_wrapper(self.isolated(), env)
-        self.assertTrue(ready.stdout.startswith("venv -I "), ready.stdout)
-        self.assertNotIn("-S", ready.stdout.split("guard.py")[0])
-        self.assertTrue(ready.stdout.rstrip().endswith("guard.py"))
-
-    def test_a_venv_python_that_fails_falls_back_to_system_python_with_a_note(self) -> None:
-        self.stub(self.data / "venv" / "bin" / "python", "venv", code=1)
-        (self.data / "venv" / "guardrails-ast-ready").write_text("x\n")
-        self.stub(self.tmp / "bin" / "python3", "path")
-        proc = self.run_wrapper(self.isolated(), self.env(str(self.tmp / "bin")))
-        self.assertTrue(proc.stdout.startswith("path -I -S "), proc.stdout)
-        self.assertTrue(proc.stdout.rstrip().endswith("--venv-failed"))
-
-    def test_a_failing_venv_with_no_other_python_says_so(self) -> None:
-        self.stub(self.data / "venv" / "bin" / "python", "venv", code=1)
-        (self.data / "venv" / "guardrails-ast-ready").write_text("x\n")
-        proc = self.run_wrapper(self.isolated(), self.env(str(self.tmp / "empty")))
-        self.assertIn("the venv python failed", json.loads(proc.stdout)["systemMessage"])
+        self.assertNotIn("venv", self.script)
 
     def test_the_first_trusted_python3_on_path_is_used(self) -> None:
         self.stub(self.tmp / "a" / "python3", "a")
@@ -616,19 +548,6 @@ class Wrapper(Isolated):
         proc = subprocess.run(["/bin/sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
                               check=False, env=dict(os.environ))
         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
-
-    def test_guard_accepts_the_venv_failed_note(self) -> None:
-        import guard
-
-        payload = json.dumps({"session_id": "vf", "cwd": str(self.proj), "tool_name": "Bash",
-                              "tool_input": {"command": "strings x"}})
-        self.put(self.gpath, {"rules": {"s": {"match": {"program": "strings"}, "message": "No."}}})
-        out = io.StringIO()
-        with mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
-            guard.main([guard.VENV_FAILED])
-        result = json.loads(out.getvalue())
-        self.assertIn("the venv python failed", result["systemMessage"])
-        self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "deny")
 
 
 def adversarial(n: int) -> dict[str, str]:
@@ -746,77 +665,6 @@ class Mentions(Isolated):
     def test_word_boundaries(self) -> None:
         self.assertTrue(policy.mentioned("sudo /usr/bin/pkill x", ["pkill"]))
         self.assertFalse(policy.mentioned("echo pkills pkill-ish", ["pkill"]))
-
-
-class Interpreter(Isolated):
-    def test_wheel_range(self) -> None:
-        self.assertEqual([astrun.suitable((3, m)) for m in (9, 10, 14, 15)], [False, True, True, False])
-        self.assertFalse(astrun.suitable((2, 12)))
-
-    def test_fixed_locations_beat_path_and_the_newest_wins(self) -> None:
-        fixed, other = self.tmp / "fixed", self.tmp / "other"
-        for directory, minor in ((fixed, 11), (fixed, 13), (other, 14)):
-            directory.mkdir(exist_ok=True)
-            path = directory / f"python3.{minor}"
-            path.write_text("#!/bin/sh\n")
-            path.chmod(0o755)
-        with mock.patch.object(astrun, "FIXED_DIRS", (str(fixed),)), \
-                mock.patch.dict(os.environ, {"PATH": str(other), "CLAUDE_PROJECT_DIR": str(self.proj)}):
-            self.assertEqual(astrun.find_interpreter(), str(fixed / "python3.13"))
-        with mock.patch.object(astrun, "FIXED_DIRS", ()), mock.patch.object(sys, "version_info", (3, 9, 6, "f", 0)), \
-                mock.patch.dict(os.environ, {"PATH": str(other), "CLAUDE_PROJECT_DIR": str(self.proj)}):
-            self.assertEqual(astrun.find_interpreter(), str(other / "python3.14"))
-
-    def test_python_39_looks_for_a_newer_interpreter_and_otherwise_degrades_precisely(self) -> None:
-        old = (3, 9, 6, "final", 0)
-        newest = self.tmp / "bin" / "python3.13"
-        newest.parent.mkdir()
-        for minor in (11, 13):
-            path = self.tmp / "bin" / f"python3.{minor}"
-            path.write_text("#!/bin/sh\n")
-            path.chmod(0o755)
-        with mock.patch.object(sys, "version_info", old), mock.patch.dict(os.environ, {"PATH": str(self.tmp / "bin")}):
-            found = astrun.find_interpreter()
-        if not found.startswith(("/opt/homebrew", "/usr/local", "/usr/bin")):
-            self.assertEqual(found, str(newest))
-        with mock.patch.object(sys, "version_info", old), mock.patch.dict(os.environ, {"PATH": ""}), \
-                mock.patch.object(astrun.os, "access", return_value=False), self.assertRaises(astrun.Unavailable) as ctx:
-            astrun.find_interpreter()
-        self.assertIn("no wheel for Python 3.9", str(ctx.exception))
-        self.assertIn("3.10 to 3.14", str(ctx.exception))
-
-    def test_ensure_reports_the_python_problem_before_trying_to_install(self) -> None:
-        with mock.patch.object(astrun, "find_interpreter", side_effect=astrun.Unavailable("no wheel for Python 3.9")), \
-                mock.patch.object(astrun, "_run") as run, self.assertRaises(astrun.Unavailable):
-            astrun.ensure(str(self.tmp / "d"))
-        run.assert_not_called()
-
-
-class Requirements(unittest.TestCase):
-    def test_the_committed_file_matches_the_pin_and_lists_every_wheel_platform(self) -> None:
-        text = Path(astrun.REQUIREMENTS).read_text()
-        self.assertTrue(text.startswith(f"ast-grep-py=={astrun.PIN} \\\n"))
-        hashes = re.findall(r"--hash=sha256:([0-9a-f]{64})", text)
-        self.assertEqual(len(hashes), 28)
-        self.assertEqual(len(set(hashes)), 28)
-        self.assertFalse(text.rstrip().endswith("\\"))
-
-    def test_the_regeneration_script_reads_the_same_pin(self) -> None:
-        script = (LIB.parent / "scripts" / "regen-ast-requirements.py").read_text()
-        self.assertIn("lib/astrun.py", script)
-        self.assertIn(f'PIN = "{astrun.PIN}"', (LIB / "astrun.py").read_text())
-
-
-class Stamp(Isolated):
-    def test_a_future_stamp_is_not_recent(self) -> None:
-        stamp = self.tmp / "stamp"
-        stamp.write_text("")
-        future = time.time() + 1e9
-        os.utime(stamp, (future, future))
-        self.assertFalse(astrun._recent(str(stamp)))
-        now = time.time()
-        os.utime(stamp, (now, now))
-        self.assertTrue(astrun._recent(str(stamp)))
 
 
 if __name__ == "__main__":

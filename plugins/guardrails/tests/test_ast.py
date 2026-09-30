@@ -8,13 +8,13 @@ import re
 import stat
 import time
 import unittest
-from pathlib import Path
 from collections.abc import Iterator
 from typing import Any, ClassVar
 from unittest import mock
 
-from helpers import AST_PIN, AstIsolated, Isolated, ast_mode
+from helpers import AstIsolated, Isolated
 
+import astbin
 import astrun
 import engine
 import matching
@@ -138,22 +138,24 @@ class Kinds(AstIsolated):
 
     def test_lexer_commands_are_always_united_with_the_tree(self) -> None:
         for command in ("if a; then b", "a; b"):
-            response = astrun.call({"op": "eval", "command": command, "rules": {"r": BY_NAME},
+            response = self.call({"op": "eval", "command": command, "rules": {"r": BY_NAME},
                                     "lexed": [{"src": "pkill x", "wrapped": False}]})
             self.assertEqual(response["verdicts"], {"r": "direct"}, command)
-        self.assertTrue(astrun.call({"op": "eval", "command": "if a; then b", "rules": {}})["broken"])
 
     def test_unbalanced_quotes_count_as_broken(self) -> None:
-        for command in ('echo "unterminated', "a |", "echo $(", "cat <<EOF\nx"):
-            self.assertTrue(astrun.call({"op": "eval", "command": command, "rules": {}})["broken"], command)
+        def broken(command: str) -> bool:
+            return self.call({"op": "tree", "command": command})["units"][0]["broken"]
+
+        for command in ('echo "unterminated', "a |", "echo $(", "cat <<EOF\nx", "if a; then b"):
+            self.assertTrue(broken(command), command)
         for command in ("cat <<EOF\nEOF", "x=", "echo ''", "a && b", "f() { :; }", "echo $((1+2))"):
-            self.assertFalse(astrun.call({"op": "eval", "command": command, "rules": {}})["broken"], command)
+            self.assertFalse(broken(command), command)
 
     def test_limits_are_reported_not_silent(self) -> None:
-        deep = astrun.call({"op": "eval", "command": "sudo " * 40 + "pkill x", "rules": {"r": BY_NAME},
+        deep = self.call({"op": "eval", "command": "sudo " * 40 + "pkill x", "rules": {"r": BY_NAME},
                             "wrappers": wrappers.effective()})
         self.assertTrue(deep["limited"])
-        fine = astrun.call({"op": "eval", "command": "sudo " * 12 + "pkill x", "rules": {"r": BY_NAME},
+        fine = self.call({"op": "eval", "command": "sudo " * 12 + "pkill x", "rules": {"r": BY_NAME},
                             "wrappers": wrappers.effective()})
         self.assertFalse(fine["limited"])
         self.assertEqual(fine["verdicts"], {"r": "wrapped"})
@@ -165,6 +167,80 @@ class Kinds(AstIsolated):
         self.assertEqual(ev.kinds["good"], "direct")
         self.assertIn("bad", ev.invalid)
         self.assertEqual([k for k, _ in ev.warnings()], ["ast-invalid:bad"])
+
+
+PK = "pk" + "ill"
+
+
+class Worker(AstIsolated):
+    """The CLI-backed worker: batching, offsets, sanitising and its time bound."""
+
+    def verdict(self, command: str, ast: dict[str, Any] | None = None, **request: Any) -> Any:
+        rules = {"r": ast or {"pattern": f"{KILL} $$$"}}
+        return self.call({"op": "eval", "command": command, "rules": rules, "wrappers": wrappers.effective(),
+                          **request})["verdicts"]["r"]
+
+    def test_single_source_stdin_and_many_source_directory_scans_agree(self) -> None:
+        import astbin
+        from astcli import Cli, Src
+
+        engine = astbin.locate(str(self.data))
+        cli = Cli(engine.binary, time.monotonic() + 30)
+        rules = '{"id":"g0","language":"bash","rule":{"pattern":"echo $$$"}}'
+        texts = ["echo a", "ls", "echo 'é' && echo \U0001F600 b", "sudo echo x | cat"]
+        alone = [cli.scan(rules, [Src(t)])[0] for t in texts]
+        batched = cli.scan(rules, [Src(t) for t in texts])
+        self.assertEqual(alone, batched)
+        self.assertTrue(any(alone))
+
+    def test_ignore_files_around_the_temp_directory_cannot_hide_a_unit(self) -> None:
+        import tempfile
+
+        scratch = self.tmp / "scratch"
+        scratch.mkdir()
+        (scratch / ".gitignore").write_text("*\n")
+        (scratch / ".ignore").write_text("*\n")
+        with mock.patch.object(tempfile, "tempdir", str(scratch)):
+            self.assertEqual(self.verdict(f"sudo {PK} x", {"pattern": f"{PK} $$$"}), "wrapped")
+        self.assertEqual([p.name for p in scratch.iterdir() if p.name.startswith("guardrails-")], [])
+
+    def test_offsets_survive_multibyte_text_before_the_region(self) -> None:
+        for prefix in ("echo 'é é é'", "echo 日本語 \U0001F600", "x=é"):
+            self.assertEqual(self.verdict(f"{prefix} && sudo {PK} x", {"pattern": f"{PK} $$$"}), "wrapped", prefix)
+            self.assertEqual(self.verdict(f"{prefix}; {PK} x", {"pattern": f"{PK} $$$"}), "direct", prefix)
+
+    def test_rules_with_unusual_characters_reach_the_engine_intact(self) -> None:
+        for text in ("echo \u00e9\U0001F600", "echo a\u2028b", "echo a\u0085b", "echo \"q\" 'r' \\s"):
+            self.assertEqual(self.verdict(text, {"pattern": text}), "direct", text)
+        self.assertEqual(self.verdict("echo a\u2028b", {"kind": "word", "regex": "a\u2028b"}), "direct")
+
+    def test_nul_and_lone_surrogates_do_not_break_the_engine(self) -> None:
+        self.assertEqual(self.verdict(f"echo a\x00b; {KILL} x"), "direct")
+        self.assertEqual(self.verdict(f"echo \ud800; sudo {KILL} x"), "wrapped")
+
+    def test_the_expansion_time_budget_marks_the_command_limited(self) -> None:
+        import astworker
+
+        request = {"op": "eval", "command": f"sudo env nice {KILL} x", "rules": {"r": BY_NAME},
+                   "wrappers": wrappers.effective()}
+        self.assertFalse(self.call(request)["limited"])
+        with mock.patch.object(astworker, "EXPANSION_BUDGET", -1.0):
+            self.assertTrue(self.call(request)["limited"])
+
+    def test_the_unit_cap_and_the_budget_bound_the_worst_case(self) -> None:
+        started = time.monotonic()
+        response = self.call({"op": "eval", "command": "sudo true; " * 600 + "pk" + "ill x", "rules": {"r": BY_NAME},
+                              "wrappers": wrappers.effective()})
+        self.assertLess(time.monotonic() - started, 1.5)
+        self.assertTrue(response["limited"])
+        self.assertEqual(response["verdicts"], {"r": "direct"})
+
+    def test_tree_nodes_keep_the_leaf_rules(self) -> None:
+        nodes = self.call({"op": "tree", "command": "echo \"\" 'a b' x"})["units"][0]["nodes"]
+        shown = {(kind, text) for _, kind, text in nodes}
+        self.assertIn(("string", None), shown)
+        self.assertIn(("raw_string", "'a b'"), shown)
+        self.assertIn(("command_name", "echo"), shown)
 
 
 class Validation(Isolated):
@@ -185,21 +261,6 @@ class Validation(Isolated):
         policy.validate_rule({"match": {"ast": {"kind": "command"}}, "message": "m"})
         with self.assertRaises(policy.Invalid):
             policy.validate_rule({"match": {"args": "x"}, "message": "m"})
-
-    def test_ast_pin_is_consistent(self) -> None:
-        self.assertEqual(astrun.PIN, AST_PIN)
-        text = Path(astrun.REQUIREMENTS).read_text()
-        self.assertTrue(text.startswith(f"ast-grep-py=={AST_PIN} "))
-        self.assertGreaterEqual(text.count("--hash=sha256:"), 16)
-        self.assertNotIn("--index-url", text)
-        venv_step, install_step = astrun.uv_steps("uv", "/t/venv", True)
-        for flag in ("--no-config", "--require-hashes", "--only-binary", "--offline", "--default-index"):
-            self.assertIn(flag, install_step)
-        self.assertIn("--no-config", venv_step)
-        steps = astrun.pip_steps("/t/venv")
-        for flag in ("--require-hashes", "--isolated", "--only-binary", "--index-url", "--no-deps"):
-            self.assertIn(flag, steps[1])
-        self.assertIn("-I", steps[0])
 
 
 class PlainLexer(unittest.TestCase):
@@ -518,7 +579,6 @@ class WorkedExample(AstIsolated):
     """The three rules in the README run through the real engine and select exactly what the README says."""
 
     def rules(self) -> list[dict[str, Any]]:
-        import re
 
         from helpers import ROOT
 
@@ -541,54 +601,13 @@ class WorkedExample(AstIsolated):
             self.assertEqual(got, want)
 
 
-class RealVenv(Isolated):
-    def setUp(self) -> None:
-        super().setUp()
-        if ast_mode() is None:
-            self.skipTest("ast-grep-py cannot be installed here")
-        patch = mock.patch.object(astrun, "BUILD_ALLOWED", True)
-        patch.start()
-        self.addCleanup(patch.stop)
-        try:
-            astrun.ensure(str(self.data), 120.0)
-        except astrun.Unavailable as exc:
-            self.skipTest(f"the venv cannot be built here: {exc}")
-
-    def test_hash_verified_install_answers_with_the_pinned_version(self) -> None:
-        response = astrun.call({"op": "eval", "command": "sudo pkill x", "rules": {"a": BY_NAME, "b": NESTED},
-                                "wrappers": wrappers.effective()}, str(self.data))
-        self.assertEqual(response["version"], AST_PIN)
-        self.assertEqual(response["verdicts"], {"a": "wrapped", "b": None})
-        venv = astrun.venv_dir(str(self.data))
-        self.assertTrue(astrun.ready(venv))
-        self.assertTrue(venv.startswith(str(self.data)))
-
-    def test_hook_and_cli_use_the_installed_wheel(self) -> None:
-        self.put(self.gpath, {"rules": {"by-name": {"match": {"ast": BY_NAME}, "message": "No kill."}}})
-        out = self.hook("sudo pkill x")
-        assert out is not None
-        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-        code, out_text, _ = self.cli("rule", "ast", "sudo pkill x")
-        self.assertEqual(code, 0)
-        self.assertIn("through sudo", out_text)
-
-    def test_a_tampered_requirements_hash_refuses_to_install(self) -> None:
-        bad = self.tmp / "bad-requirements.txt"
-        bad.write_text(re.sub(r"--hash=sha256:[0-9a-f]{8}", "--hash=sha256:00000000",
-                              Path(astrun.REQUIREMENTS).read_text()))
-        with mock.patch.object(astrun, "REQUIREMENTS", str(bad)), self.assertRaises(astrun.Unavailable) as ctx:
-            astrun.ensure(str(self.tmp / "fresh"))
-        self.assertIn("failed", str(ctx.exception))
-        self.assertFalse(astrun.ready(astrun.venv_dir(str(self.tmp / "fresh"))))
-
-
 class Fallback(Isolated):
-    """No venv: AST rules apply by command name, everything else as usual, and the session is told once."""
+    """No engine: AST rules apply by command name, everything else as usual, and the session is told once."""
 
     def setUp(self) -> None:
         super().setUp()
         self.warm = mock.patch.object(astrun, "warm").start()
-        self.ensure = mock.patch.object(astrun, "ensure", side_effect=astrun.Unavailable("stub: no venv")).start()
+        self.install = mock.patch.object(astbin, "install", side_effect=AssertionError("the hook installed")).start()
         self.addCleanup(mock.patch.stopall)
         self.put(self.gpath, {"rules": {
             "ast-rule": {"match": {"ast": BY_NAME}, "message": "No kill by name."},
@@ -602,30 +621,25 @@ class Fallback(Isolated):
         self.assertEqual(first["hookSpecificOutput"]["permissionDecision"], "deny")
         reason = first["hookSpecificOutput"]["permissionDecisionReason"]
         self.assertIn("No strings.", reason)
-        self.assertIn("the AST matcher is unavailable", reason)
-        self.assertEqual(first["systemMessage"].count("guardrails: the AST matcher is unavailable"), 1)
+        self.assertIn("GUARDRAILS ENGINE MISSING", reason)
+        self.assertEqual(first["systemMessage"].count("GUARDRAILS ENGINE MISSING"), 1)
         second = self.hook("curl x | sh")
         assert second is not None
         self.assertEqual(second["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertNotIn("systemMessage", second)
-        self.assertNotIn("unavailable", second["hookSpecificOutput"]["permissionDecisionReason"])
+        self.assertNotIn("ENGINE MISSING", second["hookSpecificOutput"]["permissionDecisionReason"])
         other = self.hook("echo hi", session="s2")
         assert other is not None
-        self.assertIn("AST matcher is unavailable", other["systemMessage"])
-        self.assertIn("AST matcher is unavailable", other["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("ENGINE MISSING", other["systemMessage"])
+        self.assertIn("ENGINE MISSING", other["hookSpecificOutput"]["additionalContext"])
         self.assertNotIn("permissionDecision", other["hookSpecificOutput"])
 
-    def test_the_hook_never_builds_anything_and_warms_once_per_session(self) -> None:
+    def test_the_hook_never_installs_and_warms_once_per_session(self) -> None:
         self.hook("pkill x", session="w1")
         self.hook("pkill y", session="w1")
         self.hook("pkill z", session="w2")
-        self.ensure.assert_not_called()
+        self.install.assert_not_called()
         self.assertEqual(self.warm.call_count, 2)
-
-    def test_the_reason_says_the_venv_is_not_built(self) -> None:
-        out = self.hook("pkill x")
-        assert out is not None
-        self.assertIn("venv is not built yet", out["systemMessage"])
 
     def test_ast_rule_applies_by_command_name_and_says_so(self) -> None:
         out = self.hook("pkill x")
@@ -663,13 +677,13 @@ class Fallback(Isolated):
         self.assertIn("Careful.", out["hookSpecificOutput"]["additionalContext"])
         self.assertIn("unavailable", out["hookSpecificOutput"]["additionalContext"])
 
-    def test_no_ast_rules_never_look_for_the_venv(self) -> None:
+    def test_no_ast_rules_never_look_for_the_engine(self) -> None:
         self.put(self.gpath, {"rules": {"strings": {"match": {"program": "strings"}, "message": "No."}}})
         with mock.patch.object(astrun, "call", side_effect=AssertionError("called")):
             self.assertIsNotNone(self.hook("strings x"))
             self.assertIsNone(self.hook("ls"))
 
-    def test_disabled_or_filtered_ast_rules_never_look_for_the_venv(self) -> None:
+    def test_disabled_or_filtered_ast_rules_never_look_for_the_engine(self) -> None:
         self.put(self.gpath, {"rules": {"a": {"match": {"ast": BY_NAME}, "message": "m", "enabled": False},
                                         "b": {"match": {"ast": BY_NAME}, "message": "m", "requires": ["nope-xyz"]}}})
         with mock.patch.object(astrun, "call", side_effect=AssertionError("called")):
@@ -681,6 +695,7 @@ class Fallback(Isolated):
         self.assertEqual(code, 0)
         self.assertIn("the AST matcher could not run", out)
         self.assertIn("applied only by command name", out)
+        self.assertIn("guardrails engine install", out)
         self.assertIn("match  pkill x", out)
         self.assertIn("-      ls -la", self.cli("rule", "test", "--json", rule, "ls -la")[1])
         self.assertIn("match  zzz", out)
@@ -692,6 +707,7 @@ class Fallback(Isolated):
         code, out, _ = self.cli("rule", "add", "r2", "--json", json.dumps({"match": {"ast": BY_NAME}, "message": "m"}))
         self.assertEqual(code, 0)
         self.assertIn("not compile-checked", out)
+        self.assertIn("guardrails engine install", out)
         code, _, _err = self.cli("rule", "add", "r3", "--json", json.dumps({"match": {"ast": {"bogus": 1}},
                                                                             "message": "m"}))
         self.assertEqual(code, 2)
@@ -700,172 +716,54 @@ class Fallback(Isolated):
         code, _, err = self.cli("rule", "ast", "ls")
         self.assertEqual(code, 2)
         self.assertIn("AST engine is unavailable", err)
+        self.assertIn("guardrails engine install", err)
         out = self.cli("status")[1]
         self.assertIn("cannot be evaluated", out)
-
-
-class Builder(Isolated):
-    """Building the venv, with the external commands stubbed."""
-
-    def setUp(self) -> None:
-        super().setUp()
-        self.calls: list[list[str]] = []
-        self.result = mock.Mock(returncode=1, stderr="nope", stdout="")
-
-        def fake_run(cmd: list[str], payload: Any, timeout: float, env: dict[str, str], cwd: str) -> Any:
-            self.calls.append(cmd)
-            return self.result
-
-        for patch in (mock.patch.object(astrun, "_run", fake_run),
-                      mock.patch.object(astrun, "uv_path", return_value="/stub/uv"),
-                      mock.patch.object(astrun, "find_interpreter", return_value="/stub/python3.14")):
-            patch.start()
-            self.addCleanup(patch.stop)
-        self.dir = str(self.tmp / "d")
-
-    def test_a_failed_build_writes_the_stamp_and_later_calls_skip_it(self) -> None:
-        with self.assertRaises(astrun.Unavailable):
-            astrun.ensure(self.dir)
-        first = len(self.calls)
-        self.assertGreater(first, 0)
-        self.assertTrue((Path(self.dir) / astrun.STAMP).exists())
-        with self.assertRaises(astrun.Unavailable):
-            astrun.ensure(self.dir)
-        self.assertEqual(len(self.calls), first)
-
-    def test_a_timed_out_build_writes_the_stamp_too(self) -> None:
-        def hang(*_: Any) -> Any:
-            raise astrun.Unavailable("timed out after 4.0s")
-
-        with mock.patch.object(astrun, "_run", hang), self.assertRaises(astrun.Unavailable):
-            astrun.ensure(self.dir)
-        self.assertTrue((Path(self.dir) / astrun.STAMP).exists())
-
-    def test_uv_steps_when_uv_is_found(self) -> None:
-        with self.assertRaises(astrun.Unavailable):
-            astrun.ensure(self.dir)
-        self.assertEqual(self.calls[0][:2], ["/stub/uv", "venv"])
-        self.assertIn("/stub/python3.14", self.calls[0])
-
-    def test_pip_steps_when_uv_is_missing(self) -> None:
-        with mock.patch.object(astrun, "uv_path", return_value=None), self.assertRaises(astrun.Unavailable):
-            astrun.ensure(self.dir)
-        self.assertEqual(self.calls[0][:4], ["/stub/python3.14", "-I", "-m", "venv"])
-
-    def test_a_ready_venv_is_never_replaced_or_rebuilt(self) -> None:
-        venv = Path(astrun.venv_dir(self.dir))
-        (venv / "bin").mkdir(parents=True)
-        (venv / "bin" / "python").write_text("#!/bin/sh\n")
-        (venv / "bin" / "python").chmod(0o755)
-        (venv / astrun.READY).write_text(astrun.requirements_digest() + "\n")
-        self.assertEqual(astrun.ensure(self.dir), str(venv / "bin" / "python"))
-        self.assertEqual(self.calls, [])
-
-    def test_a_concurrent_builder_that_finishes_first_wins(self) -> None:
-        venv = Path(astrun.venv_dir(self.dir))
-
-        def builder(cmd: list[str], payload: Any, timeout: float, env: dict[str, str], cwd: str) -> Any:
-            if "venv" in cmd and cmd[1] == "venv":
-                Path(cmd[-1]).mkdir(parents=True)
-                (Path(cmd[-1]) / "bin").mkdir()
-                (Path(cmd[-1]) / "bin" / "python").write_text("new")
-                (Path(cmd[-1]) / "bin" / "python").chmod(0o755)
-            elif cmd[1] == "pip":
-                (venv / "bin").mkdir(parents=True)
-                (venv / "bin" / "python").write_text("winner")
-                (venv / "bin" / "python").chmod(0o755)
-                (venv / astrun.READY).write_text(astrun.requirements_digest() + "\n")
-            return mock.Mock(returncode=0, stderr="", stdout="")
-
-        with mock.patch.object(astrun, "_run", builder):
-            astrun.ensure(self.dir)
-        self.assertEqual((venv / "bin" / "python").read_text(), "winner")
-
-    def test_stale_build_leftovers_are_reaped_and_fresh_ones_kept(self) -> None:
-        root = Path(self.dir)
-        root.mkdir()
-        old, new = root / ".venv-old", root / ".venv-new"
-        aside = root / "venv.old-1"
-        for path in (old, new, aside):
-            path.mkdir()
-        past = time.time() - 3600
-        os.utime(old, (past, past))
-        os.utime(aside, (past, past))
-        astrun.maintain(self.dir)
-        self.assertFalse(old.exists())
-        self.assertFalse(aside.exists())
-        self.assertTrue(new.exists())
-
-    def test_a_venv_python_that_fails_or_prints_garbage_is_unavailable(self) -> None:
-        venv = Path(astrun.venv_dir(self.dir))
-        (venv / "bin").mkdir(parents=True)
-        (venv / "bin" / "python").write_text("#!/bin/sh\n")
-        (venv / "bin" / "python").chmod(0o755)
-        (venv / astrun.READY).write_text(astrun.requirements_digest() + "\n")
-        for result in (mock.Mock(returncode=1, stdout="", stderr="Segmentation fault"),
-                       mock.Mock(returncode=0, stdout="not json", stderr=""),
-                       mock.Mock(returncode=0, stdout='{"ok": true}', stderr="")):
-            self.result = result
-            with self.assertRaises(astrun.Unavailable):
-                astrun.call({"op": "eval", "command": "x", "rules": {}}, self.dir)
-
-    def test_the_lock_is_honoured(self) -> None:
-        import fcntl
-
-        root = Path(self.dir)
-        root.mkdir()
-        fd = os.open(root / astrun.LOCK, os.O_RDWR | os.O_CREAT)
-        fcntl.flock(fd, fcntl.LOCK_EX)
-        try:
-            with self.assertRaises(astrun.Unavailable) as ctx:
-                astrun.ensure(self.dir, 0.3)
-            self.assertIn("another process", str(ctx.exception))
-            self.assertEqual(self.calls, [])
-        finally:
-            os.close(fd)
-
-    def test_the_import_check_uses_the_remaining_budget(self) -> None:
-        timeouts: list[float] = []
-
-        def spy(cmd: list[str], payload: Any, timeout: float, env: dict[str, str], cwd: str) -> Any:
-            timeouts.append(timeout)
-            if cmd[1] == "venv":
-                Path(cmd[-1]).mkdir(parents=True)
-            return mock.Mock(returncode=0, stderr="", stdout="")
-
-        with mock.patch.object(astrun, "_run", spy):
-            astrun.ensure(self.dir, 3.0)
-        self.assertTrue(timeouts and all(t <= 3.0 for t in timeouts), timeouts)
+        self.assertIn("npm ci --ignore-scripts", out)
 
 
 class SessionStart(Isolated):
-    def test_warms_only_when_an_enabled_ast_rule_exists(self) -> None:
-        with mock.patch.object(astrun, "warm") as warm:
-            for rules in ({"s": {"match": {"program": "strings"}, "message": "m"}},
-                          {"a": {"match": {"ast": BY_NAME}, "message": "m", "enabled": False}}):
-                self.put(self.gpath, {"rules": rules})
-                engine.run_warm(io.StringIO(json.dumps({"cwd": str(self.proj)})))
-            warm.assert_not_called()
-            self.put(self.ppath, {"rules": {"b": {"match": {"ast": BY_NAME}, "message": "m"}}})
-            engine.run_warm(io.StringIO(json.dumps({"cwd": str(self.proj)})))
-            warm.assert_called_once_with(str(self.data))
+    def setUp(self) -> None:
+        super().setUp()
+        self.popen = mock.patch.object(astrun.subprocess, "Popen").start()
+        self.addCleanup(mock.patch.stopall)
 
-    def test_the_detached_build_gets_a_scrubbed_environment_and_respects_the_stamp(self) -> None:
+    def warm_up(self) -> None:
+        engine.run_warm(io.StringIO(json.dumps({"cwd": str(self.proj)})))
+
+    def test_warms_only_when_an_enabled_ast_rule_exists(self) -> None:
+        for rules in ({"s": {"match": {"program": "strings"}, "message": "m"}},
+                      {"a": {"match": {"ast": BY_NAME}, "message": "m", "enabled": False}}):
+            self.put(self.gpath, {"rules": rules})
+            self.warm_up()
+        self.popen.assert_not_called()
+        self.put(self.ppath, {"rules": {"b": {"match": {"ast": BY_NAME}, "message": "m"}}})
+        self.warm_up()
+        self.popen.assert_called_once()
+
+    def test_the_detached_install_gets_a_scrubbed_environment_and_respects_the_backoff(self) -> None:
+        self.put(self.gpath, {"rules": {"b": {"match": {"ast": BY_NAME}, "message": "m"}}})
         hostile = {"UV_FIND_LINKS": "/evil", "PIP_INDEX_URL": "http://evil", "PYTHONPATH": "/evil",
-                   "UV_CACHE_DIR": "/cache"}
-        with mock.patch.dict(os.environ, hostile), mock.patch.object(astrun.subprocess, "Popen") as popen:
-            astrun.warm(str(self.data))
-        args, kwargs = popen.call_args
-        self.assertEqual(args[0][2:], ["warm-install", str(self.data)])
-        self.assertEqual(kwargs["env"].get("UV_CACHE_DIR"), "/cache")
-        for name in ("UV_FIND_LINKS", "PIP_INDEX_URL", "PYTHONPATH", "CLAUDE_PROJECT_DIR"):
+                   "NODE_OPTIONS": "--require /evil", "HTTPS_PROXY": "http://proxy:1", "PATH": "/repo/bin"}
+        with mock.patch.dict(os.environ, hostile):
+            self.warm_up()
+        args, kwargs = self.popen.call_args
+        self.assertEqual(args[0][-2:], ["warm-install", str(self.data)])
+        self.assertEqual(kwargs["env"]["HTTPS_PROXY"], "http://proxy:1")
+        self.assertEqual(kwargs["env"]["PATH"], "/usr/bin:/bin")
+        for name in ("UV_FIND_LINKS", "PIP_INDEX_URL", "PYTHONPATH", "NODE_OPTIONS", "CLAUDE_PROJECT_DIR"):
             self.assertNotIn(name, kwargs["env"])
         self.assertTrue(kwargs["start_new_session"])
-        self.data.mkdir(parents=True, exist_ok=True)
-        (self.data / astrun.STAMP).write_text("")
-        with mock.patch.object(astrun.subprocess, "Popen") as popen:
-            astrun.warm(str(self.data))
-        popen.assert_not_called()
+        astbin.record_failure(str(self.data), "offline")
+        self.popen.reset_mock()
+        self.warm_up()
+        self.popen.assert_not_called()
+
+    def test_a_usable_engine_or_an_unsupported_platform_never_warms(self) -> None:
+        self.put(self.gpath, {"rules": {"b": {"match": {"ast": BY_NAME}, "message": "m"}}})
+        with mock.patch.object(astbin, "detect", side_effect=astbin.Missing("unsupported platform")):
+            self.warm_up()
+        self.popen.assert_not_called()
 
     def test_hooks_json_registers_warm_up_and_a_roomy_timeout(self) -> None:
         from helpers import HOOKS

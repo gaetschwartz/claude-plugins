@@ -1,6 +1,6 @@
 """Run the stdlib matcher and the ast-compiled program/args/builtin matcher side by side and list disagreements.
 
-    uv run --quiet --no-project --with ast-grep-py==<pin> python tests/parity_study.py [--fuzz N] [--seed S]
+    python3 tests/parity_study.py [--fuzz N] [--seed S]   (needs the engine: `just engine`)
 """
 
 from __future__ import annotations
@@ -12,7 +12,6 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT / "lib"), str(ROOT / "tests")]
 
-import astrun
 import matching
 import policy
 from test_corpus import ALLOW, DENY, WARN
@@ -76,7 +75,6 @@ def run(commands: list[str]) -> list[tuple[str, str, str, bool]]:
 
 
 def main() -> int:
-    astrun.INPROCESS = True
     count, seed = 3000, 1
     args = sys.argv[1:]
     if "--fuzz" in args:

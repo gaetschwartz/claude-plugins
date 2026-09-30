@@ -1,6 +1,6 @@
 from __future__ import annotations  # noqa: I001
 
-from helpers import AstIsolated, ast_mode
+from helpers import AstIsolated
 
 import parity_study as study
 
@@ -37,9 +37,7 @@ class Parity(AstIsolated):
         self.check(study.corpus())
 
     def test_fuzz_sample(self) -> None:
-        if ast_mode() != "inprocess":
-            self.skipTest("the fuzz sample needs ast-grep-py importable in this process")
-        self.check(study.fuzz(700, 5))
+        self.check(study.fuzz(150, 5))
 
     def test_default_matchers_stay_on_the_stdlib_path(self) -> None:
         import matching

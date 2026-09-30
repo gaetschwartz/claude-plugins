@@ -1,0 +1,9 @@
+{
+  "name": "guardrails-engine",
+  "private": true,
+  "version": "0.0.0",
+  "description": "Installs the pinned ast-grep binary for the guardrails plugin; Claude Code runs npm ci for it.",
+  "dependencies": {
+    "@ast-grep/cli": "0.45.3"
+  }
+}

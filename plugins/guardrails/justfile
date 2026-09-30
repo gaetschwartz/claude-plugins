@@ -1,14 +1,22 @@
-# Run the test suite; the AST tests need ast-grep-py, which uv supplies (they skip with a message without it)
-test:
-    uv run --quiet --no-project --with ast-grep-py==0.45.3 python -m unittest discover -s tests -v
+# Install the pinned ast-grep binary (the wheel path) into the dev cache the tests use; skipped quietly when offline
+engine:
+    -CLAUDE_PLUGIN_DATA="$HOME/.cache/guardrails-engine-dev" python3 lib/guard.py engine install
 
-# Run the suite without uv: the tests that need ast-grep-py skip
-test-plain:
+# Run the test suite (the engine tests skip with a message when ast-grep cannot be installed)
+test: engine
     python3 -m unittest discover -s tests -v
 
+# Run the suite under macOS's /usr/bin/python3 (3.9), the oldest supported interpreter
+test-39: engine
+    /usr/bin/python3 -m unittest discover -s tests
+
 # Compare the stdlib matcher with the ast-compiled one (see README, Matcher parity)
-parity:
-    uv run --quiet --no-project --with ast-grep-py==0.45.3 python tests/parity_study.py
+parity: engine
+    python3 tests/parity_study.py
+
+# Rewrite lib/engine-manifest.json after bumping the pin in package.json and regenerating package-lock.json
+manifest:
+    python3 scripts/gen-engine-manifest.py
 
 # Lint + type-check (ty needs the lib dir on its search path)
 check:

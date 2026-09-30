@@ -181,7 +181,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     return (output or None), changed
 
 
-def run_hook(stdin: IO[str], stdout: IO[str], notes: tuple[str, ...] = ()) -> None:
+def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
     try:
         payload = json.load(stdin)
     except ValueError:
@@ -200,7 +200,7 @@ def run_hook(stdin: IO[str], stdout: IO[str], notes: tuple[str, ...] = ()) -> No
     except store.StateError:
         gstate, gstate_ok = {}, False
     managed, managed_problems = store.load_managed()
-    warnings = tuple(f"guardrails: {problem}" for problem in managed_problems) + notes
+    warnings = tuple(f"guardrails: {problem}" for problem in managed_problems)
     for warning in warnings:
         print(warning, file=sys.stderr)
     managed_ids = frozenset(policy.origins("rules", managed, {}, {}))
@@ -256,7 +256,7 @@ def run_hook(stdin: IO[str], stdout: IO[str], notes: tuple[str, ...] = ()) -> No
 
 
 def run_warm(stdin: IO[str]) -> None:
-    """SessionStart: fill the uv cache in the background, but only when some enabled rule needs the AST matcher."""
+    """SessionStart: fetch the ast-grep binary in the background, but only when some enabled rule needs it."""
     try:
         payload = json.load(stdin)
     except ValueError:

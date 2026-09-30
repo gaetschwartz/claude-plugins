@@ -6,6 +6,7 @@ import re
 from collections.abc import Sequence
 from typing import Any, Callable
 
+import ansic
 import wrappers as wrapper_table
 from shellwords import SimpleCommand
 
@@ -157,25 +158,11 @@ def ast_regexes(node: object) -> list[str]:
 
 
 ANSI_C = re.compile(r"\$'((?:\\.|[^'\\])*)'")
-ANSI_ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|([0-7]{1,3})|(.))", re.DOTALL)
-ANSI_SIMPLE = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "e": "\x1b", "f": "\f", "v": "\v"}
-
-
-def _ansi_decode(match: re.Match[str]) -> str:
-    def one(m: re.Match[str]) -> str:
-        hexa, uni, octal, other = m.groups()
-        if hexa or uni:
-            return chr(int(hexa or uni, 16))
-        if octal:
-            return chr(int(octal, 8) & 0xFF)
-        return ANSI_SIMPLE.get(other, other)
-
-    return ANSI_ESCAPE.sub(one, match.group(1))
 
 
 def normalized(command: str) -> str:
     """The text with shell quoting resolved, so p''kill, p\\kill and $'p\\x6bill' read as the name they run."""
-    text = ANSI_C.sub(_ansi_decode, command)
+    text = ANSI_C.sub(lambda m: ansic.decode(m.group(1)), command)
     text = re.sub(r"\\(.)", r"\1", text, flags=re.DOTALL)
     return text.replace("'", "").replace('"', "")
 

@@ -1,4 +1,4 @@
-"""Compile the program/args/builtin matchers into ast-grep rules (used by the parity study, GUARDRAILS_PARITY=ast)."""
+"""Compile the program/args/builtin matchers into ast-grep rules (used by the parity study)."""
 
 from __future__ import annotations
 

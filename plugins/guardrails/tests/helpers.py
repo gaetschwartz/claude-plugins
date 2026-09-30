@@ -19,38 +19,36 @@ HOOKS = ROOT / "hooks"
 LIB = ROOT / "lib"
 sys.path.insert(0, str(LIB))
 
+import astbin
 import render  # noqa: F401
 import store
 
-AST_PIN = "0.45.3"
+DEV_DATA = Path.home() / ".cache" / "guardrails-engine-dev"
+SKIP_AST = ("ast-grep is not installed: run `just engine` (or allow network access so the tests can install the "
+            "pinned wheel)")
+_SHARED: list[str] = []
 
 
-def ast_mode() -> str | None:
-    """How the AST matcher can run here: "inprocess" (ast_grep_py importable), "venv" (a hashed venv was built), or None."""
-    global _AST_MODE, _SHARED
-    if _AST_MODE is None:
+def shared_engine() -> str | None:
+    """The engine dir (`<data>/engine`) of a real pinned binary, from `just engine` or installed once per run."""
+    if not _SHARED:
+        _SHARED.append("")
         try:
-            import ast_grep_py  # noqa: F401  # ty: ignore[unresolved-import]
+            plat = astbin.detect()
+        except astbin.Missing:
+            return None
+        folder = tempfile.mkdtemp(prefix="guardrails-shared-engine-")
+        for data in (str(DEV_DATA), folder):
+            if astbin.wheel_probe(plat, data).path:
+                _SHARED[0] = astbin.engine_root(data)
+                break
+            if data == folder:
+                with contextlib.suppress(astbin.InstallError, OSError):
+                    astbin.install(data)
+                    if astbin.wheel_probe(plat, data).path:
+                        _SHARED[0] = astbin.engine_root(data)
+    return _SHARED[0] or None
 
-            _AST_MODE = "inprocess"
-        except ImportError:
-            import astrun
-
-            _SHARED = tempfile.mkdtemp(prefix="guardrails-shared-venv-")
-            with mock.patch.object(astrun, "BUILD_ALLOWED", True):
-                try:
-                    astrun.ensure(_SHARED, 120.0)
-                    _AST_MODE = "venv"
-                except astrun.Unavailable:
-                    _AST_MODE = ""
-    return _AST_MODE or None
-
-
-_SHARED: str | None = None
-_AST_MODE: str | None = None
-
-SKIP_AST = (f"ast-grep-py is unavailable: run the tests with `uv run --with ast-grep-py=={AST_PIN} python -m "
-            "unittest discover -s tests`, or with network access once so uv can cache it")
 
 SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR",
             "GUARDRAILS_MANAGED_PATH")
@@ -77,6 +75,12 @@ class Isolated(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, env, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
+        self.plugin_root = self.tmp / "plugin-root"
+        self.plugin_root.mkdir()
+        patch_root = mock.patch.object(astbin, "PLUGIN_ROOT", str(self.plugin_root))
+        patch_root.start()
+        self.addCleanup(patch_root.stop)
+        astbin.take_rejected()
 
     @property
     def gpath(self) -> Path:
@@ -123,25 +127,20 @@ class Isolated(unittest.TestCase):
 
 
 class AstIsolated(Isolated):
-    """Isolated state plus a working AST matcher (in-process when importable, else through a built venv), or a skip."""
+    """Isolated state plus the real pinned ast-grep binary behind the wheel path, or a skip."""
 
     def setUp(self) -> None:
         super().setUp()
-        mode = ast_mode()
-        if mode is None:
+        root = shared_engine()
+        if root is None:
             if os.environ.get("GUARDRAILS_REQUIRE_AST") == "1":
                 self.fail(SKIP_AST)
             self.skipTest(SKIP_AST)
+        patch = mock.patch.object(astbin, "engine_root", lambda state_dir: root)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def call(self, request: dict[str, Any]) -> dict[str, Any]:
         import astrun
 
-        if mode == "inprocess":
-            patch = mock.patch.object(astrun, "INPROCESS", True)
-            patch.start()
-            self.addCleanup(patch.stop)
-        else:
-            self.data.mkdir(parents=True, exist_ok=True)
-            os.symlink(os.path.join(_SHARED or "", "venv"), self.data / "venv")
-            real = astrun.workdir
-            patch = mock.patch.object(astrun, "workdir", lambda state_dir: real(state_dir) if state_dir else _SHARED)
-            patch.start()
-            self.addCleanup(patch.stop)
+        return astrun.call(request, str(self.data))

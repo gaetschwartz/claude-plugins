@@ -13,6 +13,8 @@ import re
 import shlex
 from typing import Any
 
+import ansic
+
 PUNCT = "();|&\n<>"
 KEYWORDS = {"if", "then", "else", "elif", "fi", "while", "until", "for",
             "select", "function", "do", "done", "case", "esac", "in", "!", "{", "}"}
@@ -197,7 +199,7 @@ def _commands(text: str, depth: int, extra: dict[str, dict[str, Any]]) -> list[S
         opts_with_arg.setdefault(name, set()).update(entry.get("flagsWithValue", ()))
 
     text, bodies = split_heredocs(text)
-    text = ANSI_C_QUOTED.sub("''", text)
+    text = ANSI_C_QUOTED.sub(lambda m: ansic.quoted(m.group(0)[2:-1]), text)
     cmds: list[SimpleCommand] = []
     current: SimpleCommand | None = None
     assigns: list[str] = []

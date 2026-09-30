@@ -152,7 +152,7 @@ class SkillFiles(unittest.TestCase):
                     continue
                 for flag in re.findall(r"(?<![\w-])--[a-z][a-z-]*", line):
                     with self.subTest(file=path.name, flag=flag):
-                        self.assertIn(flag, known | {"--help"})
+                        self.assertIn(flag, known | {"--help", "--ignore-scripts"})
 
     def test_referenced_files_exist(self) -> None:
         pattern = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9_./-]+)")
