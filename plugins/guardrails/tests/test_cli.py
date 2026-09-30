@@ -824,3 +824,129 @@ class PathNotWritable(Isolated):
         code, _, err = self.cli("rule", "rm", "x", "--scope", "managed")
         self.assertEqual(code, 2)
         self.assertIn(f"--scope managed --path {target}", err)
+
+
+class PathOptionEdges(Isolated):
+    def test_path_with_spaces_is_quoted_in_the_sudo_hint(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root ignores permissions")
+        ro = self.tmp / "ro dir"
+        ro.mkdir()
+        ro.chmod(0o555)
+        self.addCleanup(ro.chmod, 0o755)
+        target = str(ro / "x y.json")
+        code, _, err = self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", target)
+        self.assertEqual(code, 2)
+        self.assertIn(shlex.quote(target), err)
+
+    def test_path_with_spaces_is_written(self) -> None:
+        target = self.tmp / "a b" / "x y.json"
+        self.assertEqual(self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", str(target))[0], 0)
+        self.assertIn("x", self.get(target)["rules"])
+
+    def test_unwritable_existing_file_reports_file_and_sudo_with_path(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root ignores permissions")
+        target = self.tmp / "custom" / "ro.json"
+        self.put(target, {"rules": {}})
+        target.chmod(0o444)
+        self.addCleanup(target.chmod, 0o644)
+        code, _, err = self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", str(target))
+        self.assertEqual(code, 2)
+        self.assertIn("file is not writable", err)
+        self.assertIn(f"--path {target}", err)
+        self.assertEqual(self.get(target), {"rules": {}})
+
+    def test_tilde_is_expanded(self) -> None:
+        os.environ["HOME"] = str(self.tmp / "home")
+        code, _, _ = self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", "~/g.json")
+        self.assertEqual(code, 0)
+        self.assertTrue((self.tmp / "home" / "g.json").is_file())
+        self.assertFalse(Path("~").exists())
+
+    def test_path_with_project_on_a_write_verb_is_an_error_and_read_verbs_accept_it(self) -> None:
+        target = str(self.tmp / "p.json")
+        code, _, err = self.cli("rule", "add", "x", "--json", RULE, "--project", "--path", target)
+        self.assertEqual(code, 2)
+        self.assertIn("needs --scope managed", err)
+        self.assertEqual(self.cli("status", "--project", "--path", target)[0], 0)
+        self.assertEqual(self.cli("rule", "test", "--json", RULE, "strings x", "--path", target)[0], 0)
+
+    def test_path_equal_to_the_platform_default_is_not_an_extra_source(self) -> None:
+        self.put(self.dpath, {"rules": {"r": {"match": {"program": "pkill"}, "message": "m"}}})
+        out = self.cli("status", "--path", str(self.dpath))[1]
+        self.assertNotIn("managed --path", out)
+        self.assertEqual(out.count(f"managed state: {self.dpath}"), 1)
+        self.assertNotIn("the hook enforces", out)
+        self.assertNotIn("platform default managed file is absent", out)
+
+    def test_lower_ranked_file_cannot_switch_on_a_higher_mode(self) -> None:
+        self.put(self.dpath, {"rules": {"r": {"match": {"program": "pkill"}, "message": "m", "modes": ["m"]}},
+                              "modes": {"m": {}}})
+        self.put(self.mpath, {"modes": {"m": {"active": True}}})
+        out = self.cli("status")[1]
+        self.assertIn("m [managed]: inactive", out)
+        self.assertNotIn("SUSPENDED", out)
+        extra = self.tmp / "extra.json"
+        self.put(extra, {"modes": {"m": {"active": True}}})
+        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.tmp / "none.json")
+        out = self.cli("status", "--path", str(extra))[1]
+        self.assertIn("m [managed]: inactive", out)
+        self.assertNotIn("SUSPENDED", out)
+
+    def test_hook_keeps_enforcing_when_the_override_declares_active(self) -> None:
+        self.put(self.dpath, {"rules": {"r": {"match": {"program": "pkill"}, "message": "no pkill", "modes": ["m"]}},
+                              "modes": {"m": {}}})
+        self.put(self.mpath, {"modes": {"m": {"active": True}}})
+        out = self.hook("pkill x")
+        assert out is not None
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
+
+class RuleTestNotes(Isolated):
+    DRAFT = '{"match": {"program": "pkill"}, "message": "m"}'
+
+    def notes(self, *argv: str) -> str:
+        code, out, _ = self.cli("rule", "test", *argv, "pkill x")
+        self.assertEqual(code, 0)
+        return out
+
+    def test_plain_rule_has_no_notes(self) -> None:
+        self.assertNotIn("note:", self.notes("--json", self.DRAFT))
+
+    def test_disabled_rule(self) -> None:
+        out = self.notes("--json", '{"match": {"program": "pkill"}, "message": "m", "enabled": false}')
+        self.assertIn("note: rule is disabled", out)
+        self.assertIn("match  pkill x", out)
+        self.assertIn("match only means the matcher selects the command", out)
+
+    def test_missing_required_binary(self) -> None:
+        out = self.notes("--json", '{"match": {"program": "pkill"}, "message": "m", "requires": ["no-such-bin-xyz"]}')
+        self.assertIn("none of no-such-bin-xyz is installed here", out)
+
+    def test_modes_inactive_and_active(self) -> None:
+        self.cli("rule", "add", "r", "--json", '{"match": {"program": "pkill"}, "message": "m", "modes": ["m"]}')
+        self.cli("mode", "declare", "m")
+        self.assertIn("suspends this rule while mode m is active (none is now)", self.notes("--id", "r"))
+        self.cli("mode", "on", "m", "--session-id", "s1")
+        out = self.notes("--id", "r", "--session-id", "s1")
+        self.assertIn("mode m is active, so the hook suspends this rule right now", out)
+        self.assertIn("match  pkill x", out)
+
+    def test_hook_and_project_rules_disabled(self) -> None:
+        self.cli("rule", "add", "g", "--json", self.DRAFT)
+        self.cli("rule", "add", "p", "--json", self.DRAFT, "--project")
+        self.cli("disable")
+        self.assertIn("the global hook is disabled", self.notes("--id", "g"))
+        self.assertIn("the global hook is disabled", self.notes("--id", "p"))
+        self.cli("enable")
+        self.put(self.ppath, {**self.get(self.ppath), "enabled": False})
+        code, _, err = self.cli("rule", "test", "--id", "p", "pkill x")
+        self.assertEqual(code, 2)
+        self.assertIn("project rules are disabled, so project entries are not loaded", err)
+        self.assertNotIn("hook is disabled", self.notes("--id", "g"))
+
+    def test_managed_rule_survives_a_disabled_hook(self) -> None:
+        self.cli("rule", "add", "m", "--json", self.DRAFT, "--scope", "managed")
+        self.cli("disable")
+        self.assertNotIn("hook is disabled", self.notes("--id", "m"))

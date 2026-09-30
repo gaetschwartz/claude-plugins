@@ -2,7 +2,7 @@
 name: edit
 description: Use when the user explicitly asks to change, disable, enable, reword or remove an existing guardrails rule, e.g. "make the strings rule a warning", "turn off the pkill rule in this repo", "remove no-pkill". Never use it to get past a guardrails denial.
 argument-hint: "<id> [enable|disable|rm|key=value ...] [-s|--scope global|project|managed] [-P|--path <file>] [-y|--yes]"
-allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guardrails rule set *) Bash(guardrails rule rm *) Read(/${CLAUDE_PLUGIN_ROOT}/references/**) AskUserQuestion
+allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guardrails rule set *) Bash(guardrails rule rm *) AskUserQuestion
 ---
 
 # guardrails edit
@@ -37,9 +37,13 @@ Parse the text above; every long flag has a short one.
    - removal: confirm first with AskUserQuestion (`header` `Remove`, question "Remove rule `<id>` from `<scope>`?",
      options `Remove` and `Keep (Recommended)`) unless `-y`; then `guardrails rule rm <id> --scope <s> [--path <file>]
      --as-user --reason "…"`
+   - quote every `key=value` so the shell passes it as one argument: `'message=Don'\''t kill by name'`; a single quote
+     inside a value is written `'\''`
 3. After a change to `match` (program, args, builtin, regex), re-verify: `guardrails rule test --id <id> 'cmd' …` on the
    commands the user gives, or on sensible ones (a caught command, a wrapped form, a look-alike that must pass). Show
-   the result as the rule card from the presentation reference, tagged `yours` / `inferred`, with its `Verified` line.
+   the result as the rule card from the presentation reference, tagged `yours` / `inferred`, with its `Verified` line
+   worded "matcher checked with `rule test`" and every `note:` line `rule test` printed (disabled, missing binary,
+   suspending mode, hook off) repeated below it, since `rule test` checks only the matcher.
    A verdict that contradicts what the user wants goes back to the user, not into a silent second edit.
 4. Report the outcome in the rule-row style. On exit 2 because the file is not writable, print the message and the
    `sudo …` command exactly as printed and stop; do not run it.

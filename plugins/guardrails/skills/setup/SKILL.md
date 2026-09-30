@@ -1,8 +1,8 @@
 ---
 name: setup
-description: Use when the user wants to set up guardrails, install recommended guardrails presets, or asks which guardrails suit the work done on this machine or in this repo, e.g. "set up guardrails", "install the process-safety preset", "I do reverse engineering in this repo, configure guardrails for that".
+description: Use when the user wants to set up guardrails, install recommended guardrails presets, or asks which guardrails suit the work done on this machine or in this repo, e.g. "set up guardrails", "install the process-safety preset", "I do reverse engineering in this repo, configure guardrails for that". Never use it to get past a guardrails denial.
 argument-hint: "[<preset> ...] [-s|--scope global|project|managed] [-P|--path <file>] [-y|--yes]"
-allowed-tools: Bash(guardrails status *) Bash(guardrails preset *) Bash(guardrails mode *) Bash(guardrails rule rm *) Read(/${CLAUDE_PLUGIN_ROOT}/references/**) AskUserQuestion
+allowed-tools: Bash(guardrails status *) Bash(guardrails preset *) Bash(guardrails mode *) Bash(guardrails rule rm *) AskUserQuestion
 ---
 
 # Setting up guardrails

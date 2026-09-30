@@ -11,8 +11,8 @@
   file (or `GUARDRAILS_MANAGED_PATH`), and `--path <file>` (only with `--scope managed`) writes that managed-format
   file instead. The hook enforces a `--path` file only if `GUARDRAILS_MANAGED_PATH` points at it; the CLI prints that
   note and you repeat it to the user.
-- A project entry for a global or managed rule can only tighten it, and lower layers cannot change a managed rule at
-  all (exit 3 pointing at `--scope managed`). See `${CLAUDE_PLUGIN_ROOT}/references/matching.md` for the layering.
+- A project entry for a global or managed rule can only tighten it (`rule add` writes it with a note saying so), and
+  `rule set` / `rule rm` on a managed rule from another scope are refused (exit 3 pointing at `--scope managed`). See `${CLAUDE_PLUGIN_ROOT}/references/matching.md` for the layering.
 - `guardrails enable` / `guardrails disable` (hook on/off) are refused for agents. The user runs them in a terminal.
 - Exit codes: 0 ok, 2 invalid input (read the error and fix the input; a not-writable file is also 2 and prints the
   sudo command), 3 refused (relay the refusal to the user, do not work around it).

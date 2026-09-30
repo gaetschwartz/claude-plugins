@@ -389,7 +389,31 @@ def cmd_rule_rm(args: Args) -> int:
     return 0
 
 
+def effect_notes(args: Args, rule: policy.Rule, layers: list[str], mstate: store.State,
+                 gstate: store.State, pstate: store.State) -> list[str]:
+    notes = []
+    if rule.get("enabled") is False:
+        notes.append("rule is disabled")
+    if rule.get("requires") and not policy.requirements_met(rule):
+        notes.append(f"none of {'|'.join(rule['requires'])} is installed here, so the hook skips this rule")
+    if "managed" not in layers and gstate.get("enabled", True) is False:
+        notes.append("the global hook is disabled, so the hook does not enforce this rule")
+    listed = policy.modes_of(rule)
+    if listed:
+        sid = args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
+        session = view(view(gstate, "sessions"), sid) if sid else {}
+        active = policy.active_modes(policy.effective_modes(mstate, gstate, pstate), session)
+        on = [m for m in listed if m in active]
+        if on:
+            notes.append(f"mode {', '.join(on)} is active, so the hook suspends this rule right now")
+        else:
+            notes.append(f"the hook suspends this rule while mode {' or '.join(listed)} is active (none is now)")
+    return notes
+
+
 def cmd_rule_test(args: Args) -> int:
+    mstate, gstate, pstate = (managed_state(args), store.load(store.global_state_path()),
+                              store.load(store.project_state_path()))
     if args.json is not None:
         try:
             rule = json.loads(args.json)
@@ -398,15 +422,17 @@ def cmd_rule_test(args: Args) -> int:
         policy.validate_rule(rule)
         rule = policy.with_defaults(rule)
         label = "(draft)"
+        layers: list[str] = []
     else:
-        managed, gstate, pstate = (managed_state(args), store.load(store.global_state_path()),
-                                   store.load(store.project_state_path()))
-        rules = policy.effective_rules(managed, gstate, pstate)
+        rules = policy.effective_rules(mstate, gstate, pstate)
         if args.id not in rules:
-            raise Invalid(f"no rule '{args.id}'")
+            hidden = pstate.get("enabled", True) is False and args.id in view(pstate, "rules")
+            raise Invalid(f"no rule '{args.id}'" + (" (project rules are disabled, so project entries are not "
+                                                     "loaded)" if hidden else ""))
         rule = rules[args.id]
         policy.validate_rule(rule)
-        label = f"{args.id} [{'+'.join(policy.origins('rules', managed, gstate, pstate)[args.id])}]"
+        layers = policy.origins("rules", mstate, gstate, pstate)[args.id]
+        label = f"{args.id} [{'+'.join(layers)}]"
 
     flags = [str(rule["action"])]
     if rule.get("retry") == "same-command":
@@ -414,6 +440,11 @@ def cmd_rule_test(args: Args) -> int:
     if policy.modes_of(rule):
         flags.append("modes=" + ",".join(policy.modes_of(rule)))
     print(f"rule {label}: {' '.join(flags)}")
+    notes = effect_notes(args, rule, layers, mstate, gstate, pstate)
+    if notes:
+        print("note: match only means the matcher selects the command; the hook would not act on it as follows")
+    for note in notes:
+        print(f"note: {note}")
     for command in args.commands:
         try:
             cmds = simple_commands(command)
@@ -423,10 +454,6 @@ def cmd_rule_test(args: Args) -> int:
         shown = command.replace("\n", "\\n")
         print(f"  {marker:<7}{shown}")
     print(f"message: {policy.render(rule['message'])}")
-    if rule.get("requires") and not policy.requirements_met(rule):
-        print(f"note: none of {'|'.join(rule['requires'])} is installed here, so the hook skips this rule")
-    if rule.get("enabled") is False:
-        print("note: rule is disabled")
     return 0
 
 

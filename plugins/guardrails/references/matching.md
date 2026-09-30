@@ -1,7 +1,15 @@
 # How guardrails matches a command
 
-Everything here is what `lib/engine.py`, `lib/policy.py` and `lib/shellwords.py` do. `guardrails rule test` shows the
-verdict for any command, so check a claim before stating it.
+Everything here is what `lib/engine.py`, `lib/policy.py` and `lib/shellwords.py` do. Check a claim with
+`guardrails rule test` before stating it, but know what it checks.
+
+## What `rule test` does and does not check
+
+`rule test` answers one question per command: does the rule's matcher select it (`match`) or not (`-`). It does not
+apply modes, retry acknowledgements, `warn` versus `deny`, or hook-level switches. It prints `note:` lines when the
+hook would not act on a match: rule disabled, `requires` binary missing, a listed mode that suspends it (and whether
+that mode is active now), global hook or project rules disabled. Report those notes next to any verdict; never call a
+matcher result "blocked" on its own.
 
 ## What the matchers see
 
@@ -20,8 +28,15 @@ Looked through, so the real command is what gets matched:
 Not commands, so never matched by `program`: heredoc bodies, redirect targets (`> pkill`), the operand of
 `command -v`, and the arguments of other commands (`echo pkill`, `man pkill`).
 
-Not looked through, so invisible to `program`: `ssh host pkill x`, `find . -exec pkill {} ;`, `bash script.sh`
-(the script's contents), `python -c '…'`, `bash <<EOF … EOF` (the heredoc body is dropped).
+Not looked through, so invisible to `program`: `ssh host pkill x`, `find . -exec pkill {} ;`, the contents of a script
+(`bash script.sh`), `python -c '…'`, `bash <<EOF … EOF` (the heredoc body is dropped).
+
+`program` names the command the shell would run after looking through wrappers and shells. So the wrappers and shells
+themselves can never be matched by `program`: `program: ["sudo", "env", "xargs", "bash"]` matches none of `sudo ls`,
+`env ls`, `xargs ls`, `bash -c "ls"`. `bash script.sh` is parsed as program `script.sh` (so `program: script.sh`
+matches it, as it does `sh ./script.sh` and `./script.sh`), and `bash` is not seen. To block `sudo`, `bash`, or a
+shell invocation, use `match.regex` instead (for example `(^|[;&|]\s*)sudo\b` for a leading `sudo`); a regex is raw text
+matching, so it also has the false positives described below.
 
 ## The fields
 
@@ -73,8 +88,28 @@ Managed specifics:
 - Managed rules are always enforced unless their `modes` are declared by the managed file itself; a managed rule with
   no (declared) modes cannot be suspended by anything, and it still applies when the global hook is disabled.
 - Several managed files stack: platform default first, then the `GUARDRAILS_MANAGED_PATH` file, then a `--path` file
-  (status and `rule test` only); later ones can only tighten.
+  (status and `rule test` only); later ones can only tighten. For a mode an earlier file declares, a later file's
+  `active` is ignored, it cannot add suspending `modes` to an earlier rule, and it cannot make a mode the earlier file
+  left undeclared suspend that rule.
 - A project cannot switch on a mode the managed file declares, and cannot make a managed mode agent-enablable.
 - An unreadable or invalid managed file never turns the guard off: the broken part is skipped and reported.
+
+## Why a rule may not fire
+
+Check these in order when a command the matcher selects still runs:
+
+1. The global hook is disabled (`guardrails disable`): global and project rules are off, managed rules still apply.
+2. Project rules are disabled in the project state: project entries are dropped.
+3. The rule is disabled (`enabled: false`).
+4. `requires` lists binaries and none is installed.
+5. A listed mode is active (switched on persistently, or for this session), so the rule is suspended.
+6. `retry: same-command` and the identical command was already blocked once this session.
+7. `action: warn`: the command runs, the agent only gets the message.
+8. The rule is invalid (bad regex, unknown builtin): a global or project rule is skipped and only `status` reports it;
+   an invalid managed rule is skipped with a warning.
+9. The command has unbalanced quotes, so the raw-text fallback applies: `builtin` never matches there.
+10. The rule's `tool` is not `Bash`.
+11. A lower layer cannot loosen a higher one: a global or project entry with `enabled: false` or `action: warn` over a
+    managed or global rule has no effect, so a rule that "should have been turned off" may still be enforced.
 
 Hook failures fail open: if the hook itself errors, the command runs.

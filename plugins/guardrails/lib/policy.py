@@ -236,17 +236,21 @@ def managed_layer(sources: Sequence[tuple[str, object]]) -> tuple[dict[str, Any]
     modes: dict[str, Mode] = {}
     for path, state in sources:
         problems += _shape_problems(path, state)
+        for name, m in _entries(state, "modes").items():
+            modes[name] = merge_mode(modes[name], m, False) if name in modes else _mode(m)
         for rid, r in _entries(state, "rules").items():
             try:
                 validate_rule(r)
             except Invalid as exc:
                 problems.append(f"managed rule {rid} is invalid and ignored: {exc}")
-            rules[rid] = merge_rule(rules[rid], r, False) if rid in rules else with_defaults(r)
-        for name, m in _entries(state, "modes").items():
-            modes[name] = merge_mode(modes[name], m) if name in modes else _mode(m)
-    for rid, rule in sorted(rules.items()):
-        problems += [f"managed rule {rid} lists mode '{m}', which the managed file does not declare, so it cannot "
-                     "suspend the rule" for m in modes_of(rule) if m not in modes]
+            if rid in rules:
+                rules[rid] = merge_rule(rules[rid], r, False)
+                continue
+            rule = with_defaults(r)
+            problems += [f"managed rule {rid} lists mode '{m}', which the managed file does not declare, so it cannot "
+                         "suspend the rule" for m in modes_of(rule) if m not in modes]
+            rule["modes"] = [m for m in modes_of(rule) if m in modes]
+            rules[rid] = rule
     return {"rules": rules, "modes": modes}, problems
 
 

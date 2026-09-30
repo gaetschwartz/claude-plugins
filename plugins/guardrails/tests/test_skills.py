@@ -55,11 +55,32 @@ class SkillFiles(unittest.TestCase):
                 self.assertNotIn("context", frontmatter(SKILLS / name / "SKILL.md")[0])
 
     def test_explain_is_read_only(self) -> None:
-        tools = frontmatter(SKILLS / "explain" / "SKILL.md")[0]["allowed-tools"]
-        self.assertIn("Bash(guardrails status *)", tools)
-        self.assertIn("Bash(guardrails rule test *)", tools)
-        for verb in ("add", "set", "rm", "mode", "preset", "enable", "disable"):
-            self.assertNotIn(f"guardrails {verb}", tools)
+        fields, body = frontmatter(SKILLS / "explain" / "SKILL.md")
+        patterns = re.findall(r"[A-Za-z]+\([^)]*\)", fields["allowed-tools"])
+        self.assertEqual(patterns, ["Bash(guardrails status *)", "Bash(guardrails rule test *)",
+                                    "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"])
+        self.assertEqual(set(fields["disallowed-tools"].split()), {"Edit", "Write", "NotebookEdit"})
+        for forbidden in (r"guardrails rule (add|set|rm)", r"guardrails (enable|disable)", r"preset install",
+                          r"guardrails mode (on|off|declare|undeclare)", r"sudo (guardrails|python)"):
+            self.assertIsNone(re.search(forbidden, body), forbidden)
+
+    def test_no_read_permission_patterns(self) -> None:
+        for path in skill_files():
+            with self.subTest(skill=path.parent.name):
+                self.assertNotIn("Read(", frontmatter(path)[0].get("allowed-tools", ""))
+
+    def test_forked_skills_inject_their_references(self) -> None:
+        wanted = {"status": {"presentation.md"}, "explain": {"matching.md", "presentation.md"}}
+        for name, files in wanted.items():
+            fields, body = frontmatter(SKILLS / name / "SKILL.md")
+            injected = set(re.findall(r"^!`cat \$\{CLAUDE_PLUGIN_ROOT\}/references/([a-z-]+\.md)`$", body, re.MULTILINE))
+            with self.subTest(skill=name):
+                self.assertEqual(injected, files)
+                self.assertIn("Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)", fields["allowed-tools"])
+
+    def test_json_quoting_is_documented(self) -> None:
+        self.assertIn("'\\''", (SKILLS / "new" / "SKILL.md").read_text())
+        self.assertIn("'\\''", (SKILLS / "edit" / "SKILL.md").read_text())
 
     def test_referenced_files_exist(self) -> None:
         pattern = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9_./-]+)")

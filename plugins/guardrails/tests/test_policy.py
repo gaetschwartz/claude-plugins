@@ -256,7 +256,7 @@ class ManagedLayer(unittest.TestCase):
         self.assertEqual((r["action"], r["retry"], r["modes"], r["enabled"], r["message"]),
                          ("deny", "none", [], True, "use docs"))
         self.assertEqual(sorted(layer["rules"]), ["keep", "new", "r"])
-        self.assertEqual((layer["modes"]["m"]["agentMayEnable"], layer["modes"]["m"]["active"]), (False, True))
+        self.assertEqual((layer["modes"]["m"]["agentMayEnable"], layer["modes"]["m"]["active"]), (False, False))
         self.assertIn("n", layer["modes"])
 
     def test_problems(self) -> None:
@@ -267,6 +267,34 @@ class ManagedLayer(unittest.TestCase):
         self.assertTrue(any("'modes' must be an object" in p for p in problems))
         self.assertTrue(any("managed rule bad is invalid and ignored" in p for p in problems))
         self.assertTrue(any("rule ok lists mode 'ghost'" in p for p in problems))
+
+    def test_later_source_cannot_switch_on_a_mode_an_earlier_one_declares(self) -> None:
+        first = {"rules": {"r": rule(modes=["m"])}, "modes": {"m": {}}}
+        second = {"modes": {"m": {"active": True}}}
+        layer, problems = policy.managed_layer([("a", first), ("b", second)])
+        self.assertEqual(problems, [])
+        self.assertFalse(layer["modes"]["m"]["active"])
+        rules = policy.effective_rules(layer, {}, {})
+        modes = policy.effective_modes(layer, {}, {})
+        self.assertEqual(policy.active_modes(modes, {}), {})
+        self.assertEqual(policy.modes_of(rules["r"]), ["m"])
+
+    def test_a_mode_first_declared_by_a_source_keeps_its_own_active(self) -> None:
+        layer, _ = policy.managed_layer([("a", {}), ("b", {"modes": {"m": {"active": True}}})])
+        self.assertTrue(layer["modes"]["m"]["active"])
+
+    def test_later_source_cannot_add_modes_to_an_earlier_rule(self) -> None:
+        first = {"rules": {"r": rule()}, "modes": {"m": {}}}
+        second = {"rules": {"r": rule(modes=["m"])}, "modes": {"m": {}}}
+        layer, _ = policy.managed_layer([("a", first), ("b", second)])
+        self.assertEqual(policy.modes_of(layer["rules"]["r"]), [])
+
+    def test_later_source_cannot_make_an_undeclared_mode_suspend_an_earlier_rule(self) -> None:
+        first = {"rules": {"r": rule(modes=["m"])}}
+        second = {"modes": {"m": {"active": True}}}
+        layer, problems = policy.managed_layer([("a", first), ("b", second)])
+        self.assertTrue(any("rule r lists mode 'm'" in p for p in problems))
+        self.assertEqual(policy.modes_of(layer["rules"]["r"]), [])
 
     def test_non_dict_state_is_tolerated(self) -> None:
         self.assertEqual(policy.managed_layer([("/p", [])])[0], {"rules": {}, "modes": {}})

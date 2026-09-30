@@ -35,7 +35,7 @@ explicit request (`--as-user`).
 | project | `<project>/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` |
 | managed | `/Library/Application Support/ClaudeCode/guardrails.json` (macOS), `/etc/claude-code/guardrails.json` (Linux); POSIX only |
 
-`GUARDRAILS_MANAGED_PATH` adds a second managed file, for tests and odd setups. It never replaces the platform path: both are loaded, the platform file ranks higher, and the override can only add or tighten. `status` says when the platform file is absent and only an override is in use.
+`GUARDRAILS_MANAGED_PATH` adds a second managed file, for tests and odd setups. It never replaces the platform path: both are loaded, the platform file ranks higher, and the override can only add or tighten (it cannot switch on a mode the platform file declares or add suspending modes to its rules). `status` says when the platform file is absent and only an override is in use.
 
 Layers stack managed > global > project. Project entries can add rules, and for a global rule id can only: tighten `action`/`retry`, re-enable it, remove
 suspending modes, and reword `message`/`messageShort`/`description`. What a global rule matches (`match`,
@@ -136,7 +136,9 @@ use `python3 <plugin dir>/lib/guard.py <verb>` (`--help` for the full
 list: `status`, `rule add|set|rm|test`, `mode declare|undeclare|on|off`, `preset list|show|install`,
 `enable|disable`; changes take `--scope global|project|managed`, with `--path <file>` to pick a managed-format file). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
 `enable`/`disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample
-commands without changing anything.
+commands without changing anything. It checks the matcher only (`match` or `-`); it prints `note:` lines when the hook
+would not act on a match: rule disabled, `requires` binary missing, a listed mode that suspends it (and whether it is
+active now), global hook or project rules disabled.
 
 ## Migrating from shell-guard
 
@@ -160,13 +162,14 @@ when a skill needs it.
 | `guardrails:mode` | `[on\|off\|declare\|undeclare] [<name>] [-s/--scope …] [-P/--path <file>] [-e/--agent-may-enable]` |
 | `guardrails:setup` | `[<preset>…] [-s/--scope …] [-P/--path <file>] [-y/--yes]` |
 
-- `status` is a plain, compact list (rules with origin and state, modes, problems) and says so when the platform
+- `status` is a plain, compact list (rules with origin and state, modes, problems; it injects the presentation conventions) and says so when the platform
   managed file is absent and an override or `--path` file is in use. It runs forked (`context: fork`) on Haiku: it only
   reformats one command's output, so it is cheap and needs no conversation.
 - `explain` answers why a command was denied or not caught and what a rule covers, with verified examples. It runs
-  forked on Sonnet because it reasons over the matching semantics in `references/matching.md` (wrappers, `args` versus
-  `match.regex`, layering, modes). A fork has no conversation history, so callers, other agents included, must pass the
-  rule id or the exact command. `allowed-tools` pre-approves only `guardrails status` and `guardrails rule test`, and
+  forked on Sonnet because it reasons over the matching semantics (wrappers, `args` versus
+  `match.regex`, layering, modes) in `references/matching.md`, which the skill injects with `!` commands so the fork is
+  self-contained. A fork has no conversation history, so callers, other agents included, must pass the
+  rule id or the exact command. `allowed-tools` pre-approves only `guardrails status`, `guardrails rule test` and `cat` of the references, and
   the skill is told never to change anything; `allowed-tools` does not itself restrict the other tools. Denial messages
   stay the first source.
 - `new` interviews, tests the rule on your examples and on edge cases it thinks of, asks only about genuinely

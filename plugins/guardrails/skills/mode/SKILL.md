@@ -2,7 +2,7 @@
 name: mode
 description: Use when the user says this session is a specific kind of work covered by a guardrails mode, e.g. "we're reverse-engineering this binary", "this is RE work, strings is fine here", "turn on reverse-engineering mode", or asks to switch such a mode on or off, or to declare or undeclare one. Never enable a mode on your own because a command was denied; the user has to say it.
 argument-hint: "[on|off|declare|undeclare] [<name>] [-s|--scope session|global|project|managed] [-P|--path <file>] [-e|--agent-may-enable]"
-allowed-tools: Bash(guardrails status *) Bash(guardrails mode *) Read(/${CLAUDE_PLUGIN_ROOT}/references/**) AskUserQuestion
+allowed-tools: Bash(guardrails status *) Bash(guardrails mode *) AskUserQuestion
 ---
 
 # guardrails mode
