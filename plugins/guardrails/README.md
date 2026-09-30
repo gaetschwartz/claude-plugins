@@ -2,10 +2,11 @@
 
 A PreToolUse hook for the Bash and Monitor tools whose rules are data (a rule for `Bash` also applies to a `Monitor`
 command; a Monitor call with only a `ws` URL has no command and is ignored; monitors a plugin declares in
-`monitors/monitors.json` start without any tool call, so this hook cannot cover them). Each command is tokenised with a real shell lexer
-(wrappers like `sudo`/`xargs`/`timeout` are looked through, `bash -c` strings and `$(…)` are descended into, heredoc
-bodies and redirect targets are ignored), then checked against the rules in state. Rules that need structure can use a
-real syntax-tree matcher (`match.ast`, below).
+`monitors/monitors.json` start without any tool call, so this hook cannot cover them). Each command is parsed by the
+standalone `ast-grep` binary (its tree-sitter Bash grammar does all the lexing and parsing; guardrails has no shell
+parser of its own). `program`, `args`, `builtin` and `match.ast` rules are compiled to ast-grep rules and run in one
+scan: wrappers like `sudo`/`xargs`/`timeout` are looked through, the scripts of `bash -c` and `eval` are scanned as units
+of their own, heredoc bodies and redirect targets are data. `regex` rules read the raw text and need no engine.
 
 **Nothing is active after install.** Run the `guardrails:setup` skill to pick presets.
 
@@ -24,30 +25,30 @@ A rule matches a command (`program`, `args`, `builtin`, a syntax-tree rule `ast`
 
 ## The syntax-tree matcher: `match.ast`
 
-`program` and `args` see one flat command at a time; `regex` sees raw text, heredocs and quoted strings included.
+`program` and `args` match one command at a time; `regex` sees raw text, heredocs and quoted strings included.
 `match.ast` is a rule in [ast-grep](https://ast-grep.github.io/)'s vocabulary (`pattern`, `kind`, `regex`, `inside`,
 `has`, `follows`, `precedes`, `not`, `any`, `all`, `stopBy`, `field`) run on the tree-sitter Bash parse, so a rule can
-say "`pgrep`, but only nested in a substitution, pipeline, list or loop" and never fires on text inside a heredoc or
-single quotes. It is an alternative like `regex`: the rule fires when `program`/`args`/`builtin`, or `regex`, or `ast`
-matches. `references/matching.md` has the vocabulary, the node kinds (verified), what is code versus data and the
-idioms; `guardrails rule ast '<command>'` prints the tree of any command, including the units its wrappers expose.
-`references/writing-rules.md` is the full how-to (matcher ladder, test matrix, edge-case checklist, the six pitfalls),
-and `references/ast/` is a cookbook of tested rules by shape (context, pipelines, flags, lists, wrappers); a test runs
-every example in it against the real engine.
+say "`pgrep`, but only nested in a substitution, pipeline, list or loop" or "`npm publish`, unless inside an `if`" and
+never fires on text inside a heredoc or single quotes. It is an alternative like `regex`: the rule fires when
+`program`/`args`/`builtin`, or `regex`, or `ast` matches. `references/matching.md` has the vocabulary, the node kinds
+(verified), what is code versus data and the idioms; `guardrails rule ast '<command>'` prints the tree of any command,
+including the shell-string units. `references/writing-rules.md` is the full how-to (matcher ladder, test matrix,
+edge-case checklist, the pitfalls), and `references/ast/` is a cookbook of tested rules by shape (context, pipelines,
+flags, lists, wrappers); a test runs every example in it against the real engine.
 
-**Wrappers.** ast-grep does not look through `sudo pkill x`, so the engine does: for every command whose name is in the
-wrapper table it drops the wrapper's own flags and arguments (or, for `bash -c '…'`, `eval`, `watch`, `script -c`,
-parses the string as code) and matches the inner command too, recursively, keeping the surrounding context. Built in:
-`sudo doas env timeout nice ionice nohup time command exec builtin stdbuf setsid xargs watch script eval bash sh zsh dash
-ksh`. Add more with `guardrails wrapper add <name> --json '{"flagsWithValue": ["-x"], "shellString": "-c"}'`
-(`--scope global|project|managed`, `--path`, `--as-user` for agents, like `rule`); `wrapper rm` and `wrapper list` do
-the rest. Look-through only ever grows: the built-in wrappers cannot be redefined and a layer can only introduce NEW
-names (an entry for a name that is built in or defined by a higher layer is ignored, with a warning naming it), and a
-declared wrapper never hides itself: `pkill x` is still matched as a command even when `pkill` is declared a wrapper.
-An unknown wrapper, or an unknown flag that takes a value, is a false-negative risk: the first non-flag word after the
-known flags is taken as the command.
+**Wrappers and shell strings.** `program` matches a command by name and also a wrapper command (`sudo doas env timeout
+nice ionice nohup time command exec builtin stdbuf setsid xargs watch`, plus your own) one of whose own words is the
+name: `sudo -u bob pkill x`, `timeout 5 pkill x`. There is no table of flags that take a value, so `sudo grep pkill file`
+also matches `pkill` (a known false positive). A command `pattern` in `match.ast` is tried behind a wrapper the same way.
+The script of `bash|sh|zsh|dash|ksh [flags] -c '<script>'` and the arguments of `eval` are unquoted and scanned as units
+of their own (depth 8, 64 distinct units, 256 KiB). Add wrapper names with `guardrails wrapper add <name>`
+(`--scope global|project|managed`, `--path`, `--as-user` for agents, like `rule`); `wrapper rm` and `wrapper list` do the
+rest. Look-through only ever grows: a layer adds names and never removes or changes a higher layer's. State files from
+older versions, whose wrapper entries carry `flagsWithValue` or `shellString`, still load and those options are ignored.
+Obfuscated or dynamic command names (`$'p\x6bill'`, `p''kill`, variables, aliases, functions) cannot be analysed
+statically and are not matched; `references/matching.md` lists the known limits.
 
-**Requirements and fallback.** `match.ast` runs the standalone Rust `ast-grep` binary (pinned to 0.45.3, which bundles the
+**Requirements.** `program`, `args`, `builtin` and `match.ast` run the standalone Rust `ast-grep` binary (pinned to 0.45.3, which bundles the
 Bash grammar) as a child process of the hook. The hook itself is plain stdlib Python, any Python 3.9 or newer, so macOS
 `/usr/bin/python3` works: there is no venv, no uv and no pip. The binary reaches the machine by two mechanisms, tried in
 this order:
@@ -67,9 +68,10 @@ this order:
    atomic rename) and then a marker (pin, wheel hash, binary hash, size, mtime, inode). Installs run under a lock, never
    replace an install that still passes its checks, and any failure (timeouts included) is remembered for ten minutes: the
    warm-up obeys that backoff, an explicit `engine install` does not. Temp files older than ten minutes are removed.
-   Only the SessionStart hook (detached, silent, and only when neither mechanism works and an enabled rule uses
-   `match.ast`) and the CLI ever download; the PreToolUse hook only looks.
-3. **Neither.** A loud notice (below) and the degraded mode.
+   Only the SessionStart hook (detached, silent, and only when neither mechanism works and an enabled rule needs
+   the parser) and the CLI ever download; the PreToolUse hook only looks.
+3. **Neither.** The rules that need the parser are not enforced and their commands are allowed, with a loud notice
+   (below); `regex` rules keep running.
 
 `lib/engine-manifest.json` (wheel filenames, URLs, sha256, expected member and binary hashes per platform, and the binary
 hash of each npm platform package) is generated by `scripts/gen-engine-manifest.py` from PyPI and npm for the version in
@@ -83,7 +85,7 @@ hash of each npm platform package) is generated by `scripts/gen-engine-manifest.
 | Linux glibc aarch64 | `@ast-grep/cli-linux-arm64-gnu` | `manylinux_2_28_aarch64` (glibc 2.28+) |
 
 Linux musl (Alpine) and Windows are not supported: there is no build, and the notice says so and offers no install command,
-only to remove or disable the `match.ast` rules or use a supported system.
+only to use `regex` rules or a supported system.
 
 **Trust model.** Before each run the hook checks the binary cheaply. npm binary: a regular file (no symlink) that resolves
 inside the plugin root, executable, owned by you or root, not writable by group or others, every directory up to the plugin
@@ -109,10 +111,11 @@ path, the first of: `/opt/homebrew/bin/python3`; `/usr/local/bin/python3`; `/hom
 only (after a `uname -s` check, before any stat of `/home`); `python3` from the inherited `PATH`, skipping entries inside
 the project or the cwd; `/usr/bin/python3`, always with `-I -S`. With no python at all it prints a one-line
 `systemMessage` on every call (it cannot keep per-session state without python) and lets the call through. Latency
-measured here (Python 3.14 from Homebrew, 3 AST rules, typical command, warm, machine load about 5): about 50 ms for a
-command with no wrapper, 55 to 60 ms through a wrapper or shell string, against about 35 ms with no AST rules. Apple's
+measured here (Python 3.14 from Homebrew, one `program` rule, two `ast` rules and a `builtin`, typical command, warm, `hyperfine`,
+load average about 7): about 45 ms for a command with or without a wrapper, 57 ms through a `bash -c` string (one extra
+scan), against about 31 ms when every rule is `regex` and the engine is never started. Apple's
 `/usr/bin/python3` 3.9 spends about 50 ms just importing the standard library (it ships no cached bytecode), so a hook
-running under it takes about 115 ms; install a newer `python3` in `/opt/homebrew/bin` or `/usr/local/bin` to avoid that. The very
+running under it takes about 105 ms; install a newer `python3` in `/opt/homebrew/bin` or `/usr/local/bin` to avoid that. The very
 first run of a binary that was just written takes about half a second once (the OS inspects it); the 4 s engine deadline
 covers that.
 
@@ -120,49 +123,42 @@ The binary's location comes only from the plugin's own location and data dir, ne
 project or cwd that contains the plugin (developing it, or starting in `~/.claude`) does not matter, and a `node_modules` planted
 in a repository is never looked at.
 
-**How an evaluation runs.** `ast-grep` has no ancestry or wrapper knowledge, so the worker drives it with small tasks: the
-parse tree of each candidate source comes from `ast-grep run --debug-query`, the wrapper and normalisation rewrites are done
-in Python exactly as before, and every unit (the command as written, its normalised form, each rewrite, the plain
-lexer's commands) is scanned by one `ast-grep scan` (each rule plus a twin that adds `inside pipeline | command_substitution |
-process_substitution`, which is how `wrapped` is told from `direct`). Rules and units never travel on the command line:
-they are files in a private (`0700`) temporary directory with its own `sgconfig.yml`, so no rule or command size can overflow
-the argument list. Every call also carries a canary rule (`kind: program`) that must match every non-empty unit, and the reply
-must be exactly ast-grep's JSON list with known rule ids and in-range offsets; anything else (empty output, `{}`, a missing
-canary, a truncated reply, a non-zero exit) counts as an engine failure and degrades that call with a warning. Scanning 512
-units takes about 70 ms. Units that cannot hide another wrapper are not even parsed; the lexer's units are de-duplicated.
-Expansion is bounded by counts and bytes, never by the clock, so the same command gets the same answer under any load: at
-most 512 distinct units, 16 levels, 32 KiB per unit and about 1 MiB of parsed text, and the notice says which bound was hit.
-A `match.ast` rule is limited to 16 KiB (`rule add/set/test` exit 2, and the hook skips and names an oversized one without
-touching the others) and the enabled rules together to 256 KiB (later rules are skipped and named).
+**How an evaluation runs.** Every `program`, `args`, `builtin` and `match.ast` rule becomes ast-grep rules (`lib/astrules.py`):
+a direct branch, the same branch restricted to "inside a pipeline, command substitution or process substitution" (that
+is what tags a hit `wrapped`), and a wrapper branch; two helper rules find the script of `bash -c` and the arguments of
+`eval`. One `ast-grep scan` runs all of them over the command; each script it finds is unquoted (one shell word, nothing
+else) and scanned, level by level, with the same rules, so `not inside` and friends judge the real tree of the real text
+and of each script. A typical command is one scan (about 12 ms of ast-grep), a shell string adds one scan per level.
+Rules and units never travel on the command line: they are files in a private (`0700`) temporary directory with its own
+`sgconfig.yml`, so no rule or command size can overflow the argument list. Every call also carries a canary rule that
+must match every non-empty unit (the root is a `program`, or `ERROR` for text the parser could not finish), and the reply
+must be exactly ast-grep's SARIF document with known rule ids and in-range offsets; anything else (empty output, `{}`, a
+missing canary, a truncated reply, a non-zero exit) counts as an engine failure. Unpacking is bounded by counts and
+bytes, never by the clock, so the same command gets the same answer under any load. A `match.ast` rule is limited to
+16 KiB (`rule add/set/test` exit 2, and the hook skips and names an oversized one without touching the others) and the
+enabled rules together to 256 KiB (later rules are skipped and named).
 
-**Degraded mode.** If the engine is missing or cannot run, the run exceeds its deadline, a reply is malformed, a command
-nests wrappers more than 16 deep, expands past 512 distinct units or 1 MiB of text, or is larger than 16 KiB, the
-hook does not allow silently. Every non-AST rule runs as usual (oversize commands skip the lexer and use command names
-and regexes, scanning the whole text linearly), and a rule with `match.ast` is applied when the command mentions one of
-its command names as a word, after shell quoting is resolved (`p''kill`, `p\kill`, `$'p\x6bill'` and `"pkill"` all read
-as `pkill`): the names derived from its patterns and regexes, or the optional `match.mentions` list. A deny rule then
-denies with its message plus a note that the AST matcher was unavailable and why, a warn rule warns, and commands that
-mention none of the names pass. The warning reaches both the user (`systemMessage`) and the agent (`additionalContext`,
-or the deny reason), once per session. An ast rule with no derivable names and no `mentions` cannot fire in this mode.
-The lexer is linear-time on every construct and the whole hook runs under a 7 s watchdog (hook timeout 10 s): on expiry
-or any other exception it falls back to a minimal evaluation (stdlib matchers and names, no session state) and, if that
-also fails, a visible warning; it never exits silently. `rule test` reports degradation as a note and exits 0. The plain
-lexer's commands are always matched against `match.ast` rules too, so the AST path never sees less than the lexer does.
+**When the engine is unavailable or fails.** There is no degraded parsing: rules that need the parser cannot be
+evaluated, so the hook allows the command and says so loudly, and `regex` rules keep running.
+- Engine missing (unsupported platform, not installed, a binary that failed its checks): the first Bash or Monitor call
+  of every session carries the `GUARDRAILS ENGINE MISSING` notice in both the user-facing `systemMessage` and the
+  agent-facing `additionalContext`: rules using program/args/builtin/ast are NOT enforced until the engine is installed
+  (on an unsupported platform: here), `regex` rules still are, which rules are affected, the precise reason, the fixes
+  that can work on this system, and an instruction to tell the user first. The text is sanitised and framed as coming
+  from the guardrails plugin, not from the repository. If the once-per-session mark cannot be saved, the notice repeats.
+- Engine failure during a call (crash, timeout, unreadable output, missing canary): that call is allowed with a warning
+  naming the reason, once per session per reason, in both channels.
+- A command over 256 KiB, or that unpacks past the shell-string bounds, is denied unparsed ("command too large to
+  check", "command too complex to check"): padding must never be a way past a rule. `regex`-only rule sets are unaffected.
+- The whole hook runs under a 7 s watchdog (hook timeout 10 s); on expiry or any other exception it applies the `regex`
+  rules, allows the rest with a visible warning, and never exits silently.
 
-**The missing-engine notice.** When neither the npm binary nor the wheel binary is usable and an enabled `match.ast`
-rule applies, the first Bash or Monitor call of every session (until it is fixed) carries, in both the user-facing
-`systemMessage` and the agent-facing `additionalContext`, a notice that begins `GUARDRAILS ENGINE MISSING`: it says
-`match.ast` rules are not being enforced, what still is, the precise reason (unsupported platform, npm install missing or
-failed, or the download failure with its retry time), tells the agent to tell the user first, and gives both fixes. The
-text is sanitised and is framed as coming from the guardrails plugin, not from the repository. If the once-per-session
-mark cannot be saved, the notice simply repeats.
+`rule test` and `status` say the same: a rule that needs the engine is reported as `cannot` evaluate (never as "no
+match"), and `status --problems` lists the rules that are not enforced and why.
 
-Every `$'...'` string is decoded the way the shell does (`\xHH`, octal, `\u`/`\U`, `\n \t \e \a \b \f \r \v`, `\cX`, a NUL
-ends the string) in command names and arguments by the plain lexer, by the wrapper and normalisation step, and by the
-degraded name scan, so `$'p\x6bill' x` is seen as `pkill x` everywhere.
-
-Known gaps, for any engine: `find -exec`/`-execdir`, variable-held names (`P=pkill; $P x`), `bash <<< 'cmd'`,
-`echo cmd | sh`, `su -c`, `ssh host cmd`, and scripts run from a file.
+Known gaps, for any engine: `find -exec`/`-execdir`, variable-held or obfuscated names (`P=pkill; $P x`, `$'p\x6bill'`),
+`bash <<< 'cmd'`, `echo cmd | sh`, `su -c`, `ssh host cmd`, `watch 'cmd'`, `script -c 'cmd'`, scripts run from a file,
+backticks in an unquoted heredoc body, and a `VAR=x` prefix in front of a pattern with literal arguments.
 
 ### Worked example: one bundled policy, three rules
 
@@ -399,7 +395,7 @@ fallback tests stub the network and use a stub binary. `just check` lints and ty
 
 | path | role |
 |---|---|
-| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `matching.py` (the one evaluation path), `policy.py`, `store.py`, `cli.py`, `shellwords.py` (plain lexer), `wrappers.py` (wrapper table), `astbin.py` (find, install and verify the ast-grep binary), `astrun.py` (run a request against it), `astworker.py` (the wrapper look-through and rule evaluation) and `astcli.py` (the ast-grep subprocess calls), `ansic.py` (`$'...'` decoding), `parity.py`; data: `engine-manifest.json`, `engine-sgconfig.yml` |
+| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `matching.py` (the one evaluation path), `policy.py`, `store.py`, `cli.py`, `wrappers.py` (wrapper names), `astbin.py` (find, install and verify the ast-grep binary), `astrun.py` (run a request against it), `astrules.py` (guardrails rules to ast-grep rules), `astworker.py` (the scan loop over shell-string units) and `astcli.py` (the ast-grep subprocess calls); data: `engine-manifest.json`, `engine-sgconfig.yml` |
 | `hooks/` | `hooks.json` (PreToolUse on `Bash\|Monitor`, and SessionStart to fetch the AST engine) and the `guardrails.sh` POSIX wrapper that picks the interpreter |
 | `package.json`, `package-lock.json` | the npm pin Claude Code installs with `npm ci --ignore-scripts` |
 | `scripts/` | `gen-engine-manifest.py`: rewrites `lib/engine-manifest.json` for the pin |

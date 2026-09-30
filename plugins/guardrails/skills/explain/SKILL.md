@@ -56,15 +56,16 @@ plain chat what to explain instead.)
    `Loosen`, `Lower layers`, and `Cause` only when the question was why something was or was not caught), with no
    command spans or verdicts of your own. State the cause when the matching reference explains it; do not hedge and do
    not say "possibly". The reference covers the usual causes:
-   - a wrapper or `bash -c` was looked through, or was not (ssh, `find -exec`, scripts are invisible)
+   - a wrapper or `bash -c` was looked through, or was not (ssh, `find -exec`, scripts and obfuscated or dynamic names are invisible)
    - `args` only sees that one command's own arguments, so a pipe to `sh` is invisible to it and needs `match.ast`
      (an `inside` relation) or `match.regex`
-   - for a rule with `match.ast`: run `guardrails rule ast '<cmd>'` to show the tree and the wrapper units; the
-     matcher may have been unavailable (a note says so; the user can run `guardrails engine status` for the fix), a wrapper or flag may be unknown to the wrapper table, or the
+   - for a rule with `match.ast`: run `guardrails rule ast '<cmd>'` to show the tree and the shell-string units; the
+     engine may have been unavailable (the rule is then not enforced and the verdict says `cannot`; the user can run `guardrails engine status` for the fix), a wrapper may be unknown to the wrapper list, or the
      text was data (a heredoc body, single quotes)
    - the rule was suspended by an active mode, disabled, or skipped because `requires` is not installed, or the hook
      or project rules are switched off (the "Why a rule may not fire" list)
-   - `program` never matches a wrapper or shell itself (`sudo`, `bash`); `bash script.sh` is program `script.sh`
+   - `program` matches a wrapper or shell by name and behind a wrapper by any of its words (`sudo grep pkill file` hits
+     `pkill`); `bash script.sh` is program `bash`, the script file is not looked into
    - a retry acknowledged the identical command earlier in the session
    - the call was not a command the hook sees: a Monitor with only a `ws` URL, or a monitor a plugin declares itself
    - a project or global entry cannot loosen what a higher layer defines; a managed rule without modes is always

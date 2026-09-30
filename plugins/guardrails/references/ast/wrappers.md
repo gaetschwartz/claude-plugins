@@ -1,13 +1,14 @@
 # AST cookbook: wrappers, shells, quoting and heredocs
 
-The engine parses the command as written and again for every wrapper (`sudo env timeout nice ionice nohup time command
-exec builtin stdbuf setsid xargs watch script`) and shell string (`bash -c`, `sh -c`, `eval`, ...), dropping the
-wrapper's own words and keeping the surroundings. `rule ast '<cmd>'` prints every unit. Every block is checked by
-`tests/test_ast_examples.py` against the real engine: each `catch` command matches, each `pass` command does not. Rule
-syntax and semantics: [matching.md](../matching.md). The full wrapper table and its limits are there too.
+The engine parses the command as written, and again for the script of every shell string (`bash -c`, `sh -c`, `eval`,
+...), unquoted and scanned as a unit of its own; `rule ast '<cmd>'` prints every unit. A command `pattern` (and a
+`kind: command` rule with a `has` on `field: name`) is also tried behind a wrapper (`sudo env timeout nice ionice nohup
+time command exec builtin stdbuf setsid xargs watch`, plus your own): `pkill $$$` matches `sudo -u bob pkill -f x`. Every
+block is checked by `tests/test_ast_examples.py` against the real engine: each `catch` command matches, each `pass`
+command does not. Rule syntax and semantics: [matching.md](../matching.md).
 
-`match.program` never sees a wrapper or a shell itself (`program: sudo` matches nothing); `ast` does, because the unit
-that is parsed as written still contains it.
+`match.program` matches the wrapper names themselves too (`program: sudo` matches `sudo ls`), and any word of a wrapper
+command that equals the program name.
 
 ## Matching the wrapper itself
 
@@ -18,7 +19,7 @@ that is parsed as written still contains it.
   "rule": {"ast": {"pattern": "sudo $$$"}},
   "action": "deny",
   "catch": [
-    "sudo ls", "make && sudo make install", "env A=1 sudo ls", "bash -c 'sudo ls'",
+    "sudo ls", "make && sudo make install", "FOO=1 sudo ls", "env A=1 sudo ls", "bash -c 'sudo ls'",
     "echo x | sudo tee f", "x=$(sudo ls)"
   ],
   "pass": [
@@ -86,6 +87,8 @@ The body of a heredoc is never a command, quoted delimiter or not; `cat <<EOF` m
 
 ## Not looked through
 
-`ssh host sudo x`, `find . -exec sudo x {} \;`, script files, `python -c`, and wrappers the table does not know
-(declare them with `guardrails wrapper add`). Unbalanced quotes and unterminated heredocs are also checked by
-the plain lexer; see [matching.md](../matching.md).
+`ssh host sudo x`, `find . -exec sudo x {} \;`, script files, `python -c`, `watch 'sudo x'` and `script -c 'sudo x'`
+(a string argument of a wrapper other than `bash -c` and `eval`), obfuscated or dynamic names (`$'s\x75do'`, `s''udo`,
+`$CMD`), and wrappers the list does not know (declare them with `guardrails wrapper add`). A `VAR=x` prefix hides a
+command from a pattern with literal arguments (`git push -f $$$`); `program` sees through it. Unbalanced quotes and
+unterminated heredocs give a partial tree (`ERROR` nodes): the commands the parser could still read are matched.

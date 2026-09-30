@@ -67,28 +67,29 @@ class Kinds(AstIsolated):
     def test_command_patterns_are_also_tried_behind_wrappers_and_inside_shell_strings(self) -> None:
         got = self.kinds(BY_NAME, ["sudo pkill x", "env A=1 pkill x", "xargs pkill", "sudo -u bob killall x", "pkill x",
                                    "bash -c 'pkill x'", "eval pkill x", "sudo bash -c 'killall x'",
-                                   "x | bash -c 'a | pkill z'", "FOO=1 pkill x", "echo pkill", "sudo echo x"])
+                                   "x | bash -c 'a | pkill z'", "echo pkill", "sudo echo x"])
         self.assertEqual({c: k for c, k in got.items() if k},
                          {"sudo pkill x": "wrapped", "env A=1 pkill x": "wrapped", "xargs pkill": "wrapped",
                           "sudo -u bob killall x": "wrapped", "pkill x": "direct", "bash -c 'pkill x'": "wrapped",
                           "eval pkill x": "wrapped", "sudo bash -c 'killall x'": "wrapped",
                           "x | bash -c 'a | pkill z'": "wrapped"})
 
-    def test_rules_without_a_command_pattern_see_only_the_command_as_written(self) -> None:
+    def test_a_kind_command_rule_with_a_name_also_gets_the_wrapper_branch(self) -> None:
         named = {"kind": "command", "has": {"field": "name", "regex": "^pkill$"}}
-        self.assertEqual({c: k for c, k in self.kinds(named, ["pkill x", "sudo pkill x", "bash -c 'pkill x'"]).items() if k},
-                         {"pkill x": "direct", "bash -c 'pkill x'": "wrapped"})
+        got = self.kinds(named, ["pkill x", "FOO=1 pkill x", "sudo -u a pkill x", "bash -c 'pkill x'", "echo pkill"])
+        self.assertEqual({c: k for c, k in got.items() if k},
+                         {"pkill x": "direct", "FOO=1 pkill x": "direct", "sudo -u a pkill x": "wrapped",
+                          "bash -c 'pkill x'": "wrapped"})
 
     def test_relations_stay_on_the_real_tree_behind_a_wrapper(self) -> None:
         rule = {"pattern": f"{PG} $$$", "inside": {"kind": "command_substitution", "stopBy": "end"}}
         got = self.kinds(rule, [f"echo $(sudo {PG} x)", f"sudo {PG} x", f"sudo echo $({PG} x)"])
         self.assertEqual({c for c, k in got.items() if k}, {f"echo $(sudo {PG} x)", f"sudo echo $({PG} x)"})
 
-    def test_names_are_matched_as_written(self) -> None:
-        got = self.kinds({"pattern": "pkill -9 $$$"}, ["pkill -9 x", "/usr/bin/pkill -9 x", "FOO=1 pkill -9 x"])
-        self.assertEqual({c for c, k in got.items() if k}, {"pkill -9 x"})
-        named = {"kind": "command", "has": {"field": "name", "regex": "(^|/)pkill$"}}
-        self.assertEqual(set(self.kinds(named, ["/usr/bin/pkill x", "FOO=1 pkill x"]).values()), {"direct"})
+    def test_a_command_pattern_accepts_any_spelling_of_the_name(self) -> None:
+        got = self.kinds({"pattern": "pkill -9 $$$"}, ["pkill -9 x", "/usr/bin/pkill -9 x", "'pkill' -9 x",
+                                                       "echo pkill -9 x", "pkill -8 x", "xpkill -9 x", "FOO=1 pkill -9 x"])
+        self.assertEqual({c for c, k in got.items() if k}, {"pkill -9 x", "/usr/bin/pkill -9 x", "'pkill' -9 x"})
 
     def test_hole_inside_a_substitution_pattern_never_matches(self) -> None:
         got = self.kinds({"pattern": f"{KILL} $($$$)"}, [f"{KILL} $({PG} x)"])
@@ -351,9 +352,10 @@ class Cli(AstIsolated):
         self.assertIn("regex = `zzz`", out)
 
     def test_a_bare_command_matches_a_trailing_hole_pattern(self) -> None:
-        out = self.cli("rule", "test", "--json", json.dumps(self.RULE), "pkill", "FOO=1 pkill x")[1]
+        out = self.cli("rule", "test", "--json", json.dumps(self.RULE), "pkill", "/usr/bin/pkill", "pkill x")[1]
         self.assertIn("match  pkill\n", out)
-        self.assertIn("-      FOO=1 pkill x", out)
+        self.assertIn("match  /usr/bin/pkill\n", out)
+        self.assertIn("match  pkill x\n", out)
 
     def test_compile_errors_exit_2_on_test_add_and_set(self) -> None:
         bad = json.dumps({"match": {"ast": {"kind": "nope"}}, "message": "m"})

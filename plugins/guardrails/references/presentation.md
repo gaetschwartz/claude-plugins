@@ -67,7 +67,8 @@ The layout contract, all of it computed by the CLI:
 - `**Intent**` (only with `--intent`), `**Match**` (`program`, `args`, `regex`, `builtin`, `ast`, whichever the rule
   has; `ast = <the rule as compact one-line JSON>`), `**Message**` (with `{which:a|b}` resolved).
 - Groups, each omitted when empty: `**Block**` (the matcher catches it, action deny), `**Warn**` (catches it, action
-  warn), `**Allow**` (it does not). Rows: `- ✗ <span> <source>` or `- ✓ …`, then ` · wrapped` when only a look-through
+  warn), `**Allow**` (it does not), `**Not evaluated**` (a rule that needs the engine while it is missing or failing, or a
+  command over the size limit; glyph `?`, never to be read as allowed). Rows: `- ✗ <span> <source>` or `- ✓ …`, then ` · wrapped` when only a look-through
   (wrapper such as sudo, xargs or timeout; a `bash -c` string; `$(…)` or backticks; a pipeline member) made the
   program/args/builtin matcher reach the command; that includes a substitution glued to a word or assignment
   (`foo$(…)`, `x=$(…)`) and `<(…)`. An `ast` match is `wrapped` by the same definition: found through a wrapper or shell
@@ -96,8 +97,8 @@ The layout contract, all of it computed by the CLI:
 ## Parse tree: `guardrails rule ast '<command>'`
 
 Plain text, not a card: for authors, not for pasting. It prints the command, the number of units, then one tree per
-unit: `tree: command as written`, then `tree: through <wrapper>, source: <rewritten command>` for each wrapper or shell
-string. Each line is a named node, indented by depth, with the text in `«…»` for leaves; text is sanitised like every
+unit: `tree: command as written`, then `tree: shell string, source: <the unquoted script>` for each `bash -c` or `eval`
+script. Each line is a named node, indented by depth, with the text in `«…»` for leaves; text is sanitised like every
 other renderer (newline `⏎`, ESC `␛`). Use it to learn node kinds before writing `inside` / `has` rules. It needs the
 AST engine (ast-grep) and exits 2 with a message, including the fix commands, when that is unavailable.
 

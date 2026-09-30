@@ -103,16 +103,19 @@ class Matching(AstIsolated):
     def test_ast_alternatives_and_regex_combine(self) -> None:
         rule = rule_of(program="kill", ast={"pattern": f"{K} $$$"}, regex="zzz")
         self.kinds(rule, {"kill 1": "direct", f"{K} x": "direct", "echo zzz": "direct", "ls": None,
-                          f"sudo {K} x": "wrapped", "sudo kill 1": "wrapped", f"FOO=1 {K} x": None})
+                          f"sudo {K} x": "wrapped", "sudo kill 1": "wrapped", f"/usr/bin/{K} x": "direct"})
 
     def test_direct_beats_wrapped_on_the_same_rule(self) -> None:
         self.kinds(rule_of(program=K), {f"sudo {K} a; {K} b": "direct", f"{K} a | cat; sudo {K} b": "wrapped"})
 
-    def test_ast_command_patterns_get_a_wrapper_branch_and_other_ast_rules_do_not(self) -> None:
+    def test_ast_rules_naming_a_command_get_a_wrapper_branch_and_others_do_not(self) -> None:
         self.kinds(rule_of(ast={"pattern": f"{K} $$$"}), {f"{K} x": "direct", f"sudo {K} x": "wrapped",
-                                                          f"xargs {K}": "wrapped", f"FOO=1 {K} x": None})
+                                                          f"xargs {K}": "wrapped", f"/usr/bin/{K} x": "direct",
+                                                          f"'{K}' x": "direct", f"echo {K}": None})
         named = {"kind": "command", "has": {"field": "name", "regex": f"^{K}$"}}
-        self.kinds(rule_of(ast=named), {f"{K} x": "direct", f"sudo {K} x": None})
+        self.kinds(rule_of(ast=named), {f"{K} x": "direct", f"sudo {K} x": "wrapped"})
+        by_text = {"kind": "command", "regex": f"^{K}"}
+        self.kinds(rule_of(ast=by_text), {f"{K} x": "direct", f"sudo {K} x": None})
 
 
 class ShellStrings(AstIsolated):

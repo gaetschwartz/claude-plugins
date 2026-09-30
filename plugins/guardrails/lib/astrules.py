@@ -23,7 +23,7 @@ COMMAND_STRING_FLAG = r"^-[A-Za-z]*c[A-Za-z]*$"
 RECURSIVE_FLAG = r"^(?:-[A-Za-z&&[^efmABCdD]]*[rR][A-Za-z]*|-drecurse|--recursive|--dereference-recursive|--directories=recurse)$"
 BEFORE_DOUBLE_DASH = {"not": {"follows": {"regex": "^--$", "stopBy": "end"}}}
 TRAILING_HOLE = re.compile(r"^(.*\S)\s+\$\$\$$", re.DOTALL)
-BEHIND_WRAPPER = "$W $$$ "
+LITERAL_NAME = re.compile(r"[A-Za-z0-9_.+-]+")
 
 
 def name_regex(names: Sequence[str]) -> str:
@@ -34,6 +34,11 @@ def name_regex(names: Sequence[str]) -> str:
 
 def command_named(names: Sequence[str]) -> Rule:
     return {"kind": "command", "has": {"field": "name", "regex": name_regex(names)}}
+
+
+def orphan_name(names: Sequence[str]) -> Rule:
+    """A command name the parser found but could not build a command around (it sits directly in an ERROR node)."""
+    return {"kind": "command_name", "regex": name_regex(names), "inside": {"kind": "ERROR"}}
 
 
 def command_wrapping(names: Sequence[str], wrappers: Sequence[str]) -> Rule:
@@ -57,9 +62,11 @@ def shorthand(match: dict[str, Any], wrappers: Sequence[str]) -> tuple[Rule | No
     if builtin:
         extra.append(recursive_flag())
     name_sets = [names for names in (programs, list(GREPS) if builtin else []) if names]
-    direct = [command_named(names) for names in name_sets] + extra
-    wrapped = [command_wrapping(names, wrappers) for names in name_sets] + extra
-    return {"all": direct}, {"all": wrapped}
+    direct = {"all": [command_named(names) for names in name_sets] + extra}
+    wrapped = {"all": [command_wrapping(names, wrappers) for names in name_sets] + extra}
+    if not extra:
+        direct = {"any": [direct, orphan_name(programs)]}
+    return direct, wrapped
 
 
 def widen(rule: Any) -> Any:
@@ -79,52 +86,78 @@ def widen(rule: Any) -> Any:
     return {"all": [either, rest] if rest else [either], **keep}
 
 
-def behind_wrapper(node: Any) -> Rule | None:
-    """The rule with each command pattern it names at its top level (through any/all) moved behind a wrapper and any
-    words between; None when it names none."""
+def loosen_command(text: str, behind: bool) -> tuple[str, str] | None:
+    """(pattern, name) for a command pattern: with `behind`, the pattern as written moved behind a wrapper name;
+    otherwise its name replaced by a wildcard, to be checked separately so that any spelling of it passes (quotes, a
+    directory). None unless the pattern starts with a plain name and has arguments."""
+    head, _, rest = text.strip().partition(" ")
+    if not rest or not LITERAL_NAME.fullmatch(head):
+        return None
+    return (f"$W $$$ {head} {rest}" if behind else f"$_N {rest}"), head
+
+
+def loosened(node: Any, consts: dict[str, Any], behind: bool, wrappers: Sequence[str]) -> Rule | None:
+    """The rule with the commands it names at its top level (through any/all) accepted in any spelling of the name, or
+    with `behind` behind a wrapper's own words; None when it names none."""
     if not isinstance(node, dict):
         return None
     out = dict(node)
+    also: list[Rule] = []
     pattern = node.get("pattern")
-    found = isinstance(pattern, str) or (isinstance(pattern, dict) and pattern.get("selector") == "command")
-    if isinstance(pattern, str):
-        out["pattern"] = BEHIND_WRAPPER + pattern
-    elif found:
-        out["pattern"] = {**pattern, "context": BEHIND_WRAPPER + pattern["context"]}
+    in_context = isinstance(pattern, dict) and pattern.get("selector") == "command"
+    text = pattern.get("context") if in_context else pattern
+    found = loosen_command(text, behind) if isinstance(text, str) else None
+    if found:
+        new, name = found
+        out["pattern"] = {**pattern, "context": new} if in_context else new
+        if behind:
+            consts["W"] = {"regex": name_regex(wrappers)}
+        else:
+            also.append({"has": {"field": "name", "regex": name_regex([name])}})
     for key in ("any", "all"):
         if isinstance(node.get(key), list):
-            forms = [behind_wrapper(member) for member in node[key]]
+            forms = [loosened(member, consts, behind, wrappers) for member in node[key]]
             found = found or any(form is not None for form in forms)
-            if key == "any":
-                out[key] = [form for form in forms if form is not None]
-            else:
-                out[key] = [form or member for form, member in zip(forms, node[key])]
+            out[key] = ([form for form in forms if form is not None] if key == "any"
+                        else [form or member for form, member in zip(forms, node[key])])
+    has = node.get("has")
+    if behind and node.get("kind") == "command" and isinstance(has, dict) and has.get("field") == "name" \
+            and set(has) == {"field", "regex"}:
+        del out["has"]
+        also += [{"has": {"field": "name", "regex": name_regex(wrappers)}}, {"has": {"regex": has["regex"]}}]
+        found = True
+    if also:
+        out["all"] = [*also, *out.get("all", [])]
     return out if found and out.get("any", True) else None
+
+
+def body(rule: Rule, consts: dict[str, Any]) -> dict[str, Any]:
+    return {"rule": rule, **({"constraints": consts} if consts else {})}
 
 
 def branches(rule: policy.Rule, wrappers: Sequence[str]) -> dict[str, dict[str, Any]]:
     """The ast-grep rules that, together, say where this rule matches.
 
     `direct` hits count as the command itself, `piped` ones sit inside a pipeline or substitution, `wrapper` ones
-    were reached through a wrapper: the shorthand's name behind a wrapper's own words, or the ast rule's command
-    patterns behind any wrapper name.
+    were reached through a wrapper: the shorthand's name behind a wrapper's own words, or the ast rule's commands
+    behind any wrapper name.
     """
     match = policy.view(rule, "match")
     direct, wrapped = shorthand(match, wrappers)
     ast = policy.ast_of(rule)
-    alternatives = [part for part in (direct, widen(ast) if ast else None) if part]
+    consts: dict[str, Any] = {}
+    parts = [direct, widen(loosened(ast, consts, False, wrappers) or ast) if ast else None]
+    alternatives = [part for part in parts if part]
     if not alternatives:
         return {}
     found = alternatives[0] if len(alternatives) == 1 else {"any": alternatives}
-    out: dict[str, dict[str, Any]] = {
-        DIRECT: {"rule": {"all": [found, {"not": {"inside": CONTEXT}}]}},
-        PIPED: {"rule": {"all": [found, {"inside": CONTEXT}]}}}
-    shifted = behind_wrapper(ast) if ast else None
+    out = {DIRECT: body({"all": [found, {"not": {"inside": CONTEXT}}]}, consts),
+           PIPED: body({"all": [found, {"inside": CONTEXT}]}, consts)}
+    behind_consts: dict[str, Any] = {}
+    shifted = loosened(ast, behind_consts, True, wrappers) if ast else None
     behind = [part for part in (wrapped, widen(shifted) if shifted else None) if part]
     if behind:
-        out[WRAPPER] = {"rule": behind[0] if len(behind) == 1 else {"any": behind}}
-        if shifted:
-            out[WRAPPER]["constraints"] = {"W": {"regex": name_regex(wrappers)}}
+        out[WRAPPER] = body(behind[0] if len(behind) == 1 else {"any": behind}, behind_consts)
     return out
 
 

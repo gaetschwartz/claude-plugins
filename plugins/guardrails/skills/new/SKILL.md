@@ -58,10 +58,11 @@ Pitfalls (details in the full guide):
 - `hole-in-substitution`: a hole inside `$( )` never matches; use `has` with `kind: command_substitution`.
 - `stop-by`: `inside` / `has` / `follows` / `precedes` look at the nearest level only; add `stopBy: end`.
 - `args-no-pipelines`: `args` sees one command's own words, never a pipe or a substitution.
-- `program-no-wrappers`: `program` never matches `sudo`, `bash` or `env`; use `pattern: "sudo $$$"`.
+- `program-and-wrapper-words`: `program` also matches behind a wrapper by any of its words (`sudo grep pkill file` is a
+  hit for `pkill`); test the look-alikes.
 - `regex-in-heredocs`: `regex` fires on `echo "X"`, `man X` and heredoc bodies.
 
-Negated context (`not` around `inside` / `follows` / `precedes`) does not work: state the dangerous context positively.
+Negated context (`not` around `inside` / `follows` / `precedes`) works: every rule runs on the real tree.
 
 Read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md` in full whenever the rule is non-trivial (anything beyond
 `program` / `args`: a relation, a regex, several behaviors, wrapper or quoting concerns) or you are unsure.
@@ -69,7 +70,7 @@ Read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md` in full whenever the ru
 Three examples (each block is machine-checked: every `catch` command matches, every `pass` command does not).
 
 A plain pattern. `tree` shows why it matches: the command is a `command` whose `command_name` is `pkill`; `$$$` covers
-the words after it, so the wrapped forms match through the look-through units.
+the words after it, and a command pattern is also tried behind a wrapper (`sudo pkill x`) and inside `bash -c` strings.
 
 ```rule-example
 {
@@ -155,9 +156,10 @@ alternative (what to do instead). Derive the `id` from the intent (`no-pkill`); 
 `guardrails status`, and say when the colliding rule is managed. Put the user's description in the rule's `description`.
 A question about what a command is piped into is out of reach for `program`/`args`: use `ast` with `inside` when the
 shape is structural, `regex` for dataflow across commands (`regex` also fires inside heredocs and quoted text). The
-wrappers and shells themselves (`sudo`, `bash`) can never be matched by `program`; use `ast` (`pattern: "sudo $$$"`)
-or `regex` for them. A rule with `match.ast` needs the ast-grep engine (npm's install or `guardrails engine install`); if `rule test` prints a note
-that the AST matcher could not run, tell the user before going on (`guardrails engine status` shows the fix).
+wrappers and shells themselves (`sudo`, `bash`) are programs too (`program: sudo` matches `sudo ls`). A rule with
+`program`, `args`, `builtin` or `match.ast` needs the ast-grep engine (npm's install or `guardrails engine install`); if
+`rule test` reports `cannot` for a command or prints a note that the engine is missing, tell the user before going on
+(`guardrails engine status` shows the fix); only `regex` rules work without it.
 
 **1.b.2** With examples, test them: `guardrails rule test --json - 'cmd' …` with the rule on stdin (see "Passing the
 rule as JSON").

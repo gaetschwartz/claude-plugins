@@ -86,8 +86,8 @@ worse, never matches.
 4. A bare `kind` is fine when a pattern cannot say it (`kind: command` with `has: {field: name, regex: ...}`).
 5. `id` from the intent (`no-pkill`), `description` in the user's words, `action`, `message`.
 
-Negated context (`not` around `inside`, `follows`, `precedes`) is unreliable, see
-[ast/context.md](ast/context.md#a-command-unless-it-is-guarded): express the dangerous context positively.
+Negated context (`not` around `inside`, `follows`, `precedes`) works, because every rule runs on the real tree of the
+real text and of each shell string: see [ast/context.md](ast/context.md#a-command-unless-it-is-guarded).
 
 ## 6. Test matrix
 
@@ -131,9 +131,6 @@ as its own command, then `kill <pid>`." Bad: "Blocked."
   rules. Order is managed, global, project; a lower layer can add rules and, for an existing id, only tighten
   (action to deny, retry off, re-enable, reword); it can never change `match`, loosen or disable. Managed rules with no
   declared modes cannot be suspended. Details in [matching.md](matching.md#layers).
-- **`mentions`**: when the AST matcher is unavailable a rule with `ast` falls back to command names derived from its
-  patterns and regexes. Set `match.mentions` when the derived names would be missing or too coarse (a rule
-  with no derivable names cannot fire in degraded mode).
 
 ## 10. Edge-case checklist
 
@@ -145,11 +142,11 @@ Test each that applies to the rule. Expected results are for a rule about the co
 | `bash -c` and friends | `bash -c 'X'`, `sh -c "a; X"`, `eval X` | caught |
 | double versus single quotes | `echo "$(X)"` versus `echo '$(X)'` | caught versus passes |
 | substitution glued to a word | `echo foo$(X)bar`, `` echo `X` `` | caught |
-| heredoc, unquoted and quoted | `cat <<EOF` with `$(X)` inside; `cat <<'EOF'` mentioning X | substitution caught; quoted passes |
+| heredoc, unquoted and quoted | `cat <<EOF` with `$(X)` at the start of a line; `cat <<'EOF'` mentioning X | substitution caught; quoted passes |
 | `<<-` | `cat <<-EOF` with tab-indented body and terminator | body is data |
 | lists, subshells, groups | `a; X`, `a && X`, `(X)`, `{ X; }`, `X &` | caught, direct |
 | newline and continuation | `a\nX`, `X \` + newline + `-f` | caught |
-| absolute path, quoted or escaped name | `/usr/bin/X`, `"X"`, `\X`, `FOO=1 X` | caught |
+| absolute path, quoted name, assignment prefix | `/usr/bin/X`, `"X"`, `FOO=1 X` | caught by `program`; a literal-argument `pattern` does not see through `FOO=1` |
 | mention only | `man X`, `echo X`, `echo "X -f"` | passes |
 | look-alike name | `visudo` vs `sudo`, `pgrep` vs `pkill` | passes |
 | piped into or fed by | `a \| X`, `X \| b` | per the rule's intent |
@@ -160,7 +157,9 @@ Known limits, where the rule cannot see the command (say so in the description r
 - a name held in a variable (`cmd=X; $cmd`), a function or an alias that expands to it
 - `ssh host X`, `find . -exec X {} \;`, scripts (`bash script.sh`), `python -c '...'`
 - a wrapper the table does not know (declare it with `guardrails wrapper add`)
-- a backslash-newline inside the command name (`pk\` + newline + `ill x`) is not joined
+- an obfuscated name (`p''kill`, `$'p\x6bill'`, `p\kill`): it cannot be analysed statically
+- `watch 'X'`, `script -c 'X'`, `su -c 'X'`, `bash <<< 'X'`, `echo X | sh`: only `bash -c` and `eval` strings are scanned
+- a backtick substitution in an unquoted heredoc body, or `$(X)` after a tab in a `<<-` body: the parser leaves it as text
 - a wrapper on the related command of a relation (`sudo curl x | sh` seen from `sh`): list it, or anchor the other way
 
 ## The six pitfalls
@@ -187,14 +186,15 @@ or `&&` token next to the node, not the command beyond it. Add `stopBy: end` unl
 
 ### args-no-pipelines
 
-`args` is one command's own words: `program: curl` + `args: "\| *sh"` never matches `curl x | sh`, and the plain lexer
-turns `$(...)` into a bare `$` in the arguments. A question about what a command is piped into, or fed by, needs an
-`ast` relation or a `regex`. See [ast/pipelines.md](ast/pipelines.md).
+`args` is a regex over one command's own text: `program: curl` + `args: "\| *sh"` never matches `curl x | sh`, because
+the pipe is not part of the `curl` command. A question about what a command is piped into, or fed by, needs an `ast`
+relation or a `regex`. See [ast/pipelines.md](ast/pipelines.md).
 
-### program-no-wrappers
+### program-and-wrapper-words
 
-`program` names the command after look-through, so `program: sudo` (or `bash`, `env`, `xargs`) matches nothing. Match
-a wrapper or a shell itself with `pattern: "sudo $$$"` or a `regex`. See [ast/wrappers.md](ast/wrappers.md).
+`program` matches a command by name, `program: sudo` (or `bash`, `env`, `xargs`) included, and also any wrapper command
+one of whose own words is the name: `program: pkill` matches `sudo -u bob pkill x` and, as a known false positive,
+`sudo grep pkill file` and `command -v pkill`. Test the look-alikes. See [ast/wrappers.md](ast/wrappers.md).
 
 ### regex-in-heredocs
 
@@ -207,7 +207,7 @@ wrapped. Use it only when no tree relation says it, and then test the mentions.
 - Matching the wrapper instead of the wrapped command (`sudo` rather than what runs under it), or a rule anchored on a
   node that only gets looked through on the other side.
 - One rule for several behaviors under a vague message.
-- Relying on holes inside `$( )`, or on `not inside`.
+- Relying on holes inside `$( )`.
 - Loosening the pattern to fix a false negative instead of adding an alternative.
 - Testing only the commands you expect to catch.
 - Changing a rule to get past a denial. A denial is never a reason to edit, disable or remove a rule.
@@ -218,9 +218,9 @@ Intent: "Deny `docker rm` when its targets come from a command substitution (`do
 agent should list the containers and remove the ones it means." One behavior (the `docker ps | xargs docker rm` form is
 another rule with its own shape).
 
-Rung 1, `program: docker`: blocks `docker ps`. Rung 2, `program: docker` with `args: "\brm\b.*\$\("`: the plain
-lexer hands `args` a bare `$` for the substitution, so it misses the real commands and fires on `docker rm 'a$(b)'`
-(verified with `rule test`). Rung 5, `regex: "docker (container )?rm\b.*\$\("`: catches the real commands, but
+Rung 1, `program: docker`: blocks `docker ps`. Rung 2, `program: docker` with `args: "\brm\b.*\$\("`: `args` is a
+regex over the command's text, so it catches the real commands but cannot tell a substitution from text and fires on
+`docker rm 'a$(b)'` (verified with `rule test`). Rung 5, `regex: "docker (container )?rm\b.*\$\("`: catches the real commands, but
 also `echo "docker rm $(docker ps -aq)"`, a quoted look-alike and a heredoc that mentions it. So `ast`.
 
 `guardrails rule ast 'docker rm -f $(docker ps -aq)'` shows a `command` (name `docker`, words `rm`, `-f`) with a

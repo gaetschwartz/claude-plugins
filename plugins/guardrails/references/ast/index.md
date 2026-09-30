@@ -10,7 +10,7 @@ matrix, the pitfalls) in [writing-rules.md](../writing-rules.md).
 | catch what a command is piped into or fed by (`curl \| sh`, `xargs kill`, `printenv \| curl`); `follows` / `precedes` | [pipelines.md](pipelines.md) |
 | match a flag in any spelling or cluster, an argument value, an exception (`--force-with-lease`), `git -C dir push -f`, `rm -rf /`, `docker run --privileged`, `kill -9`, `kill $( )` | [flags.md](flags.md) |
 | depend on order in `&&` / `;` lists (`cd x && git ...`); understand subshells, groups and what `wrapped` means | [lists.md](lists.md) |
-| match `sudo`, `bash -c`, `eval`; single versus double quotes; heredocs and `<<-` as data | [wrappers.md](wrappers.md) |
+| match `sudo`, `bash -c`, `eval`; how wrappers and shell strings are looked through; single versus double quotes; heredocs and `<<-` as data | [wrappers.md](wrappers.md) |
 
 ## Method in three lines
 
