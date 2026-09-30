@@ -9,6 +9,7 @@ chezmoi dotfile-manager expertise for Claude Code, plus a drift advisor hook.
 | `chezmoi:update` | Pulling changes into a machine. Drives the fetch → inspect → integrate → apply sequence explicitly instead of the opaque `chezmoi update`, settling destination drift *before* apply so local edits aren't silently overwritten. |
 | `chezmoi:push` | Publishing changes. Captures uncaptured destination edits first, commits, pushes, and on rejection integrates rather than forcing — then reports what was pushed, what came back, and what changed locally. |
 | `chezmoi:status` | Answering "is anything drifted / do I need to push or pull". Loads the live picture up front so the answer needs no tool round-trips. |
+| `chezmoi:diff` | Showing how a drifted file differs from its source, as a readable line-numbered diff drawn in the direction that actually drifted. |
 | `chezmoi:hook` | Turning the drift hook off or on, and reading its state. |
 | `chezmoi:edit` | Adding, changing and removing managed files: which way each command moves data, and the template/encrypted exceptions to `re-add`. |
 | `chezmoi:templates` | Making a file vary per machine, and testing a render before applying. |
