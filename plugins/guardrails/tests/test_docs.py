@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import unittest
 
 import policy
-from helpers import Isolated
+from helpers import ROOT, Isolated
 from shellwords import simple_commands
 
 
@@ -45,6 +46,33 @@ class MatchingClaims(unittest.TestCase):
         for command in ("echo pkill", "man pkill", "ssh h pkill x", "find . -exec pkill {} ;", "bash <<EOF\npkill x\nEOF",
                         "echo x > pkill", "command -v pkill", "pgrep x"):
             self.assertFalse(matches(rule, command), command)
+
+
+def slug(heading: str) -> str:
+    return re.sub(r"[^a-z0-9 _-]", "", heading.lower().replace("`", "")).replace(" ", "-")
+
+
+class ReferenceLinks(unittest.TestCase):
+    def test_relative_links_resolve(self) -> None:
+        for path in [*(ROOT / "references").rglob("*.md"), ROOT / "README.md"]:
+            for target in re.findall(r"\]\(([^)\s]+)\)", path.read_text()):
+                if re.match(r"[a-z]+:", target):
+                    continue
+                file, _, anchor = target.partition("#")
+                with self.subTest(file=path.name, link=target):
+                    dest = (path.parent / file).resolve() if file else path
+                    self.assertTrue(dest.is_file())
+                    if anchor:
+                        headings = re.findall(r"^#+ (.+)$", dest.read_text(), re.MULTILINE)
+                        self.assertIn(anchor, {slug(h) for h in headings})
+
+    def test_cookbook_index_lists_every_file(self) -> None:
+        folder = ROOT / "references" / "ast"
+        index = (folder / "index.md").read_text()
+        for path in folder.glob("*.md"):
+            if path.name != "index.md":
+                with self.subTest(file=path.name):
+                    self.assertIn(f"]({path.name})", index)
 
 
 class DocumentedCommands(Isolated):

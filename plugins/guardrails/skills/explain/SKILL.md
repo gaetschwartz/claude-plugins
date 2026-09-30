@@ -72,3 +72,6 @@ plain chat what to explain instead.)
 6. When the fix for a pipeline case is a rule change, name `match.ast` (or `match.regex`) as the fix and leave the change to the user
    (`guardrails:edit`). The card's `Verified` line and `Note` come from `rule test`, which checks only the matcher:
    take mode, retry and warn-versus-deny behaviour from `status` and the reference.
+7. To explain why a construct was or was not caught, or what a fix would look like, `cat` the guide
+   `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md` and the one matching cookbook file listed in
+   `${CLAUDE_PLUGIN_ROOT}/references/ast/index.md`; they are not loaded above.

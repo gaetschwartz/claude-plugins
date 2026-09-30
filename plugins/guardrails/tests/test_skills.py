@@ -166,6 +166,23 @@ class SkillFiles(unittest.TestCase):
                 with self.subTest(skill=path.parent.name, ref=ref):
                     self.assertTrue((ROOT / ref.rstrip("/")).exists())
 
+    def test_rule_writing_skills_point_to_the_guide_and_cookbook(self) -> None:
+        for name in ("new", "edit", "explain"):
+            body = frontmatter(SKILLS / name / "SKILL.md")[1]
+            with self.subTest(skill=name):
+                self.assertIn("${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md", body)
+                self.assertIn("${CLAUDE_PLUGIN_ROOT}/references/ast/index.md", body)
+
+    def test_pitfalls_in_new_match_the_guide(self) -> None:
+        new = frontmatter(SKILLS / "new" / "SKILL.md")[1]
+        short = re.findall(r"^- `([a-z-]+)`: ", new.partition("## How to write the rule")[2].partition("\n## ")[0],
+                           re.MULTILINE)
+        guide = (ROOT / "references" / "writing-rules.md").read_text()
+        full = re.findall(r"^### ([a-z-]+)$", guide.partition("## The six pitfalls")[2].partition("\n## ")[0],
+                          re.MULTILINE)
+        self.assertEqual(len(short), 6)
+        self.assertEqual(short, full)
+
     def test_references_are_used_and_not_duplicated(self) -> None:
         used = set()
         for path in skill_files():

@@ -40,6 +40,107 @@ opens a `ws` URL has no command, and monitors a plugin declares itself are not c
 - Choices use AskUserQuestion: 2 to 4 options per question, 1 to 4 questions per call, `header` at most 12
   characters, "Other" is added automatically, the recommended option goes first with a `(Recommended)` suffix.
 
+## How to write the rule
+
+- One behavior per rule: split on "and"; a different message, alternative, action or mode is a different rule.
+- Narrowest matcher that separates the examples: `program`, `program` + `args`, `builtin`, `ast`, `regex`.
+- For a structural `ast` rule run `guardrails rule ast '<a command it must catch>'` and use the kinds it prints.
+- Anchor the `pattern` on the dangerous command; put its surroundings in a relation (`inside`, `has`, `follows`,
+  `precedes`).
+- Test at least 3 commands that must be caught (one wrapped: `sudo X`, `bash -c 'X'`, a pipe or `$( )`) and at least 3
+  that must pass (a look-alike, `man X`, `echo "X"`, a heredoc mentioning X).
+- Tighten to zero mismatches, then write a `message` that names the alternative.
+
+Pitfalls (details in the full guide):
+
+- `trailing-holes`: end a pattern with `$$$`, not `$A` (exactly one word); patterns are anchored at the start, flags
+  are order-sensitive.
+- `hole-in-substitution`: a hole inside `$( )` never matches; use `has` with `kind: command_substitution`.
+- `stop-by`: `inside` / `has` / `follows` / `precedes` look at the nearest level only; add `stopBy: end`.
+- `args-no-pipelines`: `args` sees one command's own words, never a pipe or a substitution.
+- `program-no-wrappers`: `program` never matches `sudo`, `bash` or `env`; use `pattern: "sudo $$$"`.
+- `regex-in-heredocs`: `regex` fires on `echo "X"`, `man X` and heredoc bodies.
+
+Negated context (`not` around `inside` / `follows` / `precedes`) does not work: state the dangerous context positively.
+
+Read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md` in full whenever the rule is non-trivial (anything beyond
+`program` / `args`: a relation, a regex, several behaviors, wrapper or quoting concerns) or you are unsure.
+
+Three examples (each block is machine-checked: every `catch` command matches, every `pass` command does not).
+
+A plain pattern. `tree` shows why it matches: the command is a `command` whose `command_name` is `pkill`; `$$$` covers
+the words after it, so the wrapped forms match through the look-through units.
+
+```rule-example
+{
+  "id": "no-pkill",
+  "title": "kill by name",
+  "rule": {"ast": {"pattern": "pkill $$$"}},
+  "action": "deny",
+  "catch": [
+    "pkill -f vite", "pkill", "sudo pkill node", "bash -c 'echo; pkill x'", "echo $(pkill x)"
+  ],
+  "pass": [
+    "pgrep -xl vite", "man pkill", "echo \"pkill x\"", "echo pkill", "cat <<'EOF'\npkill x\nEOF"
+  ],
+  "tree": "command command_name word"
+}
+```
+
+A contextual relation. `stopBy: end` lets `inside` climb past the parent; the quoted and heredoc passes are data.
+
+```rule-example
+{
+  "id": "pgrep-in-subst-or-pipe",
+  "title": "pgrep nested in a substitution or pipeline",
+  "rule": {
+    "ast": {
+      "pattern": "pgrep $$$",
+      "inside": {"any": [{"kind": "command_substitution"}, {"kind": "pipeline"}], "stopBy": "end"}
+    }
+  },
+  "action": "deny",
+  "catch": [
+    "kill $(pgrep -f vite)", "pgrep -f vite | xargs echo", "echo \"pids: $(pgrep x)\"",
+    "sudo sh -c 'echo $(pgrep x)'"
+  ],
+  "pass": [
+    "pgrep -xl vite", "sudo pgrep -xl vite", "man pgrep", "echo \"pgrep x | head\"", "echo '$(pgrep x)'",
+    "cat <<'EOF'\n$(pgrep x)\nEOF"
+  ],
+  "tree": "command_substitution command command_name"
+}
+```
+
+A negation with an exception. `not` + `has` looks inside the matched command, so `--force-with-lease` is allowed;
+`git -C dir push -f` and `--force-with-lease --force` are not covered (the cookbook's flags file handles the first).
+
+```rule-example
+{
+  "id": "no-force-push",
+  "title": "force push except with lease",
+  "rule": {
+    "ast": {
+      "pattern": "git push $$$",
+      "has": {"regex": "^(--force|-f)$"},
+      "not": {"has": {"regex": "^--force-with-lease"}}
+    }
+  },
+  "action": "deny",
+  "catch": [
+    "git push --force", "git push -f origin main", "sudo git push --force", "bash -c 'git push -f'"
+  ],
+  "pass": [
+    "git push", "git push --force-with-lease", "git push --force-with-lease origin main",
+    "git push -u origin feat", "man git-push", "echo \"git push -f\"", "cat <<'EOF'\ngit push -f\nEOF"
+  ],
+  "tree": "command command_name word"
+}
+```
+
+More examples, by shape (context, pipelines, flags, lists, wrappers): `${CLAUDE_PLUGIN_ROOT}/references/ast/index.md`.
+Read only the file that matches the shape you need.
+
 ## Step 1: understand the intent (loop until the user confirms)
 
 **1.a** Ask in chat for a description and/or examples and counter-examples: commands that must be caught and commands

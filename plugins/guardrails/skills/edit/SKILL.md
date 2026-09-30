@@ -45,7 +45,9 @@ Parse the text above; every long flag has a short one.
    - removal: confirm first with AskUserQuestion (`header` `Remove`, question "Remove rule `<id>` from `<scope>`?",
      options `Remove` and `Keep (Recommended)`) unless `-y`; then `guardrails rule rm <id> --scope <s> [--path <file>]
      --as-user --reason "…"`
-3. When a change to `match` uses `ast`, follow the matcher ladder (`program`, `program` + `args`, `builtin`, `ast`
+3. For a non-trivial change to `match`, read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md`; worked `ast` rules
+   by shape are in `${CLAUDE_PLUGIN_ROOT}/references/ast/index.md` (read only the file that matches).
+   When a change to `match` uses `ast`, follow the matcher ladder (`program`, `program` + `args`, `builtin`, `ast`
    pattern with `inside` / `has`, `regex`) and run `guardrails rule ast '<command>'` to read the node kinds before
    writing relational rules. After a change to `match` (program, args, builtin, regex, ast), re-verify: write the
    commands the user gives, or sensible ones (a caught command, a wrapped form, a look-alike that must pass), as an examples list

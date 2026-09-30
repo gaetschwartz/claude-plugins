@@ -31,6 +31,9 @@ say "`pgrep`, but only nested in a substitution, pipeline, list or loop" and nev
 single quotes. It is an alternative like `regex`: the rule fires when `program`/`args`/`builtin`, or `regex`, or `ast`
 matches. `references/matching.md` has the vocabulary, the node kinds (verified), what is code versus data and the
 idioms; `guardrails rule ast '<command>'` prints the tree of any command, including the units its wrappers expose.
+`references/writing-rules.md` is the full how-to (matcher ladder, test matrix, edge-case checklist, the six pitfalls),
+and `references/ast/` is a cookbook of tested rules by shape (context, pipelines, flags, lists, wrappers); a test runs
+every example in it against the real engine.
 
 **Wrappers.** ast-grep does not look through `sudo pkill x`, so the engine does: for every command whose name is in the
 wrapper table it drops the wrapper's own flags and arguments (or, for `bash -c '…'`, `eval`, `watch`, `script -c`,
@@ -319,6 +322,8 @@ when a skill needs it.
   ambiguous ones, shows the `rule test --render` card for confirmation, then writes the very rule file it tested. It
   passes the rule and the examples on stdin through a quoted heredoc (no temp files, no inline quoting). Heredoc
   invocations are not pre-approved by `allowed-tools` (tested), and `new`/`edit` pre-approve no config-changing verb.
+  `new` embeds a short how-to and three example rules, and points to `references/writing-rules.md` (read for any
+  non-trivial rule) and `references/ast/index.md`; `edit` and `explain` point to the same two.
 - `edit`, `mode` and `setup` change configuration only when you ask, always with `--as-user` and your own words in
   `--reason`. They never run `sudo`: a not-writable file prints the `sudo …` command for you to run.
 
@@ -335,6 +340,6 @@ plain `python3 -m unittest discover -s tests` works too, and the tests that need
 | `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `matching.py` (the one evaluation path), `policy.py`, `store.py`, `cli.py`, `shellwords.py` (plain lexer), `wrappers.py` (wrapper table), `astrun.py` + `astworker.py` (the venv builder/runner and the ast-grep worker), `parity.py` |
 | `hooks/` | `hooks.json` (PreToolUse on `Bash\|Monitor`, and SessionStart to build the AST venv) and the `guardrails.sh` POSIX wrapper that picks the interpreter |
 | `scripts/` | `regen-ast-requirements.py`: rewrites the hashed requirements for the pin |
-| `references/` | text the skills read on demand: matching semantics, presentation conventions, config-change rules |
+| `references/` | text the skills read on demand: matching semantics, presentation conventions, config-change rules, the rule-writing guide (`writing-rules.md`) and the tested `ast/` cookbook |
 | `bin/guardrails` | the CLI wrapper on the Bash tool's PATH |
 | `presets/`, `skills/`, `tests/` | preset rule sets, the six skills, shared skill references, the unittest suite |
