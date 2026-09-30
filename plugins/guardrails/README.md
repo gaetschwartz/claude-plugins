@@ -35,7 +35,7 @@ explicit request (`--as-user`).
 | project | `<project>/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` |
 | managed | `/Library/Application Support/ClaudeCode/guardrails.json` (macOS), `/etc/claude-code/guardrails.json` (Linux); POSIX only |
 
-`GUARDRAILS_MANAGED_PATH` adds a second managed file, for tests and odd setups. It never replaces the platform path: both are loaded, the platform file ranks higher, and the override can only add or tighten.
+`GUARDRAILS_MANAGED_PATH` adds a second managed file, for tests and odd setups. It never replaces the platform path: both are loaded, the platform file ranks higher, and the override can only add or tighten. `status` says when the platform file is absent and only an override is in use.
 
 Layers stack managed > global > project. Project entries can add rules, and for a global rule id can only: tighten `action`/`retry`, re-enable it, remove
 suspending modes, and reword `message`/`messageShort`/`description`. What a global rule matches (`match`,
@@ -69,6 +69,21 @@ default is unchanged and managed is never the default. `--scope managed` writes 
 the CLI says so and prints the `sudo` command to re-run. Under root the parent directory is created (0755, whatever the
 umask) and the file is written mode 0644 atomically with fsync. `status` warns when the managed file or its directory
 is not owned by root or is writable by group or others, since that makes the layer decorative.
+
+### `--path <file>`
+
+`--path` names a managed-format file for one invocation, on every verb that takes `--scope` (`rule add|set|rm`,
+`mode declare|undeclare|on|off`, `preset install`) and on the read verbs `status`, `rule test` and session `mode on|off`.
+
+- With `--scope managed`, writes go to that file instead of the platform file or `GUARDRAILS_MANAGED_PATH`. On a write
+  verb, `--path` without `--scope managed` is an error (exit 2).
+- On `status`, `rule test --id` and `mode on|off` it is loaded as one more managed source, exactly like the
+  `GUARDRAILS_MANAGED_PATH` override: ranked below the platform file (and the env override), tightening only, with the
+  same validation and ownership/permission problems reported.
+- The hook reads only the platform file and `GUARDRAILS_MANAGED_PATH`. A write to any other `--path` prints a note that
+  the file is enforced only if `GUARDRAILS_MANAGED_PATH` points at it.
+- A not-writable target prints the usual error and a `sudo …` command that includes `--path`; when the target came from
+  `GUARDRAILS_MANAGED_PATH` (which `sudo` drops), the command gets an explicit `--path` for it.
 
 Managed rules keep their own `message`/`messageShort`; lower layers cannot reword them. A modes entry on a managed
 rule only counts when the managed file itself declares that mode; other entries are ignored (the rule stays always on)
@@ -119,7 +134,7 @@ Claude Code settings; guardrails does not manage these, they are shown here for 
 An agent runs the CLI as `guardrails <verb>` (the plugin's `bin/` is on the Bash tool's PATH); from your own terminal
 use `python3 <plugin dir>/lib/guard.py <verb>` (`--help` for the full
 list: `status`, `rule add|set|rm|test`, `mode declare|undeclare|on|off`, `preset list|show|install`,
-`enable|disable`; changes take `--scope global|project|managed`). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
+`enable|disable`; changes take `--scope global|project|managed`, with `--path <file>` to pick a managed-format file). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
 `enable`/`disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample
 commands without changing anything.
 
@@ -132,9 +147,32 @@ There is no `FIND_OK=1 find …` or `GREP_OK=1 grep -r …` escape hatch any mor
 
 ## Skills
 
-- `guardrails:setup`: interview, then install presets.
-- `guardrails:rules`: change rules and modes when you ask for it.
-- `guardrails:mode`: switch a session mode on or off when you say the session is that kind of work.
+Six skills; arguments are free text, each skill parses its own flags, and every long flag has a short one. Shared
+material (matching semantics, presentation, ground rules for config changes) lives in `references/` and is read only
+when a skill needs it.
+
+| skill | arguments |
+|---|---|
+| `guardrails:status` | `[-s/--scope global\|project\|managed] [-p/--problems] [-P/--path <file>]` |
+| `guardrails:explain` | `[<id>] [-c/--command '<cmd>'] [-s/--scope …] [-P/--path <file>]` |
+| `guardrails:new` | `[-B/--block <cmd>]… [-A/--allow <cmd>]… [-s/--scope …] [-P/--path <file>] [-a/--action deny\|warn] [-R/--retry] [-m/--modes a,b] [-i/--id <id>] [-y/--yes] [description]` |
+| `guardrails:edit` | `<id> [enable\|disable\|rm\|key=value …] [-s/--scope …] [-P/--path <file>] [-y/--yes]` |
+| `guardrails:mode` | `[on\|off\|declare\|undeclare] [<name>] [-s/--scope …] [-P/--path <file>] [-e/--agent-may-enable]` |
+| `guardrails:setup` | `[<preset>…] [-s/--scope …] [-P/--path <file>] [-y/--yes]` |
+
+- `status` is a plain, compact list (rules with origin and state, modes, problems) and says so when the platform
+  managed file is absent and an override or `--path` file is in use. It runs forked (`context: fork`) on Haiku: it only
+  reformats one command's output, so it is cheap and needs no conversation.
+- `explain` answers why a command was denied or not caught and what a rule covers, with verified examples. It runs
+  forked on Sonnet because it reasons over the matching semantics in `references/matching.md` (wrappers, `args` versus
+  `match.regex`, layering, modes). A fork has no conversation history, so callers, other agents included, must pass the
+  rule id or the exact command. `allowed-tools` pre-approves only `guardrails status` and `guardrails rule test`, and
+  the skill is told never to change anything; `allowed-tools` does not itself restrict the other tools. Denial messages
+  stay the first source.
+- `new` interviews, tests the rule on your examples and on edge cases it thinks of, asks only about genuinely
+  ambiguous ones, shows the rule for confirmation, then writes it.
+- `edit`, `mode` and `setup` change configuration only when you ask, always with `--as-user` and your own words in
+  `--reason`. They never run `sudo`: a not-writable file prints the `sudo …` command for you to run.
 
 `just test` runs the suite, `just check` lints and type-checks, `just validate` runs `claude plugin validate`.
 
@@ -144,5 +182,6 @@ There is no `FIND_OK=1 find …` or `GREP_OK=1 grep -r …` escape hatch any mor
 |---|---|
 | `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `policy.py`, `store.py`, `cli.py`, `shellwords.py` |
 | `hooks/` | `hooks.json` and the `guardrails.sh` wrapper Claude Code runs on every Bash call |
+| `references/` | text the skills read on demand: matching semantics, presentation conventions, config-change rules |
 | `bin/guardrails` | the CLI wrapper on the Bash tool's PATH |
-| `presets/`, `skills/`, `tests/` | preset rule sets, the three skills, the unittest suite |
+| `presets/`, `skills/`, `tests/` | preset rule sets, the six skills, shared skill references, the unittest suite |

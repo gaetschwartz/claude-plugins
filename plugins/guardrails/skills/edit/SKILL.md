@@ -1,0 +1,45 @@
+---
+name: edit
+description: Use when the user explicitly asks to change, disable, enable, reword or remove an existing guardrails rule, e.g. "make the strings rule a warning", "turn off the pkill rule in this repo", "remove no-pkill". Never use it to get past a guardrails denial.
+argument-hint: "<id> [enable|disable|rm|key=value ...] [-s|--scope global|project|managed] [-P|--path <file>] [-y|--yes]"
+allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guardrails rule set *) Bash(guardrails rule rm *) Read(/${CLAUDE_PLUGIN_ROOT}/references/**) AskUserQuestion
+---
+
+# guardrails edit
+
+Change or remove one existing rule. Before anything else read `${CLAUDE_PLUGIN_ROOT}/references/changing-config.md`
+(ground rules, sudo handling, exit codes). When a change touches `match`, also read
+`${CLAUDE_PLUGIN_ROOT}/references/matching.md` and `${CLAUDE_PLUGIN_ROOT}/references/presentation.md`.
+
+Arguments: $ARGUMENTS
+
+## Arguments
+
+Parse the text above; every long flag has a short one.
+
+- `<id>`: the rule. `enable` / `disable`: set `enabled=true` / `enabled=false` on the rule (this is the rule's own flag,
+  not the `guardrails enable|disable` hook verbs, which agents cannot run). `rm`: remove it. `key=value` pairs are
+  passed to `guardrails rule set`; the keys are `action`, `retry`, `enabled`, `modes`, `message`, `messageShort`,
+  `description`, `program`, `args`, `builtin`, `regex`, `requires`. Comma lists for `modes`, `requires` and
+  `program`; an empty value clears a field; `program`, `args`, `builtin`, `regex` edit `match`.
+- `-s` / `--scope global|project|managed` (default global), `-P` / `--path <file>` (managed-format file, needs
+  `-s managed`), `-y` / `--yes` (do not confirm `rm`).
+- No arguments: run `guardrails status`, list the rules, ask (AskUserQuestion, or chat when there are more than four)
+  which rule, then ask what to change. A rule given without a change: show its row from `status` and ask what to change.
+
+## Steps
+
+1. Look the rule up with `guardrails status` (add `--path` when given) to learn its origins. A managed rule can only be
+   changed with `--scope managed` (exit 3 otherwise); a project entry over a global or managed rule can only tighten it,
+   and the CLI says which keys had no effect: tell the user.
+2. Apply it:
+   - changes: `guardrails rule set <id> key=value … --scope <s> [--path <file>] --as-user --reason "<user's words>"`
+   - removal: confirm first with AskUserQuestion (`header` `Remove`, question "Remove rule `<id>` from `<scope>`?",
+     options `Remove` and `Keep (Recommended)`) unless `-y`; then `guardrails rule rm <id> --scope <s> [--path <file>]
+     --as-user --reason "…"`
+3. After a change to `match` (program, args, builtin, regex), re-verify: `guardrails rule test --id <id> 'cmd' …` on the
+   commands the user gives, or on sensible ones (a caught command, a wrapped form, a look-alike that must pass). Show
+   the result as the rule card from the presentation reference, tagged `yours` / `inferred`, with its `Verified` line.
+   A verdict that contradicts what the user wants goes back to the user, not into a silent second edit.
+4. Report the outcome in the rule-row style. On exit 2 because the file is not writable, print the message and the
+   `sudo …` command exactly as printed and stop; do not run it.
