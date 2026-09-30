@@ -207,8 +207,9 @@ Layers stack managed > global > project. Project entries can add rules, and for 
 suspending modes, and reword `message`/`messageShort`/`description`. What a global rule matches (`match`,
 `requires`) cannot be changed by a project entry; an override that does not validate falls back to the global rule
 unchanged. A project can also switch a declared mode on for itself (`active`), which suspends the rules that list
-that mode. Session state (retry acknowledgements, modes, warnings shown) lives in the global file and is pruned
-after 7 days.
+that mode. Every layer can also add wrapper names under `wrappers` (an object whose keys are the names; values are
+ignored); names only accumulate. Session state (retry acknowledgements, modes, warnings shown) lives in the global file
+and is pruned after 7 days.
 
 ## Managed scope
 

@@ -723,6 +723,12 @@ class EngineMissingNotice(Isolated):
         self.assertIn("  cannot pkill x", text)
         regex = json.dumps({"match": {"regex": "^pkill"}, "message": "m"})
         self.assertIn("match  pkill x", self.cli("rule", "test", "--json", regex, "pkill x")[1])
+        self.assertIn("k [global] deny NOT ENFORCED (engine unavailable)", self.cli("status")[1])
+        self.assertIn("deny · global · NOT enforced: engine unavailable", self.cli("status", "--render")[1])
+        self.put(self.gpath, self.WITH_REGEX)
+        rows = self.cli("status")[1]
+        self.assertIn("rx [global] deny:", rows)
+        self.assertNotIn("rx [global] deny NOT ENFORCED", rows)
 
 
 class EngineUsableNoNotice(AstIsolated):

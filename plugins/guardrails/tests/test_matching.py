@@ -47,6 +47,12 @@ class Matching(AstIsolated):
         self.kinds(rule_of(program=K), {f"$'p\\x6b{K[2:]}' x": None, f"p''{K[1:]} x": None, f"p\\{K[1:]} x": None,
                                         f"P={K}; $P x": None, f"alias k={K}; k x": None})
 
+    def test_names_with_regex_characters_are_matched_literally(self) -> None:
+        for name in ("g++", "a.b", "x-y", "a^b", "x,y", "é"):
+            with self.subTest(name=name):
+                self.kinds(rule_of(program=name), {f"{name} x": "direct", f"sudo {name} x": "wrapped", f"/bin/{name}": "direct",
+                                                   "g xx": None, "ab x": None, "x x": None, "a_b x": None})
+
     def test_program_list_and_each_name(self) -> None:
         self.kinds(rule_of(program=ALL_KILLS), {f"{K} x": "direct", "killall node": "direct", "sudo killall x": "wrapped",
                                                 "kill 1": None})
@@ -91,6 +97,7 @@ class Matching(AstIsolated):
             "grep --directories=recurse foo .": "direct", "grep --directories recurse foo": "direct",
             "grep -A3 -r foo .": "direct", "grep -e foo -r .": "direct", "/usr/bin/grep -r x": "direct",
             "sudo grep -rn foo .": "wrapped", "find . | xargs grep -rl foo": "wrapped", "ps | grep -r x": "wrapped",
+            "sudo -u bob -- grep -rn foo .": "wrapped", "env -- grep -R x": "wrapped", "sudo -- grep foo -- -r": None,
             "grep foo file": None, "grep -n foo file": None, "grep -e r file": None, "grep -er file": None,
             "grep -d skip foo": None, "grep foo -- -r": None, "rg -r x": None, "git grep -n x": None,
             "echo grep -r": None, "grep -A3 foo file": None,

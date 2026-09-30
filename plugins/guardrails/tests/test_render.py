@@ -635,6 +635,33 @@ class WrappedForms(AstIsolated):
                     self.assertEqual("  match  " in shown, output is not None)
 
 
+class NotEvaluated(AstIsolated):
+    def test_a_rule_the_engine_cannot_judge_is_never_shown_as_allowed(self) -> None:
+        self.use_engine(False)
+        examples = json.dumps([{"cmd": "pkill a", "expect": "match"}, {"cmd": "ls", "expect": "pass"}])
+        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--examples", examples)
+        self.assertEqual(code, 0)
+        self.assertIn("**Not evaluated**", out)
+        self.assertIn("- ? ⚠ `pkill a", out)
+        self.assertNotIn("**Allow**", out)
+        self.assertIn("2 commands, 2 mismatches", out)
+        self.assertIn("cannot evaluate the parsing part of this rule", out)
+
+    def test_a_regex_rule_is_judged_without_the_engine(self) -> None:
+        self.use_engine(False)
+        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps({"match": {"regex": "^pkill"}, "message": "m"}),
+                                "pkill a", "ls")
+        self.assertEqual(code, 0)
+        self.assertNotIn("Not evaluated", out)
+        self.assertIn("**Block**", out)
+
+    def test_an_oversize_command_is_not_judged_either(self) -> None:
+        import matching
+
+        out = self.cli("rule", "test", "--json", json.dumps(PKILL), "x" * (matching.MAX_COMMAND + 1))[1]
+        self.assertIn("cannot evaluate the parsing part of this rule: command too large to check", out)
+
+
 class Isolation(AstIsolated):
     def test_render_stdout_is_only_the_block(self) -> None:
         extra = self.tmp / "custom.json"

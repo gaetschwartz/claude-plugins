@@ -21,7 +21,6 @@ ARGUMENT_KINDS = ("raw_string", "string", "ansi_c_string", "word", "number", "co
                   "expansion", "command_substitution", "arithmetic_expansion", "process_substitution")
 COMMAND_STRING_FLAG = r"^-[A-Za-z]*c[A-Za-z]*$"
 RECURSIVE_FLAG = r"^(?:-[A-Za-z&&[^efmABCdD]]*[rR][A-Za-z]*|-drecurse|--recursive|--dereference-recursive|--directories=recurse)$"
-BEFORE_DOUBLE_DASH = {"not": {"follows": {"regex": "^--$", "stopBy": "end"}}}
 TRAILING_HOLE = re.compile(r"^(.*\S)\s+\$\$\$$", re.DOTALL)
 LITERAL_NAME = re.compile(r"[A-Za-z0-9_.+-]+")
 
@@ -48,9 +47,11 @@ def command_wrapping(names: Sequence[str], wrappers: Sequence[str]) -> Rule:
 
 
 def recursive_flag() -> Rule:
+    """A recursive flag among grep's words, not after a `--` that follows the grep word (a wrapper's `--` is not one)."""
+    before_double_dash = {"not": {"follows": {"regex": "^--$", "stopBy": {"regex": name_regex(GREPS)}}}}
     glued = {"regex": "^(?:-d|--directories)$", "precedes": {"regex": "^recurse$"}}
-    return {"any": [{"has": {"regex": RECURSIVE_FLAG, **BEFORE_DOUBLE_DASH}},
-                    {"has": {**glued, **BEFORE_DOUBLE_DASH}}]}
+    return {"any": [{"has": {"regex": RECURSIVE_FLAG, **before_double_dash}},
+                    {"has": {**glued, **before_double_dash}}]}
 
 
 def shorthand(match: dict[str, Any], wrappers: Sequence[str]) -> tuple[Rule | None, Rule | None]:
@@ -87,9 +88,8 @@ def widen(rule: Any) -> Any:
 
 
 def loosen_command(text: str, behind: bool) -> tuple[str, str] | None:
-    """(pattern, name) for a command pattern: with `behind`, the pattern as written moved behind a wrapper name;
-    otherwise its name replaced by a wildcard, to be checked separately so that any spelling of it passes (quotes, a
-    directory). None unless the pattern starts with a plain name and has arguments."""
+    """(pattern, name) for a command pattern: moved behind a wrapper name, or with its name swapped for a wildcard that
+    `name` is checked against separately. None unless the pattern starts with a plain name and has arguments."""
     head, _, rest = text.strip().partition(" ")
     if not rest or not LITERAL_NAME.fullmatch(head):
         return None
@@ -97,8 +97,8 @@ def loosen_command(text: str, behind: bool) -> tuple[str, str] | None:
 
 
 def loosened(node: Any, consts: dict[str, Any], behind: bool, wrappers: Sequence[str]) -> Rule | None:
-    """The rule with the commands it names at its top level (through any/all) accepted in any spelling of the name, or
-    with `behind` behind a wrapper's own words; None when it names none."""
+    """The rule with its top-level command patterns (through any/all) spelling-tolerant or, with `behind`, behind a
+    wrapper; None when it has none."""
     if not isinstance(node, dict):
         return None
     out = dict(node)

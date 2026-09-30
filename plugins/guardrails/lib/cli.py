@@ -210,6 +210,7 @@ class Snapshot:
     mode_origins: dict[str, list[str]]
     problems: list[str]
     problem_layers: list[frozenset[str]]
+    blind: frozenset[str] = frozenset()
 
     def problems_in(self, scope: str | None) -> list[str]:
         return [p for p, layers in zip(self.problems, self.problem_layers) if scope is None or scope in layers]
@@ -264,24 +265,29 @@ def snapshot(args: Args) -> Snapshot:
         report(text, "managed", "global", "project")
     parsed = {rid: rule for rid, rule in rules.items() if rule.get("enabled") is True and policy.needs_parse(rule)
               and not any(p.startswith(f"rule {rid}:") for p in problems)}
+    blind: set[str] = set()
     if parsed:
         where = sorted({layer for rid in parsed for layer in rule_origins.get(rid, [])})
         try:
             for rid, why in matching.check(parsed, policy.effective_wrappers(mstate, gstate, pstate), state_dir()).items():
                 report(f"rule {rid}: does not compile ({why}) (skipped by the hook)", *rule_origins.get(rid, []))
         except astrun.Unavailable as exc:
+            blind = set(parsed)
             report(f"rules {', '.join(sorted(parsed))} use program, args, builtin or match.ast and are NOT enforced "
                    f"while the engine cannot run ({exc}); regex rules still are{engine_fix(exc)}", *where)
     return Snapshot(extra, sources, mstate, gstate, pstate, gpath, ppath, gstate.get("enabled", True) is not False,
-                    rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers)
+                    rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers,
+                    frozenset(blind))
 
 
-def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, dict[str, Any]]) -> str:
+def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, dict[str, Any]], blind: bool = False) -> str:
     if rule.get("enabled") is not True:
         return "disabled"
     suspended = [m for m in policy.modes_of(rule) if m in active]
     if suspended:
         return "suspended by " + ", ".join(suspended)
+    if blind:
+        return "NOT enforced: engine unavailable"
     if "managed" in layers and not policy.modes_of(rule):
         return "always enforced"
     return "enabled"
@@ -316,7 +322,7 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
         return scope is None or scope in origins.get(name, [])
 
     rules = [render.RuleRow(rid, str(snap.rules[rid].get("action")), snap.rule_origins.get(rid, []),
-                            rule_state(snap.rules[rid], snap.rule_origins.get(rid, []), snap.active))
+                            rule_state(snap.rules[rid], snap.rule_origins.get(rid, []), snap.active, rid in snap.blind))
              for rid in sorted(snap.rules) if keep(snap.rule_origins, rid)]
     modes = []
     for name in sorted(snap.modes):
@@ -402,6 +408,8 @@ def print_status_plain(args: Args, snap: Snapshot) -> None:
         suspended = [m for m in policy.modes_of(rule) if m in snap.active]
         if suspended:
             flags.append("SUSPENDED by " + ",".join(suspended))
+        elif rid in snap.blind and rule.get("enabled") is True:
+            flags.append("NOT ENFORCED (engine unavailable)")
         if "managed" in rule_origins.get(rid, []) and not policy.modes_of(rule):
             flags.append("ALWAYS ENFORCED")
         print(render.clean(f"  {rid} [{source}] {' '.join(flags)}: {describe_match(rule)}"))

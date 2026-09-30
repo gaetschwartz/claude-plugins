@@ -112,12 +112,11 @@ class Hit(NamedTuple):
 
 
 class Node:
-    __slots__ = ("children", "field", "hi", "kind", "lo", "missing", "named", "src")
+    __slots__ = ("children", "field", "hi", "kind", "lo", "missing", "src")
 
     def __init__(self, kind: str, field: str | None, lo: int, hi: int, src: str, missing: bool = False) -> None:
         self.kind, self.field, self.lo, self.hi, self.src = kind, field, lo, hi, src
         self.missing = missing
-        self.named = True
         self.children: list[Node] = []
 
     def text(self) -> str:
@@ -131,9 +130,6 @@ class Node:
             out.append(node)
             stack.extend(reversed(node.children))
         return out
-
-    def named_children(self) -> list[Node]:
-        return [c for c in self.children if c.named]
 
 
 def blocks(text: str) -> list[list[str]]:

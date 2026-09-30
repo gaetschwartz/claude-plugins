@@ -1,13 +1,14 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import json
 import re
 import shlex
 import unittest
 
+from helpers import ROOT, AstIsolated
+
 import matching
 import policy
-from helpers import ROOT, AstIsolated
 
 
 def matches(rule: dict, command: str) -> bool:

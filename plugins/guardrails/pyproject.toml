@@ -1,7 +1,7 @@
 [project]
 name = "guardrails"
-version = "0.9.1"
-description = "Claude Code PreToolUse guardrails for Bash: data-driven rules, modes and presets; the optional AST matcher runs the standalone ast-grep binary (npm package, else a hash-checked wheel)"
+version = "0.10.0"
+description = "Claude Code PreToolUse guardrails for Bash: data-driven rules, modes and presets; commands are parsed by the standalone ast-grep binary (npm package, else a hash-checked wheel)"
 requires-python = ">=3.9"
 
 [tool.ruff]
