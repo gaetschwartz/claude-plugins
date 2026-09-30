@@ -644,7 +644,8 @@ class NotEvaluated(AstIsolated):
         self.assertIn("**Not evaluated**", out)
         self.assertIn("- ? ⚠ `pkill a", out)
         self.assertNotIn("**Allow**", out)
-        self.assertIn("2 commands, 2 mismatches", out)
+        self.assertIn("**Verified** NOT verified: 2 of 2 commands could not be evaluated", out)
+        self.assertNotIn("matcher checked", out)
         self.assertIn("cannot evaluate the parsing part of this rule", out)
 
     def test_a_regex_rule_is_judged_without_the_engine(self) -> None:

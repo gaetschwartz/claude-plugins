@@ -10,6 +10,11 @@ test: engine
 test-39: engine
     /usr/bin/python3 -m unittest discover -s tests
 
+# CI: install the engine (a failure fails the job) and make a missing engine a test failure instead of skips
+ci:
+    CLAUDE_PLUGIN_DATA="$HOME/.cache/guardrails-engine-dev" python3 lib/guard.py engine install
+    GUARDRAILS_REQUIRE_AST=1 python3 -m unittest discover -s tests
+
 # Rewrite lib/engine-manifest.json after bumping the pin in package.json and regenerating package-lock.json
 manifest:
     python3 scripts/gen-engine-manifest.py

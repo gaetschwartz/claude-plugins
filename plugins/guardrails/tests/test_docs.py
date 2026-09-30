@@ -44,7 +44,7 @@ class MatchingClaims(AstIsolated):
         for command in ("sudo pkill x", "bash -c 'killall x; pkill y'", "xargs pkill", "timeout 5 pkill a",
                         "echo $(pkill a)", "/usr/bin/pkill a", "FOO=1 pkill a"):
             self.assertTrue(matches(rule, command), command)
-        for command in ("echo pkill", "man pkill", "ssh h pkill x", "find . -exec pkill {} ;", "bash <<EOF\npkill x\nEOF",
+        for command in ("echo pkill", "man pkill", "ssh h pkill x", "find . -exec pkill {} ;", "echo pkill x | sh",
                         "echo x > pkill", "pgrep x"):
             self.assertFalse(matches(rule, command), command)
 

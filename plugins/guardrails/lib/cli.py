@@ -265,6 +265,11 @@ def snapshot(args: Args) -> Snapshot:
         report(text, "managed", "global", "project")
     parsed = {rid: rule for rid, rule in rules.items() if rule.get("enabled") is True and policy.needs_parse(rule)
               and not any(p.startswith(f"rule {rid}:") for p in problems)}
+    failures = [f for f in (view(v, "engineFailure") for v in view(gstate, "sessions").values()) if f.get("at")]
+    if failures:
+        last = max(failures, key=lambda f: str(f["at"]))
+        report(f"last engine failure: {last.get('kind')} at {last['at']} ({last.get('reason')}); commands that hit it were "
+               "allowed with a warning", "global")
     blind: set[str] = set()
     if parsed:
         where = sorted({layer for rid in parsed for layer in rule_origins.get(rid, [])})
@@ -273,8 +278,10 @@ def snapshot(args: Args) -> Snapshot:
                 report(f"rule {rid}: does not compile ({why}) (skipped by the hook)", *rule_origins.get(rid, []))
         except astrun.Unavailable as exc:
             blind = set(parsed)
+            managed_blind = sorted(rid for rid in parsed if "managed" in rule_origins.get(rid, []))
+            fails_open = f" MANAGED rules fail open too: {', '.join(managed_blind)}." if managed_blind else ""
             report(f"rules {', '.join(sorted(parsed))} use program, args, builtin or match.ast and are NOT enforced "
-                   f"while the engine cannot run ({exc}); regex rules still are{engine_fix(exc)}", *where)
+                   f"while the engine cannot run ({exc}); regex rules still are.{fails_open}{engine_fix(exc)}", *where)
     return Snapshot(extra, sources, mstate, gstate, pstate, gpath, ppath, gstate.get("enabled", True) is not False,
                     rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers,
                     frozenset(blind))
@@ -717,7 +724,7 @@ def cannot_evaluate_note(ev: matching.Evaluation) -> str:
                 f"missing ({ev.outage}); the hook allows the command without it and warns the session"
                 f"{engine_fix(ev.outage)}")
     return (f"cannot evaluate the parsing part of this rule (program, args, builtin, match.ast): the engine failed "
-            f"({ev.outage}); the hook allows the command and warns the session")
+            f"({ev.failure_kind()}: {ev.outage}); the hook allows the command and warns the session")
 
 
 def cmd_rule_test(args: Args) -> int:
@@ -786,7 +793,7 @@ def cmd_rule_test(args: Args) -> int:
     if policy.modes_of(rule):
         flags.append("modes=" + ",".join(policy.modes_of(rule)))
     print(render.clean(f"rule {label}: {' '.join(flags)}"))
-    if notes:
+    if any(not note.startswith("cannot evaluate") for note in notes):
         print("note: match only means the matcher selects the command; the hook would not act on it as follows")
     for note in notes:
         print(render.clean(f"note: {note}"))

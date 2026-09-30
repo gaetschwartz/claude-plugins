@@ -186,7 +186,9 @@ def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: s
 
     bad = sum(r.mismatch for r in results)
     count = f"{plural(len(results), 'command')}, {plural(bad, 'mismatch')}"
-    lines += ["", f"**Verified** matcher checked with `rule test`, {count}"]
+    blind = sum(r.kind == UNEVALUATED for r in results)
+    lines += ["", f"**Verified** NOT verified: {blind} of {plural(len(results), 'command')} could not be evaluated" if blind
+              else f"**Verified** matcher checked with `rule test`, {count}"]
     if notes:
         lines.append(f"**Note** {prose('; '.join(notes))}")
     raw = raw_matcher(match)

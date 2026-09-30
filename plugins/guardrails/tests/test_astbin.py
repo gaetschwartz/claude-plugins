@@ -541,10 +541,11 @@ class RealEngine(AstIsolated):
             self.assertLess(call["timeout"], astrun.DEADLINE + 0.1)
         self.assertEqual(Path(astcli.CONFIG).read_text().strip(), "ruleDirs: []")
 
-    def test_a_dead_binary_degrades_instead_of_raising(self) -> None:
-        with mock.patch.object(astcli.Cli, "_run", side_effect=astcli.Unavailable("timed out")), \
-                self.assertRaises(astrun.Unavailable):
-            self.call({"op": "eval", "command": "pkill x", "rules": {"r": PKILL_RULE}, "wrappers": []})
+    def test_a_dead_binary_is_reported_as_a_failure_with_its_class(self) -> None:
+        with mock.patch.object(astcli.Cli, "_run", side_effect=astcli.Unavailable("timed out", "timeout")):
+            response = self.call({"op": "eval", "command": "pkill x", "rules": {"r": PKILL_RULE}, "wrappers": []})
+        self.assertEqual(response["failure"], {"kind": "timeout", "reason": "timed out"})
+        self.assertEqual(response["verdicts"], {"r": None})
 
 
 class BrokenBinary(World):

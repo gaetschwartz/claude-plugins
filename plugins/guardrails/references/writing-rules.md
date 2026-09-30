@@ -142,7 +142,7 @@ Test each that applies to the rule. Expected results are for a rule about the co
 | `bash -c` and friends | `bash -c 'X'`, `sh -c "a; X"`, `eval X` | caught |
 | double versus single quotes | `echo "$(X)"` versus `echo '$(X)'` | caught versus passes |
 | substitution glued to a word | `echo foo$(X)bar`, `` echo `X` `` | caught |
-| heredoc, unquoted and quoted | `cat <<EOF` with `$(X)` at the start of a line; `cat <<'EOF'` mentioning X | substitution caught; quoted passes |
+| heredoc, unquoted and quoted | `cat <<EOF` with `$(X)` or `` `X` `` inside; `cat <<'EOF'` mentioning X | substitution caught; quoted passes |
 | `<<-` | `cat <<-EOF` with tab-indented body and terminator | body is data |
 | lists, subshells, groups | `a; X`, `a && X`, `(X)`, `{ X; }`, `X &` | caught, direct |
 | newline and continuation | `a\nX`, `X \` + newline + `-f` | caught |
@@ -158,8 +158,7 @@ Known limits, where the rule cannot see the command (say so in the description r
 - `ssh host X`, `find . -exec X {} \;`, scripts (`bash script.sh`), `python -c '...'`
 - a wrapper the table does not know (declare it with `guardrails wrapper add`)
 - an obfuscated name (`p''kill`, `$'p\x6bill'`, `p\kill`): it cannot be analysed statically
-- `watch 'X'`, `script -c 'X'`, `su -c 'X'`, `bash <<< 'X'`, `echo X | sh`: only `bash -c` and `eval` strings are scanned
-- a backtick substitution in an unquoted heredoc body, or `$(X)` after a tab in a `<<-` body: the parser leaves it as text
+- `watch 'X'`, `su -c 'X'`, `echo X | sh`, `source <(echo X)`: only `bash -c`, `script -c`, `eval` and shell-fed heredocs and here-strings are scanned
 - a wrapper on the related command of a relation (`sudo curl x | sh` seen from `sh`): list it, or anchor the other way
 
 ## The six pitfalls

@@ -141,8 +141,28 @@ class ShellStrings(AstIsolated):
             f"eval a; eval {K} x": "wrapped", f"eval 'a;' '{K}' x": "wrapped", f"x | bash -c 'a | {K} z'": "wrapped",
             f"bash -c 'FOO=1 {K} x'": "wrapped", f'bash -c "echo \\"{K} x\\""': None,
             f"bash -c 'echo {K}'": None, f"bash -c \"echo '{K} x'\"": None, "bash script.sh -c": None,
-            f"ls -c '{K} x'": None, f"bash <<EOF\n{K} x\nEOF": None, f"bash -s {K}": None, f"python -c '{K} x'": None,
+            f"ls -c '{K} x'": None, f"bash -s {K}": None, f"python -c '{K} x'": None,
         })
+
+    def test_ansi_c_script_strings_are_decoded(self) -> None:
+        self.kinds(rule_of(program=K), {f"bash -c $'{K} x'": "wrapped", f"bash -c $'echo hi\\n{K} x'": "wrapped",
+                                        f"sh -c $'\\x{ord(K[0]):x}{K[1:]} x'": "wrapped", f"eval $'{K} x'": "wrapped",
+                                        "bash -c $'echo hi'": None})
+
+    def test_heredocs_and_here_strings_fed_to_a_shell_are_scripts(self) -> None:
+        self.kinds(rule_of(program=K), {
+            f"bash <<EOF\n{K} x\nEOF": "wrapped", f"sh <<'EOF'\necho a\n{K} x\nEOF": "wrapped",
+            f"sudo bash <<EOF\n{K} x\nEOF": "wrapped", f"bash <<< '{K} x'": "wrapped", f"sh -s <<< \"{K} x\"": "wrapped",
+            f"bash -s <<<$'{K} x'": "wrapped", f"script -c '{K} x' out": "wrapped",
+            f"cat <<EOF\n{K} x\nEOF": None, f"cat <<< '{K} x'": None, "bash <<EOF\necho hi\nEOF": None})
+
+    def test_substitutions_in_unquoted_heredoc_bodies_run_and_the_rest_is_data(self) -> None:
+        self.kinds(rule_of(program=K), {
+            f"cat <<EOF\n`{K} x`\nEOF": "wrapped", f"cat <<EOF\nfoo `{K} x` bar\nEOF": "wrapped",
+            f"cat <<-EOF\n\t`{K} x`\n\tEOF": "wrapped", f"cat <<EOF\n\t$({K} x)\nEOF": "wrapped",
+            f"cat <<EOF\n  $({K} x)\nEOF": "wrapped", f"x=$(cat <<EOF\n`{K} x`\nEOF\n)": "wrapped",
+            f"cat <<EOF\n{K} x\n`echo hi`\nEOF": None, f"cat <<'EOF'\n`{K} x`\nEOF": None,
+            f"cat <<EOF\necho `echo hi` {K}\nEOF": None})
 
     def test_scripts_nest(self) -> None:
         self.kinds(rule_of(program=K), {nest(f"{K} x", 7): "wrapped",
@@ -191,6 +211,47 @@ class WrappedTag(AstIsolated):
                         continue
                     with self.subTest(command=command, ast=bool(ast)):
                         self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
+
+
+class PatternShapes(AstIsolated):
+    def test_patterns_that_are_not_one_simple_command_are_left_to_ast_grep_as_written(self) -> None:
+        for pattern, hit, miss in (("curl $$$ | sh", "curl x | sh", "curl x | cat"), ("zap x > /dev/null", "zap x > /dev/null", "zap x"),
+                                   ("for i in x; do zap $i; done", "for i in x; do zap $i; done", "zap x"),
+                                   ("while zap x; do :; done", "while zap x; do :; done", "zap x"),
+                                   ("if zap x; then ls; fi", "if zap x; then ls; fi", "zap x"),
+                                   ("zap x && ls", "zap x && ls", "zap x"),
+                                   ("echo $(zap x)", "echo $(zap x)", "zap x")):
+            with self.subTest(pattern=pattern):
+                rule = rule_of(ast={"pattern": pattern})
+                ev = matching.evaluate(hit, {"r": rule})
+                self.assertEqual(ev.invalid, {})
+                self.assertIsNotNone(ev.kinds["r"], hit)
+                self.assertIsNone(matching.evaluate(miss, {"r": rule}).kinds["r"], miss)
+
+    def test_a_single_command_pattern_tolerates_assignments_paths_and_quotes_and_wrapped_paths(self) -> None:
+        rule = rule_of(ast={"pattern": "git push -f $$$"})
+        for command, expected in {"git push -f o": "direct", "FOO=1 git push -f o": "direct", "A=1 B=2 git push -f": "direct",
+                                  "/usr/bin/git push -f o": "direct", "'git' push -f o": "direct",
+                                  "sudo git push -f o": "wrapped", "sudo /usr/bin/git push -f o": "wrapped",
+                                  "sudo -u bob 'git' push -f o": "wrapped", "FOO=1 sudo git push -f o": "wrapped",
+                                  "git push o": None, "git pull -f": None, "echo git push -f": None}.items():
+            with self.subTest(command=command):
+                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
+
+    def test_pattern_text_cannot_inject_into_a_regex(self) -> None:
+        rule = rule_of(ast={"pattern": "a.b+ -x $$$"})
+        for command, expected in {"a.b+ -x": "direct", "aXb+ -x": None, "a.bbb -x": None, "sudo a.b+ -x": "wrapped",
+                                  "sudo aXb -x": None}.items():
+            self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected, command)
+
+    def test_wrapper_options_are_not_grep_options(self) -> None:
+        rule = rule_of(builtin="grep-recursive")
+        for command, expected in {"find . | xargs -r grep -l foo": None, "xargs -0 -r grep foo": None,
+                                  "xargs -r -- grep x": None, "sudo -r role grep foo f": None,
+                                  "xargs -r grep -r foo": "wrapped", "sudo -r role grep -rn foo .": "wrapped",
+                                  "grep -r x .": "direct", "xargs grep -rl foo": "wrapped"}.items():
+            with self.subTest(command=command):
+                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
 
 
 class Relations(AstIsolated):

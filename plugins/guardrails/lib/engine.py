@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import sys
+import time
 from typing import IO, Any
 
 import matching
@@ -30,6 +31,24 @@ def remember(session: Session, key: str, value: str) -> bool:
     if value in items:
         return False
     items.append(value)
+    return True
+
+
+REPEAT_AFTER = 600.0
+
+
+def due(session: Session, key: str) -> bool:
+    """True when this warning should be shown now: once per session, except engine failures, which repeat."""
+    if not key.startswith(matching.FAILED_PREFIX):
+        return remember(session, "reported", key)
+    stamps = session.get("reportedAt")
+    if not isinstance(stamps, dict):
+        stamps = session["reportedAt"] = {}
+    now = time.time()
+    last = stamps.get(key)
+    if isinstance(last, (int, float)) and 0 <= now - last < REPEAT_AFTER:
+        return False
+    stamps[key] = now
     return True
 
 
@@ -130,8 +149,8 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     evaluation = pre if pre is not None and all(rid in pre.kinds for rid in candidates) \
         else matching.evaluate(command, candidates, wrappers, state_dir)
     agent_notes: list[str] = []
-    for key, warning in evaluation.warnings():
-        if remember(session, "reported", key):
+    for key, warning in evaluation.warnings(managed_ids):
+        if due(session, key):
             changed = True
             notices.append(warning)
             agent_notes.append(warning)
@@ -139,6 +158,24 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
                 import astrun
 
                 astrun.warm(state_dir)
+            if key.startswith(matching.FAILED_PREFIX):
+                session["engineFailure"] = {"kind": evaluation.failure_kind(), "at": store.now(),
+                                            "reason": str(evaluation.outage)[:200]}
+
+    def unsuspended(rule: policy.Rule) -> bool:
+        return not any(name in active for name in policy.modes_of(rule))
+
+    refused = bool(evaluation.refusal) and any(
+        candidates[rid].get("action") == "deny" and unsuspended(candidates[rid])
+        for rid in evaluation.unevaluated if rid in candidates)
+    if evaluation.refusal and not refused:
+        key = matching.FAILED_PREFIX + evaluation.refusal_kind
+        if due(session, key):
+            changed = True
+            text = (f"guardrails: {evaluation.refusal}; the command was allowed because only warn rules could not "
+                    "be checked.")
+            notices.append(text)
+            agent_notes.append(text)
 
     for rid, rule in candidates.items():
         if evaluation.kinds.get(rid) is None:
@@ -163,10 +200,10 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
 
     output: Output = {}
     extra = "\n\n" + "\n".join(agent_notes) if agent_notes else ""
-    if denies or evaluation.refusal:
+    if denies or refused:
         text, composed = compose(denies + warns, modes, session, shown_before, session_id, managed_ids)
         changed = changed or composed
-        if evaluation.refusal:
+        if refused:
             refusal = (f"[guardrails] Denied: {evaluation.refusal}. Rules that use program, args, builtin or match.ast "
                        "cannot be evaluated on it. Split it up or put the content in a file.")
             text = "\n\n".join(filter(None, [refusal, text]))

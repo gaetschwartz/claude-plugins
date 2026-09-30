@@ -20,7 +20,9 @@ MAX_SCRIPT_BYTES = 256 << 10
 MAX_RULES_BYTES = 256 * 1024
 LEAF_KINDS = ("word", "command_name", "raw_string", "number")
 ESCAPED_IN_DOUBLE_QUOTES = re.compile(r'\\([\\"$`])')
-WORD_PIECE = re.compile(r"""'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)|([^'"\\]+)""", re.DOTALL)
+WORD_PIECE = re.compile(r"""\$'((?:\\.|[^'\\])*)'|'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)|([^'"\\]+)""", re.DOTALL)
+ANSI_ESCAPE = re.compile(r"\\(x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|c.|.)", re.DOTALL)
+SINGLE_ESCAPES = {"n": "\n", "t": "\t", "e": "\x1b", "E": "\x1b", "a": "\a", "b": "\b", "f": "\f", "r": "\r", "v": "\v"}
 
 Rule = dict[str, Any]
 
@@ -33,13 +35,32 @@ class Unit(NamedTuple):
     depth: int
     src: Src
     hits: list[Hit]
+    restricted: bool
+
+
+def ansi_c(body: str) -> str:
+    """The text inside `$'...'`: backslash escapes decoded the way the shell does."""
+
+    def decoded(found: re.Match[str]) -> str:
+        code = found.group(1)
+        if len(code) > 1 and code[0] in "xuU":
+            return chr(min(int(code[1:], 16), 0x10FFFF))
+        if code[0] in "01234567":
+            return chr(int(code, 8) & 0xFF)
+        if len(code) > 1 and code[0] == "c":
+            return chr(ord(code[1]) & 0x1F)
+        return SINGLE_ESCAPES.get(code[0], code[0])
+
+    return ANSI_ESCAPE.sub(decoded, body)
 
 
 def unquote(word: str) -> str:
-    """The text one shell word stands for: its single-quoted, double-quoted, backslashed and bare pieces joined."""
+    """The text one shell word stands for: its ANSI-C, single-quoted, double-quoted, backslashed and bare pieces joined."""
 
     def piece(found: re.Match[str]) -> str:
-        single, double, escaped, bare = found.groups()
+        ansi, single, double, escaped, bare = found.groups()
+        if ansi is not None:
+            return ansi_c(ansi)
         if double is not None:
             return ESCAPED_IN_DOUBLE_QUOTES.sub(r"\1", double)
         return next(text for text in (single, escaped, bare) if text is not None)
@@ -66,32 +87,44 @@ def eval_words(src: Src, hits: list[Hit]) -> list[list[str]]:
     return list(found.values())
 
 
-def scripts_in(src: Src, hits: list[Hit]) -> list[str]:
-    """The text run by each `bash -c` string and `eval` in a unit; `eval` joins its arguments like the shell does."""
-    scripts = [unquote(src.text[hit.lo:hit.hi]) for hit in hits if hit.rule == astrules.SHELL_SCRIPT]
-    scripts += [" ".join(words) for words in eval_words(src, hits)]
-    return [script for script in scripts if script.strip()]
+def scripts_in(src: Src, hits: list[Hit], restricted: bool) -> list[tuple[str, bool]]:
+    """(text, restricted) of each script a unit hands to a shell: `bash -c` strings, `eval` (arguments joined like the
+    shell does), heredocs and here-strings fed to a shell, and the bodies of unquoted heredocs that contain a
+    substitution, which only count inside their substitutions. A restricted unit only yields scripts inside its own."""
+    if restricted:
+        spans = [(hit.lo, hit.hi) for hit in hits if hit.rule == astrules.SUBSTITUTION]
+        hits = [hit for hit in hits if any(lo <= hit.lo and hit.hi <= hi for lo, hi in spans)]
+
+    def text(hit: Hit) -> str:
+        return src.text[hit.lo:hit.hi]
+
+    found = [(unquote(text(hit)), False) for hit in hits if hit.rule in (astrules.SHELL_SCRIPT, astrules.SHELL_HERESTRING)]
+    found += [(text(hit), False) for hit in hits if hit.rule == astrules.SHELL_HEREDOC]
+    found += [(" ".join(words), False) for words in eval_words(src, hits)]
+    found += [(text(hit), True) for hit in hits if hit.rule == astrules.HEREDOC_BODY and ("`" in text(hit) or "$(" in text(hit))]
+    return [(script, only) for script, only in found if script.strip()]
 
 
 def walk(command: str, bodies: dict[str, dict[str, Any]], cli: Cli) -> Iterator[Unit]:
-    """The command, then the shell strings it unpacks, level by level, each scanned with every rule in `bodies`."""
-    seen = {command}
-    level = [command]
+    """The command, then the scripts it hands to shells, level by level, each scanned with every rule in `bodies`."""
+    seen = {(command, False)}
+    level = [(command, False)]
     spent = 0
     depth = 0
     while level:
-        sources = [Src(text) for text in level]
+        sources = [Src(text) for text, _ in level]
         found = cli.scan(bodies, sources)
+        pending = level
         level = []
-        for src, hits in zip(sources, found):
-            yield Unit(depth, src, hits)
-            for script in scripts_in(src, hits):
+        for (_, restricted), src, hits in zip(pending, sources, found):
+            yield Unit(depth, src, hits, restricted)
+            for script in scripts_in(src, hits, restricted):
                 if script in seen:
                     continue
-                spent += len(script)
+                spent += len(script[0])
                 if depth >= MAX_DEPTH:
                     raise Limit("depth")
-                if len(seen) >= MAX_UNITS:
+                if len(seen) > MAX_UNITS:
                     raise Limit("units")
                 if spent > MAX_SCRIPT_BYTES:
                     raise Limit("size")
@@ -118,39 +151,52 @@ def admissible(rules: dict[str, policy.Rule]) -> tuple[dict[str, policy.Rule], d
     return ok, errors
 
 
-def compiling(rules: dict[str, policy.Rule], wrappers: list[str], cli: Cli) -> tuple[dict[str, policy.Rule], dict[str, str]]:
-    """Split rules into those ast-grep accepts and the reason for each it rejects."""
+def compiling(rules: dict[str, policy.Rule], wrappers: list[str], cli: Cli
+              ) -> tuple[dict[str, policy.Rule], dict[str, str], set[str]]:
+    """(rules ast-grep accepts, the reason for each it rejects, those that only compile as written)."""
     ok: dict[str, policy.Rule] = {}
     errors: dict[str, str] = {}
+    plain: set[str] = set()
     for rid, rule in rules.items():
-        try:
-            cli.check(astrules.documents({rid: rule}, wrappers)[0])
-        except RuleError as exc:
-            errors[rid] = str(exc)
-        else:
-            ok[rid] = rule
-    return ok, errors
+        for as_written in (False, True):
+            try:
+                cli.check(astrules.documents({rid: rule}, wrappers, [rid] if as_written else ())[0])
+            except RuleError as exc:
+                errors[rid] = str(exc)
+            else:
+                ok[rid] = rule
+                errors.pop(rid, None)
+                if as_written:
+                    plain.add(rid)
+                break
+    return ok, errors, plain
 
 
 def kind_of(branch: str, depth: int) -> str:
     return "direct" if branch == astrules.DIRECT and depth == 0 else "wrapped"
 
 
-def verdicts_of(command: str, rules: dict[str, policy.Rule], wrappers: list[str], cli: Cli
-                ) -> tuple[dict[str, str | None], str | None]:
-    """(how each rule matched: "direct", "wrapped" or None; the reason unpacking stopped early, if it did)."""
-    bodies, owners = astrules.documents(rules, wrappers)
+def verdicts_of(command: str, rules: dict[str, policy.Rule], wrappers: list[str], cli: Cli,
+                plain: set[str] | None = None) -> tuple[dict[str, str | None], str | None, Unavailable | None]:
+    """(how each rule matched: "direct", "wrapped" or None; why unpacking stopped early; the engine failure that cut it).
+
+    Hits from levels that completed are kept when a later level fails.
+    """
+    bodies, owners = astrules.documents(rules, wrappers, plain or ())
     verdicts: dict[str, str | None] = {rid: None for rid in rules}
     try:
         for unit in walk(command, bodies, cli):
+            spans = [(h.lo, h.hi) for h in unit.hits if h.rule == astrules.SUBSTITUTION] if unit.restricted else []
             for hit in unit.hits:
-                if hit.rule in owners:
+                if hit.rule in owners and (not unit.restricted or any(lo <= hit.lo and hit.hi <= hi for lo, hi in spans)):
                     rid, branch = owners[hit.rule]
                     kinds = (verdicts[rid], kind_of(branch, unit.depth))
                     verdicts[rid] = "direct" if "direct" in kinds else "wrapped"
     except Limit as exc:
-        return verdicts, str(exc)
-    return verdicts, None
+        return verdicts, str(exc), None
+    except Unavailable as exc:
+        return verdicts, None, exc
+    return verdicts, None, None
 
 
 def evaluate(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
@@ -158,12 +204,13 @@ def evaluate(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
     rules, errors = admissible(request.get("rules") or {})
     command = request["command"].replace("\x00", " ")
     try:
-        verdicts, limit = verdicts_of(command, rules, wrappers, cli)
+        verdicts, limit, failure = verdicts_of(command, rules, wrappers, cli)
     except RuleError:
-        rules, rejected = compiling(rules, wrappers, cli)
+        rules, rejected, plain = compiling(rules, wrappers, cli)
         errors.update(rejected)
-        verdicts, limit = verdicts_of(command, rules, wrappers, cli)
-    return {"ok": True, "verdicts": verdicts, "errors": errors, "limit": limit, "version": cli.version}
+        verdicts, limit, failure = verdicts_of(command, rules, wrappers, cli, plain)
+    return {"ok": True, "verdicts": verdicts, "errors": errors, "limit": limit, "version": cli.version,
+            "failure": {"kind": failure.kind, "reason": str(failure)} if failure else None}
 
 
 def with_depth(root: Node) -> list[tuple[Node, int]]:

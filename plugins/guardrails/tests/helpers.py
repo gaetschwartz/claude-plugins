@@ -133,6 +133,17 @@ class Isolated(unittest.TestCase):
             code = cli_module.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
+    def stub_engine(self, body: str) -> None:
+        """Replace the engine with a shell script that has this body."""
+        path = self.tmp / "stub" / "ast-grep"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+        found = astbin.Engine(str(path), "wheel", astbin.pin())
+        patch = mock.patch.object(astbin, "locate", lambda state_dir: found)
+        patch.start()
+        self.addCleanup(patch.stop)
+
     def link_engine(self) -> None:
         """Make the real binary findable by a subprocess, which cannot see this process's patches."""
         engine_dir = getattr(self, "engine_dir", None)

@@ -101,7 +101,7 @@ WARN = ["kill -9 123", "kill -s KILL 42", "nm -g libfoo.dylib", "otool -L /bin/l
 
 # Known limits of matching by the real tree: each is documented in references/matching.md.
 OVERBROAD = ["command -v find", "command -V find", "sudo grep find file"]
-UNSEEN = ["watch -n 5 'find .'", "script -c 'find .' out", "echo 'find . -name x", "$'fi\\x6ed' . -name x"]
+UNSEEN = ["watch -n 5 'find .'", "su -c 'find .'", "echo 'find . -name x", "$'fi\\x6ed' . -name x"]
 
 
 class Corpus(AstIsolated):

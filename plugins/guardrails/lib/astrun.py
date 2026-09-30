@@ -16,6 +16,7 @@ from astbin import Missing
 from astcli import Cli, Unavailable
 
 DEADLINE = 4.0
+WATCHDOG_MARGIN = 0.4
 HERE = os.path.dirname(os.path.abspath(__file__))
 RUN_ENV = ("HOME", "LANG", "TMPDIR")
 PROXIES = ("HTTPS_PROXY", "HTTP_PROXY", "ALL_PROXY", "NO_PROXY", "https_proxy", "http_proxy", "all_proxy", "no_proxy")
@@ -42,19 +43,19 @@ def shape_ok(op: object, response: object) -> bool:
 def call(request: dict[str, Any], state_dir: str | None = None) -> dict[str, Any]:
     """The worker's response to request; raise Unavailable with a reason when it cannot answer (Missing without a binary)."""
     engine = astbin.locate(state_dir or os.path.dirname(store.global_state_path()))
-    cli = Cli(engine.binary, time.monotonic() + DEADLINE, engine.version)
+    cli = Cli(engine.binary, time.monotonic() + DEADLINE - WATCHDOG_MARGIN, engine.version)
     try:
         with watchdog.limit(DEADLINE):
             response = astworker.handle(request, cli)
     except Unavailable:
         raise
     except TimeoutError as exc:
-        raise Unavailable(f"timed out after {DEADLINE:.1f}s") from exc
+        raise Unavailable("timed out", "timeout") from exc
     except Exception as exc:
-        raise Unavailable(f"the AST worker failed: {type(exc).__name__}: {exc}") from exc
+        raise Unavailable(f"the AST worker failed: {type(exc).__name__}: {exc}", "unexpected") from exc
     if not shape_ok(request.get("op"), response):
         detail = response.get("error") if isinstance(response, dict) else None
-        raise Unavailable(f"the AST worker failed: {detail or 'unexpected reply'}")
+        raise Unavailable(f"the AST worker failed: {detail or 'unexpected reply'}", "unexpected")
     return response
 
 

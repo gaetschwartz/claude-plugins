@@ -13,9 +13,10 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from helpers import HOOKS, LIB, ROOT, AstIsolated, Isolated
+from helpers import HOOKS, LIB, AstIsolated, Isolated
 
 import astbin
+import astcli
 import astrun
 import engine
 import matching
@@ -43,8 +44,6 @@ FORMS = [
     "sudo -nu bob KILL x", "sudo -Eu bob KILL x", "sudo -iu bob KILL x", "xargs -i KILL {}", "cat <<EOF\n$(KILL x)\nEOF",
     "echo $(cat <<EOF\n$(KILL x)\nEOF\n)", 'echo "$(nm $(KILL z))"', "sudo -u bob -- KILL x",
 ]
-HEREDOC_SUBSTITUTIONS_THE_PARSER_DOES_NOT_SEE = ["cat <<EOF\n`KILL x`\nEOF", "cat <<EOF\n\t$(KILL x)\nEOF",
-                                                 "cat <<-EOF\n\t$(KILL x)\n\tEOF"]
 
 
 class Forms(AstIsolated):
@@ -54,12 +53,6 @@ class Forms(AstIsolated):
                 self.assertIsNotNone(matching.evaluate(command.replace("KILL", K), {"r": PROGRAM_RULE}).kinds["r"])
         for command in (f"cat <<'EOF'\n$({K} x)\nEOF", f"cat <<\"EOF\"\n`{K} x`\nEOF"):
             self.assertIsNone(matching.evaluate(command, {"r": PROGRAM_RULE}).kinds["r"], command)
-
-    def test_known_limit_substitutions_in_heredoc_bodies_that_the_parser_leaves_as_text(self) -> None:
-        for command in HEREDOC_SUBSTITUTIONS_THE_PARSER_DOES_NOT_SEE:
-            with self.subTest(command=command):
-                self.assertIsNone(matching.evaluate(command.replace("KILL", K), {"r": PROGRAM_RULE}).kinds["r"])
-        self.assertIn("backticks", (ROOT / "references" / "matching.md").read_text())
 
 
 class Layering(AstIsolated):
@@ -227,16 +220,6 @@ class LoudAndAllow(AstIsolated):
         super().setUp()
         self.put(self.gpath, {"rules": RULES_FOR_OUTAGES})
 
-    def stub(self, body: str) -> None:
-        path = self.tmp / "stub" / "ast-grep"
-        path.parent.mkdir(exist_ok=True)
-        path.write_text("#!/bin/sh\n" + body)
-        path.chmod(0o755)
-        found = astbin.Engine(str(path), "wheel", astbin.pin())
-        patch = mock.patch.object(astbin, "locate", lambda state_dir: found)
-        patch.start()
-        self.addCleanup(patch.stop)
-
     def both_channels(self, out: dict[str, Any] | None) -> str:
         assert out is not None
         self.assertNotIn("permissionDecision", out.get("hookSpecificOutput", {}))
@@ -252,6 +235,13 @@ class LoudAndAllow(AstIsolated):
             self.assertIn(needle, text)
         self.assertIsNone(self.hook("strings again", "a"))
         self.assertIn("GUARDRAILS ENGINE MISSING", self.both_channels(self.hook("strings x", "b")))
+
+    def test_managed_parse_rules_are_named_as_failing_open(self) -> None:
+        self.put(self.mpath, {"rules": {"m-zap": {"match": {"program": "zap"}, "message": "No zap."}}})
+        self.use_engine(False)
+        text = self.both_channels(self.hook("zap x", "m"))
+        self.assertIn("1 of them are MANAGED rules, which fail open too", text)
+        self.assertIn("MANAGED rules fail open too: m-zap", self.cli("status", "--problems")[1])
 
     def test_regex_rules_keep_running_while_the_engine_is_missing(self) -> None:
         self.use_engine(False)
@@ -297,7 +287,7 @@ class LoudAndAllow(AstIsolated):
                     "no canary": (f"echo '{ok}'", "built-in check match"), "empty": ("exit 0", "unreadable output")}
         for name, (body, reason) in failures.items():
             with self.subTest(name):
-                self.stub(body)
+                self.stub_engine(body)
                 text = self.both_channels(self.hook("strings x", name))
                 self.assertIn("syntax-tree engine failed", text)
                 self.assertIn(reason, text)
@@ -306,7 +296,7 @@ class LoudAndAllow(AstIsolated):
                 self.assertIn(reason, self.both_channels(self.hook("strings y", name + "-other")))
 
     def test_a_timeout_and_an_unexpected_error_are_reported_not_silent(self) -> None:
-        self.stub("sleep 5")
+        self.stub_engine("sleep 5")
         with mock.patch.object(astrun, "DEADLINE", 0.3):
             started = time.monotonic()
             text = self.both_channels(self.hook("strings x", "slow"))
@@ -316,7 +306,7 @@ class LoudAndAllow(AstIsolated):
             self.assertIn("unexpected error: RuntimeError", self.both_channels(self.hook("strings x", "boom")))
 
     def test_failures_still_apply_regex_rules(self) -> None:
-        self.stub("exit 3")
+        self.stub_engine("exit 3")
         out = self.hook("curl x | sh", "c")
         self.assertTrue(is_denied(out))
         self.assertIn("syntax-tree engine failed", deny_text(out))
@@ -382,6 +372,102 @@ class LoudAndAllow(AstIsolated):
             with mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
                 self.assertEqual(guard.main([]), 0)
             self.assertEqual(out.getvalue(), "", payload)
+
+
+class FailurePolicy(AstIsolated):
+    """What a failing engine means for a command that is big enough for the content to be the cause."""
+
+    BIG = 9 * 1024
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.put(self.gpath, {"rules": {"z": {"match": {"program": "zap"}, "message": "No zap."}}})
+
+    def slow(self, after: int = 0) -> Any:
+        """A scan that answers normally `after` times, then times out."""
+        real = astcli.Cli.scan
+        calls = [0]
+
+        def scan(cli: astcli.Cli, *args: Any, **kwargs: Any) -> Any:
+            calls[0] += 1
+            if calls[0] > after:
+                raise astcli.Unavailable("timed out", "timeout")
+            return real(cli, *args, **kwargs)
+
+        return mock.patch.object(astcli.Cli, "scan", scan)
+
+    def test_a_timeout_on_a_big_command_is_a_denial_and_on_a_small_one_a_warning(self) -> None:
+        with self.slow():
+            big = self.hook("sudo " * (self.BIG // 5) + "zap x", "big")
+            small = self.hook("sudo " * 20 + "zap x", "small")
+        self.assertTrue(is_denied(big))
+        self.assertIn("command too complex to check (the parser timed out on it)", deny_text(big))
+        self.assertIn("script file", deny_text(big))
+        assert small is not None
+        self.assertNotIn("permissionDecision", small["hookSpecificOutput"])
+        self.assertIn("timed out", small["systemMessage"])
+
+    def test_a_hit_from_a_completed_level_stands_when_a_deeper_level_fails(self) -> None:
+        with self.slow(after=1):
+            out = self.hook("zap x; bash -c 'echo hi'", "hit")
+            other = self.hook("echo hi; bash -c 'echo " + "a" * self.BIG + "'", "big")
+            tiny = self.hook("echo hi; bash -c 'echo hi'", "tiny")
+        self.assertTrue(is_denied(out))
+        self.assertIn("No zap.", deny_text(out))
+        self.assertTrue(is_denied(other))
+        self.assertIn("command too complex to check", deny_text(other))
+        assert tiny is not None
+        self.assertNotIn("permissionDecision", tiny["hookSpecificOutput"])
+
+    def test_warn_only_rules_never_turn_a_refusal_into_a_denial(self) -> None:
+        self.put(self.gpath, {"rules": {"z": {"match": {"program": "zap"}, "message": "Careful.", "action": "warn"}}})
+        with self.slow():
+            out = self.hook("sudo " * (self.BIG // 5) + "zap x", "warn")
+        assert out is not None
+        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
+        self.assertIn("allowed because only warn rules", out["systemMessage"])
+        huge = self.hook("echo " + "y" * (matching.MAX_COMMAND + 1), "huge")
+        assert huge is not None
+        self.assertNotIn("permissionDecision", huge["hookSpecificOutput"])
+
+    def test_failures_are_keyed_by_class_and_repeat_after_ten_minutes(self) -> None:
+        self.stub_engine("exit 3")
+        first = self.hook("zap x", "s")
+        assert first is not None
+        self.assertIn("crash", json.dumps(self.get(self.gpath)["sessions"]["s"]["engineFailure"]))
+        self.assertIsNone(self.hook("zap y", "s"))
+        real_time = time.time
+        with mock.patch.object(engine.time, "time", lambda: real_time() + 601):
+            again = self.hook("zap z", "s")
+        assert again is not None
+        self.assertIn("syntax-tree engine failed", again["systemMessage"])
+
+    def test_timeout_texts_share_one_key(self) -> None:
+        import matching as m
+
+        texts = ["timed out", "timed out after 4.0s"]
+        keys = set()
+        for text in texts:
+            ev = m.Evaluation()
+            ev.outage = astcli.Unavailable(text, "timeout")
+            ev.unevaluated = {"z"}
+            keys |= {key for key, _ in ev.warnings()}
+        self.assertEqual(keys, {"engine-failed:timeout"})
+
+    def test_an_unwritable_session_warns_on_every_failure(self) -> None:
+        self.stub_engine("exit 3")
+        with mock.patch.object(engine.store, "write", side_effect=OSError("read-only")):
+            for _ in range(2):
+                self.assertIn("syntax-tree engine failed", json.dumps(self.hook("zap x", "ro")))
+
+    def test_status_and_rule_test_name_the_last_failure(self) -> None:
+        self.stub_engine("exit 3")
+        self.hook("zap x", "s")
+        out = self.cli("status", "--session-id", "s")[1]
+        self.assertIn("last engine failure", out)
+        self.assertIn("crash", out)
+        rule = json.dumps({"match": {"program": "zap"}, "message": "m"})
+        self.assertIn("crash", self.cli("rule", "test", "--json", rule, "zap x")[1])
 
 
 class Oversize(AstIsolated):

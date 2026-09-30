@@ -3,13 +3,16 @@
 from __future__ import annotations
 
 import re
+from collections.abc import Collection
 from typing import Any
 
 import policy
 import wrappers as wrapper_table
 
 ENGINE_MISSING_KEY = "engine-missing"
+FAILED_PREFIX = "engine-failed:"
 MAX_COMMAND = 256 << 10
+COMPLEX_BYTES = 8 << 10
 LIMIT_REASONS = {"depth": "nests shell strings too deeply", "units": "unpacks into too many shell strings",
                  "size": "unpacks into too much shell text"}
 
@@ -23,10 +26,14 @@ class Evaluation:
         self.invalid: dict[str, str] = {}
         self.outage: Exception | None = None
         self.refusal: str | None = None
+        self.refusal_kind = ""
         self.rejected: list[str] = []
 
-    def warnings(self) -> list[tuple[str, str]]:
-        """(stable key, text) per problem, so a session reports each only once."""
+    def failure_kind(self) -> str:
+        return self.refusal_kind or str(getattr(self.outage, "kind", ""))
+
+    def warnings(self, managed: Collection[str] = ()) -> list[tuple[str, str]]:
+        """(stable key, text) per problem. Keys under FAILED_PREFIX are per failure class, not per message."""
         import astbin
         import astrun
 
@@ -35,11 +42,12 @@ class Evaluation:
                 for rid, why in sorted(self.invalid.items())]
         affected = sorted(self.unevaluated)
         if isinstance(self.outage, astrun.Missing):
+            fail_open = sum(1 for rid in affected if rid in managed)
             out.append((ENGINE_MISSING_KEY, astbin.notice(str(self.outage), self.outage.unsupported,
-                                                          self.outage.wheel, affected)))
+                                                          self.outage.wheel, affected, fail_open)))
         elif self.outage is not None:
             reason = astbin.sanitised(str(self.outage), 200)
-            out.append((f"engine-failed:{reason}", astbin.failure_notice(reason, affected)))
+            out.append((FAILED_PREFIX + self.failure_kind(), astbin.failure_notice(reason, affected)))
         return out
 
 
@@ -51,12 +59,24 @@ def clean_error(text: str) -> str:
     return re.sub(r"^\d+:\s*", "", text)
 
 
+def give_up(ev: Evaluation, failure: Exception, size: int) -> None:
+    """Record an engine failure: a timeout on a command too big for that to be a hiccup refuses it, the rest is a
+    loud allow."""
+    if getattr(failure, "kind", "") == "timeout" and size > COMPLEX_BYTES:
+        ev.refusal = ("command too complex to check (the parser timed out on it); split it up or write it to a "
+                      "script file and run that")
+        ev.refusal_kind = "timeout"
+    else:
+        ev.outage = failure
+
+
 def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_table.Names | None = None,
              state_dir: str | None = None) -> Evaluation:
     """How each rule's matcher selects the command: "direct", "wrapped" or None.
 
-    Regex rules read the raw text. Rules using program, builtin or match.ast need ast-grep; when it cannot run the
-    command is left unjudged by them (`unevaluated`) and the reason is kept for the caller to report. Never raises.
+    Regex rules read the raw text. Rules using program, builtin or match.ast need ast-grep; what it could not judge
+    (`unevaluated`) and why (`outage` or `refusal`) is kept for the caller to report. Hits already found always
+    stand. Never raises.
     """
     ev = Evaluation()
     for rid, rule in rules.items():
@@ -67,25 +87,33 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
     size = len(command.encode("utf-8", "replace"))
     if size > MAX_COMMAND:
         ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND // 1024} KiB)"
+        ev.refusal_kind = "oversize"
         ev.unevaluated = {rid for rid in parsed if ev.kinds[rid] is None}
         return ev
     import astrun
 
     names = wrappers if wrappers is not None else wrapper_table.DEFAULTS
+    failure: Exception | None = None
     try:
         response = astrun.call({"op": "eval", "command": command, "rules": parsed, "wrappers": list(names)}, state_dir)
     except Exception as exc:  # noqa: BLE001
-        ev.outage = exc if isinstance(exc, astrun.Unavailable) else astrun.Unavailable(
-            f"unexpected error: {type(exc).__name__}")
-        ev.unevaluated = {rid for rid in parsed if ev.kinds[rid] is None}
+        failure = exc if isinstance(exc, astrun.Unavailable) else astrun.Unavailable(
+            f"unexpected error: {type(exc).__name__}", "unexpected")
     else:
         for rid, kind in response["verdicts"].items():
             if rid in ev.kinds and kind in ("direct", "wrapped"):
                 ev.kinds[rid] = best(ev.kinds[rid], kind)
         ev.invalid = {rid: clean_error(str(why)) for rid, why in response["errors"].items()}
-        ev.unevaluated = {rid for rid in ev.invalid if ev.kinds.get(rid) is None}
-        if response.get("limit"):
+        if response.get("failure"):
+            failure = astrun.Unavailable(response["failure"]["reason"], response["failure"]["kind"])
+        elif response.get("limit"):
             ev.refusal = f"command too complex to check (it {LIMIT_REASONS[response['limit']]})"
+            ev.refusal_kind = "complex"
+    if failure is not None:
+        give_up(ev, failure, size)
+    if failure is not None or ev.refusal:
+        ev.unevaluated = {rid for rid in parsed if ev.kinds[rid] is None}
+    ev.unevaluated |= {rid for rid in ev.invalid if ev.kinds.get(rid) is None}
     ev.rejected = astrun.take_rejected()
     return ev
 

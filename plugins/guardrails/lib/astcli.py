@@ -46,9 +46,9 @@ def private_dir() -> str:
         except FileExistsError:
             continue
         except OSError as exc:
-            raise Unavailable(f"cannot create a temporary directory in {base}: {exc.strerror or exc}") from exc
+            raise Unavailable(f"cannot create a temporary directory in {base}: {exc.strerror or exc}", "unavailable") from exc
         return path
-    raise Unavailable("cannot create a private temporary directory")
+    raise Unavailable("cannot create a private temporary directory", "unavailable")
 
 
 def write_private(path: str, data: bytes) -> None:
@@ -70,7 +70,11 @@ def remove_tree(folder: str) -> None:
 
 
 class Unavailable(Exception):
-    """The AST engine could not produce an answer; the reason is meant for the user."""
+    """The AST engine could not produce an answer; the reason is meant for the user, `kind` names its class."""
+
+    def __init__(self, text: str, kind: str = "failed") -> None:
+        super().__init__(text)
+        self.kind = kind
 
 
 class RuleError(Exception):
@@ -206,7 +210,7 @@ class Cli:
     def _left(self) -> float:
         left = self.deadline - time.monotonic()
         if left <= 0:
-            raise Unavailable("timed out")
+            raise Unavailable("timed out", "timeout")
         return left
 
     def _run(self, args: list[str], payload: bytes | None = None) -> tuple[int, str, str]:
@@ -214,15 +218,15 @@ class Cli:
             proc = subprocess.run([self.binary, *args], input=payload if payload is not None else b"",
                                   capture_output=True, timeout=self._left(), check=False, env=ENV, cwd=NEUTRAL_CWD)
         except subprocess.TimeoutExpired as exc:
-            raise Unavailable("timed out") from exc
+            raise Unavailable("timed out", "timeout") from exc
         except OSError as exc:
-            raise Unavailable(f"cannot run ast-grep: {exc.strerror or exc}") from exc
+            raise Unavailable(f"cannot run ast-grep: {exc.strerror or exc}", "unavailable") from exc
         return proc.returncode, proc.stdout.decode("utf-8", "replace"), proc.stderr.decode("utf-8", "replace")
 
     def _failure(self, code: int, err: str) -> Exception:
         if "Cannot parse rule" in err:
             return RuleError(rule_reason(err))
-        return Unavailable(f"ast-grep failed (exit {code}): {summary(err)}")
+        return Unavailable(f"ast-grep failed (exit {code}): {summary(err)}", "crash")
 
     def check(self, rules: dict[str, Any]) -> None:
         """Raise RuleError when ast-grep does not accept these rules."""
@@ -279,9 +283,9 @@ class Cli:
                 else:
                     hits[at].append(Hit(rule, sources[at].char(lo), sources[at].char(hi)))
         except (ValueError, KeyError, TypeError, IndexError, AttributeError) as exc:
-            raise Unavailable(f"ast-grep printed unreadable output: {type(exc).__name__}") from exc
+            raise Unavailable(f"ast-grep printed unreadable output: {type(exc).__name__}", "garbled") from exc
         if any(src.data and not seen for src, seen in zip(sources, canary)):
-            raise Unavailable("ast-grep did not report its built-in check match, so it is not working")
+            raise Unavailable("ast-grep did not report its built-in check match, so it is not working", "canary")
         return hits
 
     def _dump_args(self, src: Src, fmt: str) -> list[str]:
@@ -302,7 +306,7 @@ class Cli:
             except subprocess.TimeoutExpired as exc:
                 proc.kill()
                 proc.communicate()
-                raise Unavailable("timed out") from exc
+                raise Unavailable("timed out", "timeout") from exc
             trees.append(parse_dump(src, err.decode("utf-8", "replace")))
 
         try:
@@ -315,7 +319,7 @@ class Cli:
                                             stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, env=ENV,
                                             cwd=NEUTRAL_CWD)
                 except OSError as exc:
-                    raise Unavailable(f"cannot run ast-grep: {exc.strerror or exc}") from exc
+                    raise Unavailable(f"cannot run ast-grep: {exc.strerror or exc}", "unavailable") from exc
                 running.append((src, proc))
             while running:
                 finish()

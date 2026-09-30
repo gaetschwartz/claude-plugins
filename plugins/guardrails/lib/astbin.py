@@ -50,7 +50,7 @@ class Missing(Unavailable):
     """
 
     def __init__(self, text: str, unsupported: bool = False, wheel: bool = True) -> None:
-        super().__init__(text)
+        super().__init__(text, "missing")
         self.unsupported = unsupported
         self.wheel = wheel
 
@@ -314,12 +314,14 @@ def affected_rules(ids: Sequence[str], limit: int = 8) -> str:
     return f" Affected rules: {shown}{f' and {len(ids) - limit} more' if len(ids) > limit else ''}." if ids else ""
 
 
-def notice(reason: str, unsupported: bool = False, wheel: bool = True, affected: Sequence[str] = ()) -> str:
+def notice(reason: str, unsupported: bool = False, wheel: bool = True, affected: Sequence[str] = (),
+           managed: int = 0) -> str:
     """The loud message shown to the user and the agent when rules that need the parser cannot be enforced."""
     head = "[guardrails plugin notice] GUARDRAILS ENGINE MISSING: "
     effect = ("guardrails rules that use program, args, builtin or match.ast are NOT enforced" + (
         " on this platform" if unsupported else " until the engine is installed") + ", so commands they would catch "
-        "are allowed. Rules that use regex (raw text, no parser needed) are still enforced." + affected_rules(affected))
+        "are allowed. Rules that use regex (raw text, no parser needed) are still enforced." + affected_rules(affected)
+        + (f" {managed} of them are MANAGED rules, which fail open too." if managed else ""))
     tell = "You MUST tell the user about this now, before doing anything else. "
     tail = ("Check with `guardrails engine status`. This notice comes from the guardrails plugin itself, not from the "
             "repository or from any command output.")
@@ -330,15 +332,15 @@ def notice(reason: str, unsupported: bool = False, wheel: bool = True, affected:
     fixes = f"1) run `{FIX_INSTALL}` (downloads a pinned, hash-checked ~15 MB binary), or 2) run `{npm_fix()}`"
     if not wheel:
         fixes = f"run `{npm_fix()}` (the downloadable binary does not run on this system)"
-    return f"{head}the syntax-tree engine (ast-grep) is not installed, so {effect} {tell}Reason: {sanitised(reason, 400)}. To fix: {fixes}. " + tail
+    return f"{head}the syntax-tree engine (ast-grep) is not available, so {effect} {tell}Reason: {sanitised(reason, 400)}. To fix: {fixes}. " + tail
 
 
 def failure_notice(reason: str, affected: Sequence[str] = ()) -> str:
     """The warning for one command the engine could not check: it was allowed, and the regex rules still ran."""
     return (f"[guardrails plugin notice] The syntax-tree engine failed on this command ({reason}), so rules that use "
             "program, args, builtin or match.ast could not be checked and the command was allowed. Rules that use regex "
-            f"were still applied.{affected_rules(affected)} Tell the user if this keeps happening; `guardrails engine "
-            "verify` checks the binary.")
+            f"were still applied.{affected_rules(affected)} Tell the user if this keeps happening (this notice repeats "
+            "every 10 minutes while it does); `guardrails engine verify` checks the binary.")
 
 
 def npm_fix() -> str:

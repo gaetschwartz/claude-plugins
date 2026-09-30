@@ -88,8 +88,11 @@ class Kinds(AstIsolated):
 
     def test_a_command_pattern_accepts_any_spelling_of_the_name(self) -> None:
         got = self.kinds({"pattern": "pkill -9 $$$"}, ["pkill -9 x", "/usr/bin/pkill -9 x", "'pkill' -9 x",
-                                                       "echo pkill -9 x", "pkill -8 x", "xpkill -9 x", "FOO=1 pkill -9 x"])
-        self.assertEqual({c for c, k in got.items() if k}, {"pkill -9 x", "/usr/bin/pkill -9 x", "'pkill' -9 x"})
+                                                       "echo pkill -9 x", "pkill -8 x", "xpkill -9 x", "FOO=1 pkill -9 x",
+                                                       "A=1 B=2 C=3 pkill -9 x", "A=1 B=2 C=3 D=4 pkill -9 x",
+                                                       "A=1 echo pkill -9 x"])
+        self.assertEqual({c for c, k in got.items() if k}, {"pkill -9 x", "/usr/bin/pkill -9 x", "'pkill' -9 x",
+                                                            "FOO=1 pkill -9 x", "A=1 B=2 C=3 pkill -9 x"})
 
     def test_hole_inside_a_substitution_pattern_never_matches(self) -> None:
         got = self.kinds({"pattern": f"{KILL} $($$$)"}, [f"{KILL} $({PG} x)"])

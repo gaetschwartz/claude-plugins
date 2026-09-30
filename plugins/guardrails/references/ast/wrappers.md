@@ -87,8 +87,7 @@ The body of a heredoc is never a command, quoted delimiter or not; `cat <<EOF` m
 
 ## Not looked through
 
-`ssh host sudo x`, `find . -exec sudo x {} \;`, script files, `python -c`, `watch 'sudo x'` and `script -c 'sudo x'`
-(a string argument of a wrapper other than `bash -c` and `eval`), obfuscated or dynamic names (`$'s\x75do'`, `s''udo`,
-`$CMD`), and wrappers the list does not know (declare them with `guardrails wrapper add`). A `VAR=x` prefix hides a
-command from a pattern with literal arguments (`git push -f $$$`); `program` sees through it. Unbalanced quotes and
+`ssh host sudo x`, `find . -exec sudo x {} \;`, script files, `python -c`, `watch 'sudo x'`
+(a string argument of a wrapper other than `bash -c`, `script -c` and `eval`), `echo sudo x | sh`, obfuscated or dynamic names (`$'s\x75do'`, `s''udo`,
+`$CMD`), and wrappers the list does not know (declare them with `guardrails wrapper add`). Unbalanced quotes and
 unterminated heredocs give a partial tree (`ERROR` nodes): the commands the parser could still read are matched.

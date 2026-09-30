@@ -40,9 +40,11 @@ builtin stdbuf setsid ionice xargs watch`, plus your own) and one of the wrapper
 of which flags take a value: any word of the wrapper command that is the program name counts, so `sudo grep pkill file`
 and `command -v pkill` also match `pkill` (known false positives, see below).
 
-Shell strings, the script branch: the script of `bash|sh|zsh|dash|ksh [flags] -c '<script>'` (also behind a wrapper, and
-in a cluster such as `-lc`) and the arguments of `eval` are unquoted and scanned as a unit of their own, recursively;
-every hit in a unit counts as wrapped. Units are de-duplicated and bounded: depth 8, 64 distinct units, 256 KiB of
+Shell strings, the script branch: the script of `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'` (also behind a
+wrapper, and in a cluster such as `-lc`), the arguments of `eval`, and a heredoc or here-string fed to a shell
+(`bash <<EOF`, `sh -s <<< 'cmd'`) are unquoted (one shell word; `$'...'` escapes decoded) and scanned as a unit of
+their own, recursively; every hit in a unit counts as wrapped. The body of an unquoted heredoc that contains `$(` or a
+backtick is scanned too, but only what lies inside those substitutions counts (the rest is data). Units are de-duplicated and bounded: depth 8, 64 distinct units, 256 KiB of
 script text. A command that goes past a bound is denied unparsed with "command too complex to check".
 
 Not commands, so never matched by `program`: heredoc bodies, redirect targets (`> pkill`), the arguments of other
@@ -50,11 +52,12 @@ commands (`echo pkill`, `man pkill`), quoted data.
 
 Cannot be analysed statically, so not matched: obfuscated or dynamic command names. `$'p\x6bill'`, `p''kill`, `p\kill`,
 a name held in a variable (`P=pkill; $P x`), an alias or a function. Also not looked through: `ssh host pkill x`,
-`find . -exec pkill {} ;`, the contents of a script (`bash script.sh`), `python -c '...'`, `bash <<EOF ... EOF` and
-`bash <<< '...'`, `echo pkill | sh`, `su -c`, `watch 'pkill x'` and `script -c 'pkill x'` (a string argument of any
-wrapper except `bash -c` and `eval`). Command substitutions in an unquoted heredoc body are seen only where the parser
-reads them (`$(...)` at the start of a line); backticks, and `$(...)` after a tab in a `<<-` body, stay text to the
-parser and are not seen. When a rule must not miss these, use `regex` and accept its false positives.
+`find . -exec pkill {} ;`, the contents of a script file (`bash script.sh`), `python -c '...'`, `echo pkill | sh` and
+`cat <<EOF | sh`, `source <(echo pkill)`, `su -c`, `env -S '...'`, and `watch 'pkill x'` (only `bash -c`, `eval`,
+`script -c` and shell-fed heredocs and here-strings are scanned). `find` and similar can be declared a wrapper with
+`guardrails wrapper add`, by word and without arity. A substitution in an unquoted heredoc body that is itself inside
+single quotes in that body is text to the parser. When a rule must not miss these, use `regex` and accept its false
+positives.
 
 ### The fields
 
@@ -98,17 +101,19 @@ strings). Because every rule runs on the real tree of the real text, negated rel
 A rule is compiled when it is added, tested, listed by `status` and run by the hook. The CLI rejects one that does not
 compile (exit 2); the hook skips it and warns once per session.
 
-**Names are matched as written.** A `pattern` is matched against the tree as it is: `FOO=1 pkill x`, `/usr/bin/pkill x`
-and `"pkill" x` do not match the pattern `pkill $$$`. Use `program` (or a `kind: command` rule whose `has` on
-`field: name` uses a regex) when the spelling of the name must not matter. A pattern that ends in ` $$$` also selects
-the command with no arguments (in tree-sitter-bash a trailing `$$$` hole alone never matches zero arguments, so the
-engine widens it). A hole INSIDE a substitution, such as `kill $($$$)`, never matches anything: express that with
-`inside` / `has`.
+**Single-command patterns are spelling-tolerant.** A `pattern` that is exactly one simple command with arguments
+(`pkill -9 $$$`, `git push -f $$$`; no pipe, list, redirect, loop or substitution in it) also matches the command when its
+name is quoted or has a directory (`/usr/bin/pkill`, `'pkill'`), after up to three `VAR=x` assignments, and behind a
+wrapper: `sudo -u bob /usr/bin/pkill -9 x`, `FOO=1 sudo pkill -9 x`. Behind a wrapper the match is by the name and the
+literal words (in any order, as `program` + `args` would), not by position. Every other pattern (`curl $$$ | sh`,
+`zap x > f`, `for ...; done`, `echo $(x)`) goes to ast-grep exactly as written. A `kind: command` rule whose `has` names
+the command with `field: name` also gets the wrapper form; its name regex is otherwise taken as written. A pattern
+that ends in ` $$$` also selects the command with no arguments (in tree-sitter-bash a trailing `$$$` hole alone never
+matches zero arguments, so the engine widens it). A hole INSIDE a substitution, such as `kill $($$$)`, never matches
+anything: express that with `inside` / `has`.
 
-**Behind a wrapper.** Each command `pattern` at the top of the rule (directly, or through `any` / `all`) is also tried
-behind a wrapper name: the pattern `pkill $$$` also matches `sudo -u bob pkill -f x`, `env A=1 pkill x`, `xargs pkill`.
-Relations, `not`, `kind` and `regex` members are not shifted; they keep judging the real tree. A rule that names commands
-only through `kind` / `has` / `regex` sees the command as written.
+**Behind a wrapper.** Relations, `not`, `regex` and other `kind` members are never shifted; they keep judging the real
+tree.
 
 **Units and `wrapped`.** A hit counts as wrapped when it was reached through the wrapper branch, inside a shell string,
 or when the matched node sits inside a pipeline or a substitution (`$(...)`, backticks, `<(...)`). A command in a list
@@ -156,8 +161,7 @@ deliberate repeat through.
 
 ### Data versus code
 
-Code (matched): a command; the body of `$(...)` or backticks, also inside double quotes and in an unquoted heredoc where
-the parser reads it; `<(...)`; the `-c` string of a shell and the arguments of `eval`. Data (never matched): a
+Code (matched): a command; the body of `$(...)` or backticks, also inside double quotes and in an unquoted heredoc body; `<(...)`; the `-c` string of a shell and the arguments of `eval`. Data (never matched): a
 quoted-delimiter heredoc body, single-quoted text, the arguments of other commands (`echo pkill`), redirect targets.
 `regex`, by contrast, reads the raw text, so it also fires inside heredocs and quoted strings.
 
@@ -210,12 +214,20 @@ evaluated, so the hook allows the command and says so loudly; `regex` rules are 
   Monitor call of every session carries the `GUARDRAILS ENGINE MISSING` notice in both the user-facing `systemMessage`
   and the agent-facing `additionalContext`: which rules are not enforced, that `regex` rules still are, the reason, the
   fixes that can work on this system, and an instruction to tell the user first.
-- **Engine failure during a call** (crash, timeout, unreadable or invalid output, missing canary match): that call is
-  allowed with a warning that names the reason, once per session per reason, in both channels.
+- **Managed rules fail open too**: a managed `program`/`args`/`builtin`/`ast` deny rule is not enforced while the engine
+  is missing or failing, only `regex` rules are. The notice and `status --problems` name the managed rules affected; after
+  the first notice the rest of the session runs with them unenforced.
+- **Engine failure during a call** (crash, unreadable or invalid output, missing canary match, timeout on a command under
+  8 KiB): that call is allowed with a warning that names the failure class, in both channels; the same class is warned
+  again at most every 10 minutes while it lasts, and `status` / `rule test` show the last failure.
+- **A timeout on a command over 8 KiB is a denial** ("command too complex to check"): dense nesting (`$(` x thousands,
+  `sudo ` chains) makes ast-grep quadratic, so the content is the cause and failing open would be a bypass. A hit found
+  at a completed level (the plain top level before a slow `bash -c` string) stands.
 - **A rule that does not compile** is skipped and named once per session; the others run.
 - **A command over 256 KiB, or one that nests shell strings more than 8 deep, unpacks into more than 64 distinct
   strings or more than 256 KiB of script text, is denied unparsed** ("command too large to check", "command too complex to
-  check"): padding must never be a way past a rule. A rule set with only `regex` rules is unaffected by size.
+  check"): padding must never be a way past a rule. Only a deny rule that could not be judged causes the denial (warn-only
+  parse rules: allowed with a warning); a rule set with only `regex` rules never starts the engine.
 - The whole hook runs under a 7 s watchdog (hook timeout 10 s); on expiry or any other exception it applies the `regex`
   rules, allows the rest with a visible warning, and never exits silently.
 

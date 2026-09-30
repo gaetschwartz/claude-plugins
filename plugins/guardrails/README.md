@@ -40,8 +40,8 @@ flags, lists, wrappers); a test runs every example in it against the real engine
 nice ionice nohup time command exec builtin stdbuf setsid xargs watch`, plus your own) one of whose own words is the
 name: `sudo -u bob pkill x`, `timeout 5 pkill x`. There is no table of flags that take a value, so `sudo grep pkill file`
 also matches `pkill` (a known false positive). A command `pattern` in `match.ast` is tried behind a wrapper the same way.
-The script of `bash|sh|zsh|dash|ksh [flags] -c '<script>'` and the arguments of `eval` are unquoted and scanned as units
-of their own (depth 8, 64 distinct units, 256 KiB). Add wrapper names with `guardrails wrapper add <name>`
+The script of `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'`, the arguments of `eval`, heredocs and here-strings fed to
+a shell, and the substitutions in unquoted heredoc bodies are unquoted and scanned as units of their own (depth 8, 64 distinct units, 256 KiB). Add wrapper names with `guardrails wrapper add <name>`
 (`--scope global|project|managed`, `--path`, `--as-user` for agents, like `rule`); `wrapper rm` and `wrapper list` do the
 rest. Look-through only ever grows: a layer adds names and never removes or changes a higher layer's. State files from
 older versions, whose wrapper entries carry `flagsWithValue` or `shellString`, still load and those options are ignored.
@@ -134,7 +134,7 @@ Rules and units never travel on the command line: they are files in a private (`
 must match every non-empty unit (the root is a `program`, or `ERROR` for text the parser could not finish), and the reply
 must be exactly ast-grep's SARIF document with known rule ids and in-range offsets; anything else (empty output, `{}`, a
 missing canary, a truncated reply, a non-zero exit) counts as an engine failure. Unpacking is bounded by counts and
-bytes, never by the clock, so the same command gets the same answer under any load. A `match.ast` rule is limited to
+bytes; the verdict itself still has a 4 s clock (below). A `match.ast` rule is limited to
 16 KiB (`rule add/set/test` exit 2, and the hook skips and names an oversized one without touching the others) and the
 enabled rules together to 256 KiB (later rules are skipped and named).
 
@@ -146,10 +146,19 @@ evaluated, so the hook allows the command and says so loudly, and `regex` rules 
   (on an unsupported platform: here), `regex` rules still are, which rules are affected, the precise reason, the fixes
   that can work on this system, and an instruction to tell the user first. The text is sanitised and framed as coming
   from the guardrails plugin, not from the repository. If the once-per-session mark cannot be saved, the notice repeats.
-- Engine failure during a call (crash, timeout, unreadable output, missing canary): that call is allowed with a warning
-  naming the reason, once per session per reason, in both channels.
+- **Managed rules fail open too.** A managed `program`/`args`/`builtin`/`ast` deny rule is not enforced while the engine
+  is missing or failing; only `regex` rules are. The notice and `status --problems` count and name the managed rules
+  affected. Install the engine (or use `regex`) wherever a managed rule must never be bypassed. After the first notice the
+  rest of that session runs with those rules unenforced.
+- Engine failure during a call (crash, unreadable output, missing canary, timeout on a small command): that call is
+  allowed with a warning naming the failure class, in both channels; the same class is warned again at most every 10
+  minutes while it persists, and `status`/`rule test` show the last failure. A timeout on a command over 8 KiB is a
+  denial ("command too complex to check"), because the content is what makes it slow: a hit already found at a completed
+  level stands, and the remainder is judged the same way.
 - A command over 256 KiB, or that unpacks past the shell-string bounds, is denied unparsed ("command too large to
-  check", "command too complex to check"): padding must never be a way past a rule. `regex`-only rule sets are unaffected.
+  check", "command too complex to check"): padding must never be a way past a rule. Only a deny rule that could not be
+  judged causes the denial; if just `warn` rules need the parser the command is allowed with a warning, and `regex`-only
+  rule sets never start the engine or care about size.
 - The whole hook runs under a 7 s watchdog (hook timeout 10 s); on expiry or any other exception it applies the `regex`
   rules, allows the rest with a visible warning, and never exits silently.
 
@@ -157,8 +166,7 @@ evaluated, so the hook allows the command and says so loudly, and `regex` rules 
 match"), and `status --problems` lists the rules that are not enforced and why.
 
 Known gaps, for any engine: `find -exec`/`-execdir`, variable-held or obfuscated names (`P=pkill; $P x`, `$'p\x6bill'`),
-`bash <<< 'cmd'`, `echo cmd | sh`, `su -c`, `ssh host cmd`, `watch 'cmd'`, `script -c 'cmd'`, scripts run from a file,
-backticks in an unquoted heredoc body, and a `VAR=x` prefix in front of a pattern with literal arguments.
+`echo cmd | sh`, `cat <<EOF | sh`, `source <(echo cmd)`, `su -c`, `ssh host cmd`, `watch 'cmd'`, scripts run from a file.
 
 ### Worked example: one bundled policy, three rules
 
