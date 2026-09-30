@@ -181,7 +181,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     return (output or None), changed
 
 
-def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
+def run_hook(stdin: IO[str], stdout: IO[str], notes: tuple[str, ...] = ()) -> None:
     try:
         payload = json.load(stdin)
     except ValueError:
@@ -200,7 +200,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
     except store.StateError:
         gstate, gstate_ok = {}, False
     managed, managed_problems = store.load_managed()
-    warnings = tuple(f"guardrails: {problem}" for problem in managed_problems)
+    warnings = tuple(f"guardrails: {problem}" for problem in managed_problems) + notes
     for warning in warnings:
         print(warning, file=sys.stderr)
     managed_ids = frozenset(policy.origins("rules", managed, {}, {}))
@@ -274,7 +274,7 @@ def run_warm(stdin: IO[str]) -> None:
         astrun.warm(os.path.dirname(store.global_state_path()))
 
 
-def run_safe(text: str, stdout: IO[str], failure: BaseException) -> None:
+def run_safe(text: str, stdout: IO[str], failure: BaseException, fast: bool = False) -> None:
     """After run_hook failed: judge the command by the stdlib matchers and command names, without session state."""
     payload = json.loads(text)
     tool = payload.get("tool_name") if isinstance(payload, dict) else None
@@ -295,8 +295,9 @@ def run_safe(text: str, stdout: IO[str], failure: BaseException) -> None:
     killed = gstate.get("enabled", True) is False
     rules = policy.effective_rules(managed, {} if killed else gstate, {} if killed else pstate)
     candidates = candidates_of(rules, tool)
-    reason = f"the guardrails hook failed internally ({type(failure).__name__})"
-    ev = matching.plain(command, candidates, reason)
+    reason = ("the guardrails hook exceeded its time budget" if isinstance(failure, TimeoutError)
+              else f"the guardrails hook failed internally ({type(failure).__name__})")
+    ev = matching.plain(command, candidates, reason, fast)
     hits = {rid: approximate(rule, ev.approx[rid], reason) if rid in ev.approx else rule
             for rid, rule in candidates.items() if ev.kinds.get(rid) is not None}
     notice = f"guardrails: {reason}; rules were applied by a minimal fallback without session state."

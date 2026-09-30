@@ -156,8 +156,34 @@ def ast_regexes(node: object) -> list[str]:
     return out
 
 
-def mentioned(command: str, names: list[str]) -> bool:
-    return any(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(n) + r"(?![A-Za-z0-9_-])", command) for n in names)
+ANSI_C = re.compile(r"\$'((?:\\.|[^'\\])*)'")
+ANSI_ESCAPE = re.compile(r"\\(?:x([0-9A-Fa-f]{1,2})|u([0-9A-Fa-f]{1,4})|([0-7]{1,3})|(.))", re.DOTALL)
+ANSI_SIMPLE = {"n": "\n", "t": "\t", "r": "\r", "a": "\a", "b": "\b", "e": "\x1b", "f": "\f", "v": "\v"}
+
+
+def _ansi_decode(match: re.Match[str]) -> str:
+    def one(m: re.Match[str]) -> str:
+        hexa, uni, octal, other = m.groups()
+        if hexa or uni:
+            return chr(int(hexa or uni, 16))
+        if octal:
+            return chr(int(octal, 8) & 0xFF)
+        return ANSI_SIMPLE.get(other, other)
+
+    return ANSI_ESCAPE.sub(one, match.group(1))
+
+
+def normalized(command: str) -> str:
+    """The text with shell quoting resolved, so p''kill, p\\kill and $'p\\x6bill' read as the name they run."""
+    text = ANSI_C.sub(_ansi_decode, command)
+    text = re.sub(r"\\(.)", r"\1", text, flags=re.DOTALL)
+    return text.replace("'", "").replace('"', "")
+
+
+def mentioned(command: str, names: list[str], normal: str | None = None) -> bool:
+    texts = (command, normal if normal is not None else normalized(command))
+    return any(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(n) + r"(?![A-Za-z0-9_-])", text)
+               for n in names for text in texts)
 
 
 def ast_of(rule: Rule) -> dict[str, Any] | None:

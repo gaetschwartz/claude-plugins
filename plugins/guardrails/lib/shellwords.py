@@ -8,6 +8,7 @@ redirect targets are not commands).
 
 from __future__ import annotations
 
+import bisect
 import re
 import shlex
 from typing import Any
@@ -56,6 +57,11 @@ class SimpleCommand:
 def split_heredocs(text: str) -> tuple[str, list[str]]:
     """The text without heredoc bodies, and the bodies whose delimiter is unquoted (their substitutions run)."""
     lines = text.split("\n")
+    exact: dict[str, list[int]] = {}
+    tabbed: dict[str, list[int]] = {}
+    for index, line in enumerate(lines):
+        exact.setdefault(line, []).append(index)
+        tabbed.setdefault(line.lstrip("\t"), []).append(index)
     out = []
     code = []
     i = 0
@@ -66,9 +72,10 @@ def split_heredocs(text: str) -> tuple[str, list[str]]:
         for m in HEREDOC.finditer(line):
             dash, single, double, bare = m.groups()
             delim = single or double or bare
-            end = next((j for j in range(i, len(lines))
-                        if (lines[j].lstrip("\t") if dash else lines[j]) == delim), None)
-            if end is not None:
+            found = (tabbed if dash else exact).get(delim, [])
+            at = bisect.bisect_left(found, i)
+            if at < len(found):
+                end = found[at]
                 if bare:
                     code.append("\n".join(lines[i:end]))
                 i = end + 1
@@ -79,27 +86,27 @@ def strip_heredocs(text: str) -> str:
     return split_heredocs(text)[0]
 
 
-def match_paren(text: str, start: int) -> int:
-    depth = 0
-    for i in range(start, len(text)):
-        if text[i] == "(":
-            depth += 1
-        elif text[i] == ")":
-            depth -= 1
-            if depth == 0:
-                return i
-    return -1
+def paren_pairs(text: str) -> dict[int, int]:
+    stack: list[int] = []
+    pairs: dict[int, int] = {}
+    for i, char in enumerate(text):
+        if char == "(":
+            stack.append(i)
+        elif char == ")" and stack:
+            pairs[stack.pop()] = i
+    return pairs
 
 
 def substitutions(text: str) -> list[str]:
     """Bodies of the outermost $(...) and `...` in text (nested ones are found when a body is parsed in turn)."""
+    pairs = paren_pairs(text) if "$(" in text else {}
     out = []
     i, n = 0, len(text)
     while i < n:
         if text.startswith("$((", i):
             i += 3
         elif text.startswith("$(", i):
-            j = match_paren(text, i + 1)
+            j = pairs.get(i + 1, -1)
             if j < 0:
                 i += 2
                 continue
@@ -201,6 +208,7 @@ def _commands(text: str, depth: int, extra: dict[str, dict[str, Any]]) -> list[S
     last: SimpleCommand | None = None
     pipe_next = False
     subst: list[bool] = []
+    glued_open = 0
 
     tokens = _tokens(text)
     for index, token in enumerate(tokens):
@@ -219,8 +227,9 @@ def _commands(text: str, depth: int, extra: dict[str, dict[str, Any]]) -> list[S
                     if char == "(":
                         glued = tokens[index - 1].endswith("$") if offset == 0 and index else token[offset - 1] in "<>$"
                         subst.append(glued)
+                        glued_open += glued
                     elif char == ")" and subst:
-                        subst.pop()
+                        glued_open -= subst.pop()
                 operator = token.strip("\n")
                 if operator in ("|", "|&"):
                     if last is not None:
@@ -259,7 +268,7 @@ def _commands(text: str, depth: int, extra: dict[str, dict[str, Any]]) -> list[S
             wrapper = base
             inline_script = True
             continue
-        current = SimpleCommand(base, [], assigns, bool(wrapper) or depth > 0 or pipe_next or any(subst))
+        current = SimpleCommand(base, [], assigns, bool(wrapper) or depth > 0 or pipe_next or glued_open > 0)
         assigns = []
         wrapper = None
         pipe_next = False

@@ -26,8 +26,8 @@ AST_PIN = "0.45.3"
 
 
 def ast_mode() -> str | None:
-    """How the AST matcher can run here: "inprocess" (ast_grep_py importable), "uv" (uv run works), or None."""
-    global _AST_MODE
+    """How the AST matcher can run here: "inprocess" (ast_grep_py importable), "venv" (a hashed venv was built), or None."""
+    global _AST_MODE, _SHARED
     if _AST_MODE is None:
         try:
             import ast_grep_py  # noqa: F401  # ty: ignore[unresolved-import]
@@ -36,25 +36,24 @@ def ast_mode() -> str | None:
         except ImportError:
             import astrun
 
-            saved = os.environ.pop(astrun.INPROCESS_ENV, None)
-            try:
-                astrun.call({"op": "ping"})
-                _AST_MODE = "uv"
-            except astrun.Unavailable:
-                _AST_MODE = ""
-            finally:
-                if saved is not None:
-                    os.environ[astrun.INPROCESS_ENV] = saved
+            _SHARED = tempfile.mkdtemp(prefix="guardrails-shared-venv-")
+            with mock.patch.object(astrun, "BUILD_ALLOWED", True):
+                try:
+                    astrun.ensure(_SHARED, 120.0)
+                    _AST_MODE = "venv"
+                except astrun.Unavailable:
+                    _AST_MODE = ""
     return _AST_MODE or None
 
 
+_SHARED: str | None = None
 _AST_MODE: str | None = None
 
 SKIP_AST = (f"ast-grep-py is unavailable: run the tests with `uv run --with ast-grep-py=={AST_PIN} python -m "
             "unittest discover -s tests`, or with network access once so uv can cache it")
 
 SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR",
-            "GUARDRAILS_MANAGED_PATH", "GUARDRAILS_UV", "GUARDRAILS_AST_INPROCESS", "GUARDRAILS_PARITY")
+            "GUARDRAILS_MANAGED_PATH")
 
 
 class Isolated(unittest.TestCase):
@@ -124,7 +123,7 @@ class Isolated(unittest.TestCase):
 
 
 class AstIsolated(Isolated):
-    """Isolated state plus a working AST matcher (in-process when importable, else through uv), or a skip."""
+    """Isolated state plus a working AST matcher (in-process when importable, else through a built venv), or a skip."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -133,5 +132,16 @@ class AstIsolated(Isolated):
             if os.environ.get("GUARDRAILS_REQUIRE_AST") == "1":
                 self.fail(SKIP_AST)
             self.skipTest(SKIP_AST)
+        import astrun
+
         if mode == "inprocess":
-            os.environ["GUARDRAILS_AST_INPROCESS"] = "1"
+            patch = mock.patch.object(astrun, "INPROCESS", True)
+            patch.start()
+            self.addCleanup(patch.stop)
+        else:
+            self.data.mkdir(parents=True, exist_ok=True)
+            os.symlink(os.path.join(_SHARED or "", "venv"), self.data / "venv")
+            real = astrun.workdir
+            patch = mock.patch.object(astrun, "workdir", lambda state_dir: real(state_dir) if state_dir else _SHARED)
+            patch.start()
+            self.addCleanup(patch.stop)

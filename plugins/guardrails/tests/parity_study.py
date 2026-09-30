@@ -5,7 +5,6 @@
 
 from __future__ import annotations
 
-import os
 import random
 import sys
 from pathlib import Path
@@ -13,6 +12,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parent.parent
 sys.path[:0] = [str(ROOT / "lib"), str(ROOT / "tests")]
 
+import astrun
 import matching
 import policy
 from test_corpus import ALLOW, DENY, WARN
@@ -42,13 +42,13 @@ CONTEXTS = ["{c}", "a; {c}", "a && {c}", "a | {c}", "{c} | b", "echo $({c})", 'e
 
 
 def verdicts(command: str) -> dict[str, str]:
-    os.environ.pop(matching.PARITY_ENV, None)
+    matching.PARITY = False
     stdlib = matching.evaluate(command, RULES)
-    os.environ[matching.PARITY_ENV] = "ast"
+    matching.PARITY = True
     try:
         compiled = matching.evaluate(command, RULES)
     finally:
-        os.environ.pop(matching.PARITY_ENV, None)
+        matching.PARITY = False
     if stdlib.degraded or compiled.degraded or compiled.invalid:
         raise SystemExit(f"ast engine unavailable or rules invalid: {compiled.degraded} {compiled.invalid}")
     return {rid: f"{stdlib.kinds[rid]}/{compiled.kinds[rid]}" for rid in RULES}
@@ -76,7 +76,7 @@ def run(commands: list[str]) -> list[tuple[str, str, str, bool]]:
 
 
 def main() -> int:
-    os.environ["GUARDRAILS_AST_INPROCESS"] = "1"
+    astrun.INPROCESS = True
     count, seed = 3000, 1
     args = sys.argv[1:]
     if "--fuzz" in args:

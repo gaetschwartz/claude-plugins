@@ -184,14 +184,15 @@ on text that only mentions the command, including heredocs.
 ### Requirements and fallback
 
 The matcher needs the PyPI wheel `ast-grep-py` (pinned, installed hash-checked into a venv in the plugin data dir, for
-CPython 3.10 to 3.14; it bundles the Bash grammar). The hook runs it in-process when it runs under that venv's python,
+CPython 3.10 to 3.14; it bundles the Bash grammar). The hook runs it in-process when it runs under that venv's python (else in a child under it),
 and only when an enabled rule with `match.ast` could apply: a call without such rules never loads it. A SessionStart hook
-builds the venv in the background when an enabled rule uses `match.ast`; the build uses `uv` when found, else
+builds the venv in the background when an enabled rule uses `match.ast` (the PreToolUse hook itself never installs
+anything); the build uses `uv` when found, else
 `python -m venv` and `pip`, from the data dir with an allowlisted environment and `--no-config`, so repo-controlled
 `uv.toml`, `UV_*`, `PIP_*` or `PYTHON*` settings cannot change what is installed. The README has the details.
 
 Degraded mode (no wheel, build failure, deadline, bad worker reply, nesting over 16 or more than 512 units, a command over
-64 KiB, or an unexpected error): every non-AST rule runs as usual and each `match.ast` rule is applied when the command
+16 KiB, or an unexpected error): every non-AST rule runs as usual and each `match.ast` rule is applied when the command
 mentions one of its command names as a word. The names are derived from the literal words in its patterns and from its
 regexes, or given by `match.mentions`. A deny rule denies with its message plus a note that the AST matcher was
 unavailable and why; a warn rule warns; a command that mentions none of the names passes. This is coarse on purpose (it

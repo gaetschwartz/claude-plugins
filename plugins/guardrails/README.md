@@ -46,38 +46,53 @@ known flags is taken as the command.
 
 **Requirements and fallback.** `match.ast` needs the PyPI wheel `ast-grep-py==0.45.3` (it bundles the Bash grammar), which
 exists for CPython 3.10 to 3.14 on macOS and Linux (x86_64, arm64). It lives in a venv at
-`${CLAUDE_PLUGIN_DATA}/venv`, built once, atomically, from `lib/ast-requirements.txt` (a sha256 for every wheel;
-`scripts/regen-ast-requirements.py` rewrites it on a pin bump) with `uv venv` and `uv pip install --require-hashes`
-when uv is found (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, then PATH), else `python -m venv` and
-`pip install --require-hashes`. A SessionStart hook builds it in the background when an enabled rule uses `match.ast`;
-the first hook call that needs it tries within a 4 s deadline and remembers a failure for ten minutes. The build runs
-from the plugin data directory with `--no-config` and an allowlisted environment (`HOME`, `LANG`, `TMPDIR`, a fixed
-`PATH`, plus only cache-dir and proxy variables): a repository's `uv.toml`, `UV_*`, `PIP_*`, `PYTHON*` or `SSL_*`
-settings can neither redirect the install nor supply code, and a tampered or unpublished wheel fails the hash check. If
-the running Python has no wheel (macOS `/usr/bin/python3` is 3.9), the build looks for a newer `python3.N` and otherwise
-reports "no wheel for Python X.Y; it needs 3.10 to 3.14". Trust model: the venv is user-owned, hash-pinned at creation,
-and sits in the plugin data directory, not in the repository.
+`${CLAUDE_PLUGIN_DATA}/venv`, built once, atomically, under a lock, from `lib/ast-requirements.txt` (a sha256 for every
+wheel; `scripts/regen-ast-requirements.py` rewrites it on a pin bump) with `uv venv` and `uv pip install
+--require-hashes` when uv is found, else `python -m venv` and `pip install --require-hashes`. Only the SessionStart
+hook (in a detached process, when an enabled rule uses `match.ast`) and CLI commands you run build it; the PreToolUse
+hook never installs or downloads anything, it only checks locally whether the venv is ready. A failed or timed-out
+build is remembered for ten minutes, stale `.venv-*` leftovers older than ten minutes are removed at the next warm-up,
+and a second builder never replaces a good venv. The build runs from the plugin data directory with `--no-config` and
+an allowlisted environment (`HOME`, `LANG`, `TMPDIR`, a fixed `PATH`, plus only cache-dir and proxy variables): a
+repository's `uv.toml`, `UV_*`, `PIP_*`, `PYTHON*` or `SSL_*` settings can neither redirect the install nor supply
+code, and a tampered or unpublished wheel fails the hash check. There is no environment variable that chooses which
+executable or engine mode runs (the former test knobs `GUARDRAILS_UV`, `GUARDRAILS_AST_INPROCESS`,
+`GUARDRAILS_AST_BOOTSTRAP` and `GUARDRAILS_PARITY` are gone; tests use module attributes). uv and the build
+interpreter are looked up in fixed locations first (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, Linux
+linuxbrew, PATH last, newest `python3.N` from 3.10 to 3.14 first) and any candidate inside the project directory or the
+hook's cwd, owned by another user, in a world-writable directory, or in a group-writable directory owned by another user
+is ignored and reported once per session. If the running Python has no wheel (macOS `/usr/bin/python3` is 3.9), a newer
+`python3.N` is used for the build, else the notice says "no wheel for Python X.Y; it needs 3.10 to 3.14". Trust model:
+the venv is user-owned, hash-pinned at creation, and sits in the plugin data directory, not in the repository. A custom CA
+or package mirror is not supported.
 
 **Interpreter selection.** `hooks/guardrails.sh` is a tiny POSIX `sh` script that never changes `PATH` (hooks inherit
 Claude Code's environment and the wrapper must not make a macOS lookup touch the `/home` automount). It runs, by absolute
-path, the first of: the ready venv's python (steady state: one python process, about 50 ms with AST rules, nothing
-else on `PATH` needed); `python3` from the inherited `PATH`; `/opt/homebrew/bin/python3`; `/usr/local/bin/python3`;
-`/home/linuxbrew/.linuxbrew/bin/python3` on Linux only; `/usr/bin/python3`. With none it prints a one-line
+path, the first of: the ready venv's python (steady state: one python process, about 55 ms with AST rules, nothing else on
+`PATH` needed); `/opt/homebrew/bin/python3`; `/usr/local/bin/python3`; `/home/linuxbrew/.linuxbrew/bin/python3` on Linux
+only (after a `uname -s` check, before any stat of `/home`); `python3` from the inherited `PATH`, skipping entries inside
+the project or the cwd; `/usr/bin/python3`. The venv python runs as a child, not via `exec`: if it exits non-zero the
+wrapper reruns the same payload with the system python and a notice. With no python at all it prints a one-line
 `systemMessage` on every call (it cannot keep per-session state without python) and lets the call through. Latency
-measured here: no AST rules about 35 ms, 3 or 30 AST rules about 53 ms, a system python that must start the venv's python
+measured here: no AST rules about 35 ms, 3 or 30 AST rules about 55 ms, a system python that must start the venv's python
 as a second process about 78 ms.
 
-**Degraded mode.** If the wheel cannot be built or run, the run exceeds its deadline, a worker reply is malformed, a
-command nests wrappers more than 16 deep or expands past 512 units, or a command is larger than 64 KiB, the hook does
-not allow silently. Every non-AST rule runs as usual (oversize commands skip the lexer and use command names and
-regexes), and a rule with `match.ast` is applied when the command mentions one of its command names as a word: the
-names derived from its patterns and regexes, or the optional `match.mentions` list. A deny rule then denies with its
-message plus a note that the AST matcher was unavailable and why, a warn rule warns, and commands that mention none of
-the names pass. The warning reaches both the user (`systemMessage`) and the agent (`additionalContext`, or the deny
-reason), once per session. An ast rule with no derivable names and no `mentions` cannot fire in this mode. Any other
-exception in the hook falls back to a minimal evaluation (stdlib matchers and names, no session state) and, if that also
-fails, a visible warning; it never exits silently. `rule test` reports degradation as a note and exits 0. The plain
+**Degraded mode.** If the venv is not built yet or cannot run, the run exceeds its deadline, a worker reply is
+malformed, a command nests wrappers more than 16 deep or expands past 512 units, or a command is larger than 16 KiB, the
+hook does not allow silently. Every non-AST rule runs as usual (oversize commands skip the lexer and use command names
+and regexes, scanning the whole text linearly), and a rule with `match.ast` is applied when the command mentions one of
+its command names as a word, after shell quoting is resolved (`p''kill`, `p\kill`, `$'p\x6bill'` and `"pkill"` all read
+as `pkill`): the names derived from its patterns and regexes, or the optional `match.mentions` list. A deny rule then
+denies with its message plus a note that the AST matcher was unavailable and why, a warn rule warns, and commands that
+mention none of the names pass. The warning reaches both the user (`systemMessage`) and the agent (`additionalContext`,
+or the deny reason), once per session. An ast rule with no derivable names and no `mentions` cannot fire in this mode.
+The lexer is linear-time on every construct and the whole hook runs under a 7 s watchdog (hook timeout 10 s): on expiry
+or any other exception it falls back to a minimal evaluation (stdlib matchers and names, no session state) and, if that
+also fails, a visible warning; it never exits silently. `rule test` reports degradation as a note and exits 0. The plain
 lexer's commands are always matched against `match.ast` rules too, so the AST path never sees less than the lexer does.
+
+Known gaps, for any engine: `find -exec`/`-execdir`, variable-held names (`P=pkill; $P x`), `bash <<< 'cmd'`,
+`echo cmd | sh`, `su -c`, `ssh host cmd`, and scripts run from a file.
 
 ### Worked example: one bundled policy, three AST rules
 
@@ -105,11 +120,11 @@ Add each with `guardrails rule add <id> --json - <<'EOF' … EOF`. A `regex` for
 cannot express.
 
 **Matcher parity.** `program`, `args` and `builtin` stay on the stdlib lexer. `lib/parity.py` compiles them into
-`ast` rules and `tests/parity_study.py` (`GUARDRAILS_PARITY=ast` switches the engine itself) runs the whole corpus plus
+`ast` rules and `tests/parity_study.py` (`matching.PARITY` switches the engine itself) runs the whole corpus plus
 a fuzz over command shapes through both: on the corpus the only difference is the unbalanced-quote fallback, and on
 the fuzz the tree is right where the lexer loses commands in nested substitutions (`echo "$(nm $(z))"`) or misses a
 pipeline marker; an `args` regex anchored on the joined arguments cannot be expressed as an ast rule, so the two
-engines are not interchangeable. Environment knobs for tests: `GUARDRAILS_UV` (path of `uv`; empty or missing means not found), `GUARDRAILS_AST_BOOTSTRAP=none` (never build the venv) and `GUARDRAILS_AST_INPROCESS=1` (use an importable `ast_grep_py`, no venv).
+engines are not interchangeable. Tests switch engine modes through module attributes (`matching.PARITY`, `astrun.INPROCESS`, `astrun.BUILD_ALLOWED`), never through the environment.
 
 ## Modes
 
@@ -310,7 +325,7 @@ when a skill needs it.
 `just test` runs the suite under `uv run --with ast-grep-py==0.45.3` (an unhashed, test-only install), so the AST tests run;
 plain `python3 -m unittest discover -s tests` works too, and the tests that need `ast-grep-py` then build the hashed venv
 (network once) or skip with a message saying how to get it; set `GUARDRAILS_REQUIRE_AST=1` to make that a failure instead
-(for CI). The fallback tests simulate a missing or failing `uv` with `GUARDRAILS_UV`.
+(for CI). The fallback and build tests stub the external commands.
 `just check` lints and type-checks, `just validate` runs `claude plugin validate`.
 
 ## Layout

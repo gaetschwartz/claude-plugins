@@ -179,39 +179,37 @@ class NeverReducesDetectionAst(AstIsolated):
 
 
 class Isolation(Isolated):
-    def setUp(self) -> None:
-        super().setUp()
-        self.log = self.tmp / "uv.log"
-        fake = self.tmp / "fake-uv"
-        fake.write_text(f"#!/bin/sh\n{{ pwd; env | sort; echo \"ARGS $*\"; }} >> {self.log}\nexit 0\n")
-        fake.chmod(0o755)
-        os.environ["GUARDRAILS_UV"] = str(fake)
-        self.put(self.gpath, {"rules": {"a": {"match": {"ast": BY_NAME}, "message": "m"}}})
+    def test_the_build_runs_in_the_data_dir_with_a_scrubbed_environment_and_no_config(self) -> None:
+        seen: list[tuple[list[str], dict[str, str], str]] = []
 
-    def test_uv_runs_in_the_data_dir_with_a_scrubbed_environment_and_no_config(self) -> None:
+        def spy(cmd: list[str], payload: Any, timeout: float, env: dict[str, str], cwd: str) -> Any:
+            seen.append((cmd, env, cwd))
+            return mock.Mock(returncode=0 if cmd[1] == "venv" else 1, stderr="stub", stdout="")
+
         hostile = {"UV_FIND_LINKS": "/evil", "UV_NO_INDEX": "1", "UV_INDEX_URL": "http://evil", "UV_PYTHON": "/evil",
                    "PIP_INDEX_URL": "http://evil", "PYTHONPATH": "/evil", "SSL_CERT_FILE": "/evil",
-                   "UV_CACHE_DIR": str(self.tmp / "cache"), "HTTPS_PROXY": "http://proxy:1"}
-        with mock.patch.dict(os.environ, hostile):
-            self.hook(f"{K} x")
-        text = self.log.read_text()
-        self.assertEqual(os.path.realpath(text.splitlines()[0]), os.path.realpath(self.data))
+                   "UV_CACHE_DIR": str(self.tmp / "cache"), "HTTPS_PROXY": "http://proxy:1", "PATH": "/repo/bin:/usr/bin"}
+        with mock.patch.dict(os.environ, hostile), mock.patch.object(astrun, "_run", spy), \
+                mock.patch.object(astrun, "uv_path", return_value="/stub/uv"), \
+                mock.patch.object(astrun, "find_interpreter", return_value="/stub/python3.14"), \
+                self.assertRaises(astrun.Unavailable):
+            astrun.ensure(str(self.data))
+        cmd, env, cwd = seen[0]
+        self.assertEqual(os.path.realpath(cwd), os.path.realpath(self.data))
+        self.assertEqual(env["PATH"], astrun.CLEAN_PATH)
         for name in ("UV_FIND_LINKS", "UV_NO_INDEX", "UV_INDEX_URL", "UV_PYTHON", "PIP_INDEX_URL", "PYTHONPATH",
                      "SSL_CERT_FILE", "CLAUDE_PROJECT_DIR", "GUARDRAILS_MANAGED_PATH"):
-            self.assertNotIn(f"{name}=", text)
-        self.assertIn("UV_CACHE_DIR=", text)
-        self.assertIn("HTTPS_PROXY=http://proxy:1", text)
-        args = next(ln for ln in text.splitlines() if ln.startswith("ARGS pip"))
-        for flag in ("--no-config", "--require-hashes", "--only-binary :all:", "--default-index https://pypi.org/simple"):
-            self.assertIn(flag, args)
-        self.assertIn("-r " + astrun.REQUIREMENTS, args)
+            self.assertNotIn(name, env)
+        self.assertEqual(env["UV_CACHE_DIR"], str(self.tmp / "cache"))
+        self.assertEqual(env["HTTPS_PROXY"], "http://proxy:1")
+        self.assertIn("--no-config", cmd)
+        install = next(c for c, _, _ in seen if c[1] == "pip")
+        for flag in ("--no-config", "--require-hashes", "--only-binary", "--default-index"):
+            self.assertIn(flag, install)
 
     def test_a_planted_uv_toml_and_env_cannot_get_a_fake_wheel_imported(self) -> None:
-        mode = ast_mode()
-        if mode is None:
-            self.skipTest("uv cannot install ast-grep-py here")
-        os.environ.pop("GUARDRAILS_UV", None)
-        os.environ.pop("GUARDRAILS_AST_INPROCESS", None)
+        if ast_mode() is None:
+            self.skipTest("ast-grep-py cannot be installed here")
         pwned = self.tmp / "PWNED"
         links = self.tmp / "links"
         links.mkdir()
@@ -224,14 +222,99 @@ class Isolation(Isolated):
                         "Wheel-Version: 1.0\nGenerator: t\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
             zf.writestr(f"ast_grep_py-{astrun.PIN}.dist-info/RECORD", "")
         (self.proj / "uv.toml").write_text(f'no-index = true\nfind-links = ["{links}"]\n')
-        env = {**os.environ, "UV_NO_INDEX": "1", "UV_FIND_LINKS": str(links)}
-        payload = json.dumps({"session_id": "iso", "cwd": str(self.proj), "tool_name": "Bash",
-                              "tool_input": {"command": f"sudo {K} x"}})
-        proc = subprocess.run(["bash", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
-                              check=False, env=env, cwd=self.proj)
+        env = {**os.environ, "UV_NO_INDEX": "1", "UV_FIND_LINKS": str(links), "UV_PYTHON": "/nonexistent"}
+        proc = subprocess.run([sys.executable, str(LIB / "guard.py"), "warm-install", str(self.data)],
+                              capture_output=True, text=True, check=False, env=env, cwd=self.proj, timeout=180)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertFalse(pwned.exists())
-        out = json.loads(proc.stdout)
-        self.assertTrue(is_denied(out) or "unavailable" in proc.stdout)
+        self.assertTrue(astrun.ready(astrun.venv_dir(str(self.data))))
+        check = subprocess.run([astrun.venv_python(astrun.venv_dir(str(self.data))), "-I", "-c",
+                                "import ast_grep_py, sys; print(ast_grep_py.__file__)"], capture_output=True,
+                               text=True, check=False, cwd=self.proj)
+        self.assertIn("site-packages", check.stdout)
+        self.assertFalse(pwned.exists())
+
+
+class HostileExecutables(Isolated):
+    def plant(self, name: str) -> Path:
+        path = self.proj / "bin" / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_text(f"#!/bin/sh\ntouch {self.tmp}/PWNED-{name}\necho '{{}}'\n")
+        path.chmod(0o755)
+        return path
+
+    def test_no_environment_variable_selects_an_executable_or_an_engine_mode(self) -> None:
+        evil = self.plant("uv")
+        for name in ("GUARDRAILS_UV", "GUARDRAILS_AST_BOOTSTRAP", "GUARDRAILS_AST_INPROCESS", "GUARDRAILS_PARITY"):
+            for module in (astrun, matching, engine, policy):
+                self.assertNotIn(name, Path(module.__file__).read_text())
+        with mock.patch.dict(os.environ, {"GUARDRAILS_UV": str(evil), "GUARDRAILS_AST_INPROCESS": "1",
+                                          "GUARDRAILS_PARITY": "ast"}):
+            self.assertIsNot(astrun.uv_path(), str(evil))
+            self.assertFalse(astrun.INPROCESS)
+            self.assertFalse(matching.PARITY)
+
+    def test_uv_from_a_hostile_path_inside_the_project_is_rejected_and_reported(self) -> None:
+        evil = self.plant("uv")
+        astrun.take_rejected()
+        env = {"PATH": f"{evil.parent}:/usr/bin:/bin", "HOME": str(self.tmp / "home")}
+        with mock.patch.dict(os.environ, env), mock.patch.object(astrun, "FIXED_DIRS", ()):
+            found = astrun.uv_path()
+        self.assertNotEqual(found, str(evil))
+        self.assertTrue(any(str(evil) in r and "inside the project" in r for r in astrun.take_rejected()))
+        self.assertEqual(astrun.take_rejected(), [])
+
+    def test_interpreters_from_the_project_are_rejected_too(self) -> None:
+        for minor in (14, 13):
+            self.plant(f"python3.{minor}")
+        astrun.take_rejected()
+        with mock.patch.dict(os.environ, {"PATH": str(self.proj / "bin")}), \
+                mock.patch.object(astrun, "FIXED_DIRS", ()), mock.patch.object(sys, "version_info", (3, 9, 6, "f", 0)), \
+                mock.patch.object(astrun.os, "access", lambda p, m: str(p).startswith(str(self.proj))), \
+                self.assertRaises(astrun.Unavailable):
+            astrun.find_interpreter()
+        self.assertTrue(any("inside the project" in r for r in astrun.take_rejected()))
+
+    def test_untrusted_reasons(self) -> None:
+        exe = self.tmp / "bin" / "tool"
+        exe.parent.mkdir()
+        exe.write_text("")
+        exe.chmod(0o755)
+        self.assertIsNone(astrun.untrusted(str(exe)))
+        exe.parent.chmod(0o777)
+        self.assertIn("writable by everyone", astrun.untrusted(str(exe)) or "")
+        exe.parent.chmod(0o755)
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(self.tmp)}):
+            self.assertIn("inside the project", astrun.untrusted(str(exe)) or "")
+        with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(self.tmp), "HOME": str(self.tmp)}):
+            self.assertIsNone(astrun.untrusted(str(exe)))
+        real_stat = os.stat
+
+        class Foreign:
+            def __init__(self, info: os.stat_result) -> None:
+                self.st_mode, self.st_uid = info.st_mode, os.getuid() + 1
+
+        with mock.patch.object(astrun.os, "stat", lambda p, *a, **k: Foreign(real_stat(p))):
+            self.assertIn("owned by another user", astrun.untrusted(str(exe)) or "")
+
+    def test_the_wrapper_never_runs_a_python3_from_the_project_path(self) -> None:
+        evil = self.plant("python3")
+        payload = json.dumps({"session_id": "h", "cwd": str(self.proj), "tool_name": "Bash",
+                              "tool_input": {"command": "ls"}})
+        env = {**os.environ, "PATH": f"{evil.parent}:{os.environ.get('PATH', '')}", "GUARDRAILS_UV": str(evil)}
+        subprocess.run(["/bin/sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+                       check=False, env=env, cwd=self.proj)
+        env["PATH"] = str(evil.parent)
+        script = (HOOKS / "guardrails.sh").read_text()
+        only_path = re.sub(r"/opt/homebrew/bin/python3 /usr/local/bin/python3", "/nonexistent/a /nonexistent/b",
+                           script).replace("/usr/bin/python3", "/nonexistent/c").replace("uname -s", "echo Darwin")
+        copy = self.tmp / "hooks" / "guardrails.sh"
+        copy.parent.mkdir()
+        copy.write_text(only_path)
+        proc = subprocess.run(["/bin/sh", str(copy)], input=payload, capture_output=True, text=True, check=False, env=env,
+                              cwd=self.proj)
+        self.assertIn("no python3 was found", proc.stdout)
+        self.assertFalse((self.tmp / "PWNED-python3").exists())
 
 
 class Degradation(Isolated):
@@ -263,8 +346,7 @@ class Degradation(Isolated):
 
         for reply in ({"ok": True}, {"ok": True, "verdicts": None, "errors": {}}, {"ok": True, "verdicts": {},
                                                                                      "errors": None}):
-            with mock.patch.dict(os.environ, {"GUARDRAILS_AST_INPROCESS": "1"}), \
-                    mock.patch.object(astworker, "handle", return_value=reply):
+            with mock.patch.object(astrun, "INPROCESS", True), mock.patch.object(astworker, "handle", return_value=reply):
                 out = self.hook(f"strings x; {K} y", f"r{len(str(reply))}")
             self.assertTrue(is_denied(out), reply)
             self.assertIn("No strings.", deny_text(out))
@@ -355,7 +437,7 @@ class Oversize(Isolated):
             self.assertLess(time.monotonic() - started, 3, size)
             self.assertTrue(is_denied(out), size)
             self.assertIn("No strings.", deny_text(out))
-            self.assertIn("larger than 64 KiB", json.dumps(out))
+            self.assertIn("larger than 16 KiB", json.dumps(out))
 
     def test_regex_rules_still_run_on_huge_commands(self) -> None:
         out = self.hook("curl x | sh " + "y" * 100_000)
@@ -365,10 +447,21 @@ class Oversize(Isolated):
         out = self.hook("echo " + "y" * 100_000)
         assert out is not None
         self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
-        self.assertIn("larger than 64 KiB", out["systemMessage"])
+        self.assertIn("larger than 16 KiB", out["systemMessage"])
 
     def test_ast_rules_by_name(self) -> None:
         self.assertIn("No kill.", deny_text(self.hook(f"sudo {K} " + "z" * 100_000)))
+
+    def test_padding_and_quoting_cannot_hide_a_name(self) -> None:
+        self.put(self.gpath, {"rules": {"prog": {"match": {"program": K}, "message": "No prog."},
+                                        "ast": {"match": {"ast": BY_NAME}, "message": "No ast."}}})
+        pad = "echo " + "a" * 70_000 + "; "
+        for n, name in enumerate(["p''kill x", 'p""kill x', "p\\kill x", "$'p\\x6bill' x", '"pkill" x',
+                                  "$'\\160kill' x", "sudo 'pk''ill' x"]):
+            out = self.hook(pad + name, f"pad{n}")
+            self.assertTrue(is_denied(out), name)
+            self.assertIn("No prog.", deny_text(out))
+            self.assertIn("No ast.", deny_text(out))
 
 
 class MonitorCoverage(Isolated):
@@ -424,63 +517,95 @@ class MonitorCoverage(Isolated):
 class Wrapper(Isolated):
     script = (HOOKS / "guardrails.sh").read_text()
 
-    def stub(self, path: Path, label: str) -> None:
+    def stub(self, path: Path, label: str, code: int = 0) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f'#!/bin/sh\necho "{label} $*"\n')
+        path.write_text(f'#!/bin/sh\necho "{label} $*"\nexit {code}\n')
         path.chmod(0o755)
 
-    def run_wrapper(self, script: str, env: dict[str, str]) -> subprocess.CompletedProcess[str]:
+    def isolated(self) -> str:
+        return self.script.replace("/opt/homebrew/bin/python3 /usr/local/bin/python3", "/nonexistent/a /nonexistent/b") \
+            .replace("/usr/bin/python3", "/nonexistent/c").replace("uname -s", "echo Darwin")
+
+    def run_wrapper(self, script: str, env: dict[str, str], *args: str) -> subprocess.CompletedProcess[str]:
         copy = self.tmp / "hooks" / "guardrails.sh"
         copy.parent.mkdir(exist_ok=True)
         copy.write_text(script)
-        return subprocess.run(["/bin/sh", str(copy), "arg"], capture_output=True, text=True, check=False, env=env)
+        return subprocess.run(["/bin/sh", str(copy), *args], input="{}", capture_output=True, text=True, check=False,
+                              env=env, cwd=self.proj)
 
-    def test_path_is_never_mutated_and_linuxbrew_is_linux_only(self) -> None:
+    def env(self, path: str) -> dict[str, str]:
+        return {"PATH": path, "CLAUDE_PLUGIN_DATA": str(self.data), "HOME": str(self.tmp),
+                "CLAUDE_PROJECT_DIR": str(self.proj)}
+
+    def test_path_is_never_mutated(self) -> None:
         self.assertNotIn("PATH=", self.script.replace("for dir in $PATH", ""))
         self.assertNotIn("export", self.script)
+
+    def test_linux_brew_is_checked_only_after_uname_and_never_on_the_hot_path(self) -> None:
         lines = [ln for ln in self.script.splitlines() if "linuxbrew" in ln]
         self.assertEqual(len(lines), 2)
-        self.assertIn("uname -s", " ".join(lines))
+        self.assertLess(lines[0].index("uname -s"), lines[0].index("linuxbrew"))
         for line in self.script.splitlines():
             if re.search(r"(?<![\w/])/home/", line):
                 self.assertIn("linuxbrew", line)
+        venv_branch = self.script.split("find_python\nif [ -z", 1)[0].split("if [ -x \"$venv\" ]", 1)[1]
+        self.assertNotIn("/home", venv_branch)
 
-    def test_no_forks_for_paths(self) -> None:
+    def test_no_forks_for_paths_and_posix_sh(self) -> None:
         for forbidden in ("dirname", "$(cd", "command -v", "bash"):
             self.assertNotIn(forbidden, self.script)
         self.assertTrue(self.script.startswith("#!/bin/sh\n"))
         self.assertIn("${0%/*}", self.script)
 
-    def test_selection_order_is_venv_then_path_then_fixed_locations(self) -> None:
-        order = [self.script.index(x) for x in ("venv/bin/python", "for dir in $PATH", "/opt/homebrew/bin/python3",
-                                                 "/usr/local/bin/python3", "/home/linuxbrew", "/usr/bin/python3")]
+    def test_selection_order(self) -> None:
+        marks = ("venv/bin/python", "/opt/homebrew/bin/python3", "/usr/local/bin/python3", "uname -s",
+                 "for dir in $PATH", "/usr/bin/python3")
+        body = self.script.split("find_python() {", 1)[1]
+        order = [body.index(x) for x in marks[1:]]
         self.assertEqual(order, sorted(order))
+        self.assertLess(self.script.index("venv/bin/python"), self.script.index("find_python()"))
+        self.assertIn("-I -S", self.script)
 
     def test_a_ready_venv_wins_and_a_stale_one_does_not(self) -> None:
-        venv_py = self.data / "venv" / "bin" / "python"
-        self.stub(venv_py, "venv")
+        self.stub(self.data / "venv" / "bin" / "python", "venv")
         self.stub(self.tmp / "bin" / "python3", "path")
-        env = {"PATH": str(self.tmp / "bin"), "CLAUDE_PLUGIN_DATA": str(self.data), "HOME": str(self.tmp)}
-        stale = self.run_wrapper(self.script, env)
+        env = self.env(str(self.tmp / "bin"))
+        stale = self.run_wrapper(self.isolated(), env)
         self.assertTrue(stale.stdout.startswith("path -I -S "), stale.stdout)
         (self.data / "venv" / "guardrails-ast-ready").write_text("x\n")
-        ready = self.run_wrapper(self.script, env)
+        ready = self.run_wrapper(self.isolated(), env)
         self.assertTrue(ready.stdout.startswith("venv -I "), ready.stdout)
         self.assertNotIn("-S", ready.stdout.split("guard.py")[0])
-        self.assertTrue(ready.stdout.rstrip().endswith("guard.py arg"))
+        self.assertTrue(ready.stdout.rstrip().endswith("guard.py"))
 
-    def test_the_first_python3_on_path_is_used_and_the_path_is_left_alone(self) -> None:
+    def test_a_venv_python_that_fails_falls_back_to_system_python_with_a_note(self) -> None:
+        self.stub(self.data / "venv" / "bin" / "python", "venv", code=1)
+        (self.data / "venv" / "guardrails-ast-ready").write_text("x\n")
+        self.stub(self.tmp / "bin" / "python3", "path")
+        proc = self.run_wrapper(self.isolated(), self.env(str(self.tmp / "bin")))
+        self.assertTrue(proc.stdout.startswith("path -I -S "), proc.stdout)
+        self.assertTrue(proc.stdout.rstrip().endswith("--venv-failed"))
+
+    def test_a_failing_venv_with_no_other_python_says_so(self) -> None:
+        self.stub(self.data / "venv" / "bin" / "python", "venv", code=1)
+        (self.data / "venv" / "guardrails-ast-ready").write_text("x\n")
+        proc = self.run_wrapper(self.isolated(), self.env(str(self.tmp / "empty")))
+        self.assertIn("the venv python failed", json.loads(proc.stdout)["systemMessage"])
+
+    def test_the_first_trusted_python3_on_path_is_used(self) -> None:
         self.stub(self.tmp / "a" / "python3", "a")
         self.stub(self.tmp / "b" / "python3", "b")
-        env = {"PATH": f"{self.tmp}/none:{self.tmp}/a:{self.tmp}/b", "CLAUDE_PLUGIN_DATA": str(self.data),
-               "HOME": str(self.tmp)}
-        self.assertTrue(self.run_wrapper(self.script, env).stdout.startswith("a -I -S "))
+        env = self.env(f"{self.tmp}/none:{self.tmp}/a:{self.tmp}/b")
+        self.assertTrue(self.run_wrapper(self.isolated(), env).stdout.startswith("a -I -S "))
+
+    def test_path_entries_inside_the_project_are_skipped(self) -> None:
+        self.stub(self.proj / "bin" / "python3", "evil")
+        self.stub(self.tmp / "ok" / "python3", "ok")
+        env = self.env(f"{self.proj}/bin:{self.tmp}/ok")
+        self.assertTrue(self.run_wrapper(self.isolated(), env).stdout.startswith("ok -I -S "))
 
     def test_without_any_python_it_says_so_and_exits_zero(self) -> None:
-        script = re.sub(r"/(opt/homebrew|usr/local)/bin/python3|/usr/bin/python3|/home/linuxbrew/\.linuxbrew/bin/python3",
-                        "/nonexistent/python3", self.script)
-        proc = self.run_wrapper(script, {"PATH": str(self.tmp / "empty"), "CLAUDE_PLUGIN_DATA": str(self.data),
-                                         "HOME": str(self.tmp)})
+        proc = self.run_wrapper(self.isolated(), self.env(str(self.tmp / "empty")))
         self.assertEqual(proc.returncode, 0)
         self.assertIn("no python3 was found", json.loads(proc.stdout)["systemMessage"])
 
@@ -488,9 +613,111 @@ class Wrapper(Isolated):
         payload = json.dumps({"session_id": "w", "cwd": str(self.proj), "tool_name": "Bash",
                               "tool_input": {"command": "strings x"}})
         self.put(self.gpath, {"rules": {"s": {"match": {"program": "strings"}, "message": "No."}}})
-        proc = subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+        proc = subprocess.run(["/bin/sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
                               check=False, env=dict(os.environ))
         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_guard_accepts_the_venv_failed_note(self) -> None:
+        import guard
+
+        payload = json.dumps({"session_id": "vf", "cwd": str(self.proj), "tool_name": "Bash",
+                              "tool_input": {"command": "strings x"}})
+        self.put(self.gpath, {"rules": {"s": {"match": {"program": "strings"}, "message": "No."}}})
+        out = io.StringIO()
+        with mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
+            guard.main([guard.VENV_FAILED])
+        result = json.loads(out.getvalue())
+        self.assertIn("the venv python failed", result["systemMessage"])
+        self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "deny")
+
+
+def adversarial(n: int) -> dict[str, str]:
+    return {
+        "open-subst": "$(" * (n // 2) + f" {K} x", "open-subst-words": "$(a " * (n // 4) + K, "ticks": "`" * n,
+        "tick-subst": "`$(" * (n // 3), "heredocs": "<<A\n" * (n // 4), "heredoc-open": "cat <<EOF\n" + "a\n" * (n // 2),
+        "squote": "'" * n, "dquote": '"' * n, "list": "a;" * (n // 2) + K, "pipes": "a|" * (n // 2) + K,
+        "braces": "{ " * (n // 2), "parens": "(" * n, "close": ")" * n, "word": "x" * n, "words": "a " * (n // 2),
+        "redir": "<" * n, "amp": "&" * n, "ansi": "$'" * (n // 2), "backslash": "\\" * n,
+        "assign-subst": "a=$(" * (n // 4), "balanced": "$(" * (n // 4) + ")" * (n // 4),
+        "wrappers": "sudo " * (n // 5) + K, "dollar": "$" * n, "dash-heredoc": "<<-A\n\t" * (n // 6),
+    }
+
+
+class Complexity(Isolated):
+    def test_the_lexer_is_linear_on_adversarial_shapes(self) -> None:
+        import shellwords
+
+        for size, budget in ((10_000, 1.0), (16_384, 1.0), (65_536, 2.0)):
+            for name, text in adversarial(size).items():
+                started = time.monotonic()
+                try:
+                    shellwords.simple_commands(text)
+                except ValueError:
+                    pass
+                self.assertLess(time.monotonic() - started, budget, f"{name} at {size}")
+
+    def test_the_whole_hook_answers_quickly_and_the_deny_rule_still_fires(self) -> None:
+        self.put(self.gpath, {"rules": {
+            "no-kill": {"match": {"program": K}, "message": "No kill."},
+            "rx": {"match": {"regex": r"never-present-\d+"}, "message": "No rx."},
+            "ast": {"match": {"ast": BY_NAME}, "message": "No ast."}}})
+        for size in (10_000, 65_536, 1_000_000):
+            for name, text in adversarial(size).items():
+                started = time.monotonic()
+                out = self.hook(text + f"; {K} x", f"c{size}{name}")
+                self.assertLess(time.monotonic() - started, 3.0, f"{name} at {size}")
+                self.assertTrue(is_denied(out), f"{name} at {size}")
+
+    def test_the_subst_bomb_from_the_review(self) -> None:
+        self.put(self.gpath, {"rules": {"no-kill": {"match": {"program": K}, "message": "No kill."}}})
+        started = time.monotonic()
+        out = self.hook("$(" * 32000 + f" {K} x")
+        self.assertLess(time.monotonic() - started, 3.0)
+        self.assertTrue(is_denied(out))
+
+
+class Budget(Isolated):
+    def test_the_overall_watchdog_degrades_to_names_and_warns(self) -> None:
+        import guard
+
+        self.put(self.gpath, {"rules": {"s": {"match": {"program": "strings"}, "message": "No strings."}}})
+
+        def spin(*_: Any, **__: Any) -> Any:
+            while True:
+                pass
+
+        payload = json.dumps({"session_id": "b", "cwd": str(self.proj), "tool_name": "Bash",
+                              "tool_input": {"command": "sudo 'str''ings' /bin/ls"}})
+        out = io.StringIO()
+        started = time.monotonic()
+        with mock.patch.object(guard, "HOOK_BUDGET", 0.4), mock.patch.object(engine, "evaluate", spin), \
+                mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
+            guard.main([])
+        self.assertLess(time.monotonic() - started, 2.0)
+        result = json.loads(out.getvalue())
+        self.assertEqual(result["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("exceeded its time budget", result["systemMessage"])
+        import signal
+
+        self.assertEqual(signal.getitimer(signal.ITIMER_REAL)[0], 0.0)
+
+    def test_a_local_limit_inside_the_budget_becomes_a_timeout_error(self) -> None:
+        import watchdog
+
+        watchdog.start(5.0)
+        try:
+            with self.assertRaises(TimeoutError), watchdog.limit(0.05):
+                while True:
+                    pass
+        finally:
+            watchdog.stop()
+
+    def test_the_hook_budget_is_below_the_hook_timeout(self) -> None:
+        import guard
+
+        timeout = json.loads((HOOKS / "hooks.json").read_text())["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
+        self.assertLess(guard.HOOK_BUDGET, timeout)
+        self.assertLess(astrun.DEADLINE, guard.HOOK_BUDGET)
 
 
 class Mentions(Isolated):
@@ -526,9 +753,19 @@ class Interpreter(Isolated):
         self.assertEqual([astrun.suitable((3, m)) for m in (9, 10, 14, 15)], [False, True, True, False])
         self.assertFalse(astrun.suitable((2, 12)))
 
-    def test_the_running_interpreter_is_kept_when_it_has_a_wheel(self) -> None:
-        with mock.patch.object(sys, "version_info", (3, 12, 0, "final", 0)):
-            self.assertEqual(astrun.find_interpreter(), sys.executable)
+    def test_fixed_locations_beat_path_and_the_newest_wins(self) -> None:
+        fixed, other = self.tmp / "fixed", self.tmp / "other"
+        for directory, minor in ((fixed, 11), (fixed, 13), (other, 14)):
+            directory.mkdir(exist_ok=True)
+            path = directory / f"python3.{minor}"
+            path.write_text("#!/bin/sh\n")
+            path.chmod(0o755)
+        with mock.patch.object(astrun, "FIXED_DIRS", (str(fixed),)), \
+                mock.patch.dict(os.environ, {"PATH": str(other), "CLAUDE_PROJECT_DIR": str(self.proj)}):
+            self.assertEqual(astrun.find_interpreter(), str(fixed / "python3.13"))
+        with mock.patch.object(astrun, "FIXED_DIRS", ()), mock.patch.object(sys, "version_info", (3, 9, 6, "f", 0)), \
+                mock.patch.dict(os.environ, {"PATH": str(other), "CLAUDE_PROJECT_DIR": str(self.proj)}):
+            self.assertEqual(astrun.find_interpreter(), str(other / "python3.14"))
 
     def test_python_39_looks_for_a_newer_interpreter_and_otherwise_degrades_precisely(self) -> None:
         old = (3, 9, 6, "final", 0)

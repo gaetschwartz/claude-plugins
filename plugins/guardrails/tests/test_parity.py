@@ -44,5 +44,4 @@ class Parity(AstIsolated):
     def test_default_matchers_stay_on_the_stdlib_path(self) -> None:
         import matching
 
-        self.assertNotEqual(matching.PARITY_ENV, "")
-        self.assertIsNone(__import__("os").environ.get(matching.PARITY_ENV))
+        self.assertFalse(matching.PARITY)

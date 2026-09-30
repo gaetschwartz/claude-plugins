@@ -1197,6 +1197,7 @@ def sudo_hint(args: Args, argv: list[str]) -> str:
 
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
+    previous, astrun.BUILD_ALLOWED = astrun.BUILD_ALLOWED, True
     try:
         code = HANDLERS[(args.verb, getattr(args, "op", None))](args)
         note = unenforced_note(args) if code == 0 else ""
@@ -1213,3 +1214,5 @@ def main(argv: list[str]) -> int:
     except (Invalid, store.StateError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2
+    finally:
+        astrun.BUILD_ALLOWED = previous

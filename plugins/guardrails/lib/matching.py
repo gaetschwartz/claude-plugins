@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 import re
 from typing import Any
 
@@ -10,12 +9,12 @@ import policy
 import wrappers as wrapper_table
 from shellwords import SimpleCommand, simple_commands
 
-PARITY_ENV = "GUARDRAILS_PARITY"
+PARITY: bool = False
 COMPILED = "#compiled"
 DEGRADED_KEY = "ast-unavailable"
 LIMITED_KEY = "ast-limited"
 OVERSIZE_KEY = "command-oversize"
-MAX_PARSE = 65536
+MAX_PARSE = 16384
 
 
 class Evaluation:
@@ -27,15 +26,17 @@ class Evaluation:
         self.approx_reason = ""
         self.limited = False
         self.oversize = oversize
+        self.rejected: list[str] = []
 
     def warnings(self) -> list[tuple[str, str]]:
         """(stable key, text) per problem, so a session reports each only once."""
-        out = [(f"ast-invalid:{rid}", f"guardrails: match.ast rule {rid} does not compile ({why}) and is skipped")
+        out = [(text, text) for text in self.rejected]
+        out += [(f"ast-invalid:{rid}", f"guardrails: match.ast rule {rid} does not compile ({why}) and is skipped")
                for rid, why in sorted(self.invalid.items())]
         if self.degraded:
             text = (f"guardrails: the AST matcher is unavailable ({self.degraded}). Rules with match.ast are applied "
                     "only when the command mentions one of their command names; every other rule is unaffected. "
-                    "It needs uv and, once, network access to install a hash-pinned ast-grep-py.")
+                    "It needs the hash-pinned ast-grep-py venv that the session-start warm-up builds.")
             out.append((DEGRADED_KEY, text))
         if self.limited:
             text = ("guardrails: a command nests wrappers or shells too deeply to analyse completely, so rules with "
@@ -56,9 +57,9 @@ def lex(command: str, table: wrapper_table.Table | None = None) -> list[SimpleCo
 
 
 def synthesized(cmds: list[SimpleCommand] | None) -> list[dict[str, Any]]:
+    """The lexer's commands as clean sources, so ast rules also see what the lexer sees."""
     import shlex
 
-    """The lexer's commands as clean sources, so ast rules also see what the lexer sees."""
     return [{"src": " ".join([*c.assigns, shlex.join([c.name, *c.args])]), "wrapped": c.wrapped}
             for c in cmds or ()]
 
@@ -78,9 +79,10 @@ def clean_error(text: str) -> str:
 
 def apply_mentions(ev: Evaluation, command: str, rules: dict[str, policy.Rule], rids: list[str], reason: str) -> None:
     """Treat a rule as matching when the command names one of its commands, for rules the matcher could not judge."""
+    normal = policy.normalized(command)
     for rid in rids:
         names = policy.mentions_of(rules[rid])
-        if ev.kinds.get(rid) is None and names and policy.mentioned(command, names):
+        if ev.kinds.get(rid) is None and names and policy.mentioned(command, names, normal):
             ev.kinds[rid] = "direct"
             ev.approx[rid] = names
             ev.approx_reason = ev.approx_reason or reason
@@ -95,10 +97,10 @@ def oversize(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
     return ev
 
 
-def plain(command: str, rules: dict[str, policy.Rule], reason: str) -> Evaluation:
+def plain(command: str, rules: dict[str, policy.Rule], reason: str, fast: bool = False) -> Evaluation:
     """Stdlib matchers plus command-name matching for ast rules, for when nothing else can run."""
     ev = Evaluation(degraded=reason)
-    cmds = lex(command) if len(command) <= MAX_PARSE else None
+    cmds = lex(command) if len(command) <= MAX_PARSE and not fast else None
     for rid, rule in rules.items():
         ev.kinds[rid] = policy.match_kind(rule, command, cmds)
     apply_mentions(ev, command, rules, list(rules), reason)
@@ -128,7 +130,7 @@ def _evaluate(command: str, rules: dict[str, policy.Rule], table: wrapper_table.
               state_dir: str | None) -> Evaluation:
     table = table if table is not None else wrapper_table.effective()
     cmds = lex(command, table)
-    in_ast = os.environ.get(PARITY_ENV) == "ast"
+    in_ast = PARITY
     if in_ast:
         import parity
     ev = Evaluation()
@@ -151,12 +153,14 @@ def _evaluate(command: str, rules: dict[str, policy.Rule], table: wrapper_table.
         response = astrun.call(request, state_dir)
     except astrun.Unavailable as exc:
         ev.degraded = str(exc)
+        ev.rejected = astrun.take_rejected()
         apply_mentions(ev, command, rules, ast_rids, f"the AST matcher is unavailable: {exc}")
         return ev
     except Exception as exc:  # noqa: BLE001
         ev.degraded = f"unexpected error: {type(exc).__name__}"
         apply_mentions(ev, command, rules, ast_rids, ev.degraded)
         return ev
+    ev.rejected = astrun.take_rejected()
     for rid, kind in response["verdicts"].items():
         base = rid.removesuffix(COMPILED) if rid.endswith(COMPILED) else rid
         if base in ev.kinds and kind in ("direct", "wrapped"):

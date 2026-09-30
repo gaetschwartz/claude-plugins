@@ -1,10 +1,12 @@
 from __future__ import annotations  # noqa: I001
 
 import contextlib
+import io
 import json
 import os
 import re
 import stat
+import time
 import unittest
 from pathlib import Path
 from collections.abc import Iterator
@@ -14,6 +16,7 @@ from unittest import mock
 from helpers import AST_PIN, AstIsolated, Isolated, ast_mode
 
 import astrun
+import engine
 import matching
 import policy
 import wrappers
@@ -538,16 +541,18 @@ class WorkedExample(AstIsolated):
             self.assertEqual(got, want)
 
 
-class UvPath(Isolated):
+class RealVenv(Isolated):
     def setUp(self) -> None:
         super().setUp()
         if ast_mode() is None:
-            self.skipTest("ast-grep-py is unavailable through uv here")
-        os.environ.pop(astrun.INPROCESS_ENV, None)
+            self.skipTest("ast-grep-py cannot be installed here")
+        patch = mock.patch.object(astrun, "BUILD_ALLOWED", True)
+        patch.start()
+        self.addCleanup(patch.stop)
         try:
-            astrun.call({"op": "ping"}, str(self.data))
+            astrun.ensure(str(self.data), 120.0)
         except astrun.Unavailable as exc:
-            self.skipTest(f"uv cannot install ast-grep-py here: {exc}")
+            self.skipTest(f"the venv cannot be built here: {exc}")
 
     def test_hash_verified_install_answers_with_the_pinned_version(self) -> None:
         response = astrun.call({"op": "eval", "command": "sudo pkill x", "rules": {"a": BY_NAME, "b": NESTED},
@@ -572,29 +577,24 @@ class UvPath(Isolated):
         bad.write_text(re.sub(r"--hash=sha256:[0-9a-f]{8}", "--hash=sha256:00000000",
                               Path(astrun.REQUIREMENTS).read_text()))
         with mock.patch.object(astrun, "REQUIREMENTS", str(bad)), self.assertRaises(astrun.Unavailable) as ctx:
-            astrun.call({"op": "ping"}, str(self.tmp / "fresh"))
+            astrun.ensure(str(self.tmp / "fresh"))
         self.assertIn("failed", str(ctx.exception))
         self.assertFalse(astrun.ready(astrun.venv_dir(str(self.tmp / "fresh"))))
 
 
 class Fallback(Isolated):
-    """uv cannot be used: AST rules apply by command name, everything else as usual, and the session is told once."""
+    """No venv: AST rules apply by command name, everything else as usual, and the session is told once."""
 
     def setUp(self) -> None:
         super().setUp()
-        self.marker = self.tmp / "uv-called"
-        self.fake = self.tmp / "fake-uv"
-        self.fake.write_text(f"#!/bin/sh\necho \"$@\" >> {self.marker}\nexit 1\n")
-        self.fake.chmod(0o755)
-        os.environ["GUARDRAILS_UV"] = str(self.fake)
+        self.warm = mock.patch.object(astrun, "warm").start()
+        self.ensure = mock.patch.object(astrun, "ensure", side_effect=astrun.Unavailable("stub: no venv")).start()
+        self.addCleanup(mock.patch.stopall)
         self.put(self.gpath, {"rules": {
             "ast-rule": {"match": {"ast": BY_NAME}, "message": "No kill by name."},
             "strings": {"match": {"program": "strings"}, "message": "No strings."},
             "pipe-sh": {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "No curl pipe."},
         }})
-
-    def worker_runs(self) -> int:
-        return self.marker.read_text().count("venv --quiet") if self.marker.exists() else 0
 
     def test_other_rules_still_deny_and_one_warning_per_session(self) -> None:
         first = self.hook("ls; strings /bin/ls")
@@ -615,6 +615,18 @@ class Fallback(Isolated):
         self.assertIn("AST matcher is unavailable", other["hookSpecificOutput"]["additionalContext"])
         self.assertNotIn("permissionDecision", other["hookSpecificOutput"])
 
+    def test_the_hook_never_builds_anything_and_warms_once_per_session(self) -> None:
+        self.hook("pkill x", session="w1")
+        self.hook("pkill y", session="w1")
+        self.hook("pkill z", session="w2")
+        self.ensure.assert_not_called()
+        self.assertEqual(self.warm.call_count, 2)
+
+    def test_the_reason_says_the_venv_is_not_built(self) -> None:
+        out = self.hook("pkill x")
+        assert out is not None
+        self.assertIn("venv is not built yet", out["systemMessage"])
+
     def test_ast_rule_applies_by_command_name_and_says_so(self) -> None:
         out = self.hook("pkill x")
         assert out is not None
@@ -629,12 +641,20 @@ class Fallback(Isolated):
         assert out is not None
         self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
 
+    def test_quoting_cannot_hide_a_name(self) -> None:
+        for n, command in enumerate(["p''kill x", 'p""kill x', "p\\kill x", "$'p\\x6bill' x", '"pkill" x',
+                                     "$'\\160kill' x", "'pk''ill' x", "sudo p''kill x"]):
+            out = self.hook(command, f"q{n}")
+            self.assertTrue(out is not None and out["hookSpecificOutput"].get("permissionDecision") == "deny", command)
+
     def test_declared_mentions_override_the_derived_names(self) -> None:
         self.put(self.gpath, {"rules": {"r": {"match": {"ast": BY_NAME, "mentions": ["zap"]}, "message": "No."}}})
         passed = self.hook("pkill x", session="q1")
         assert passed is not None
         self.assertNotIn("permissionDecision", passed["hookSpecificOutput"])
-        self.assertTrue(self.hook("sudo zap now", session="q2") is not None)
+        denied = self.hook("sudo zap now", session="q2")
+        assert denied is not None
+        self.assertEqual(denied["hookSpecificOutput"]["permissionDecision"], "deny")
 
     def test_warn_rules_warn_by_name(self) -> None:
         self.put(self.gpath, {"rules": {"w": {"match": {"ast": BY_NAME}, "message": "Careful.", "action": "warn"}}})
@@ -643,49 +663,17 @@ class Fallback(Isolated):
         self.assertIn("Careful.", out["hookSpecificOutput"]["additionalContext"])
         self.assertIn("unavailable", out["hookSpecificOutput"]["additionalContext"])
 
-    def test_no_bootstrap_possible_degrades_with_the_reason(self) -> None:
-        os.environ["GUARDRAILS_AST_BOOTSTRAP"] = "none"
-        out = self.hook("pkill x", session="nb")
-        assert out is not None
-        self.assertIn("bootstrapping is disabled", out["systemMessage"])
-
-    def test_without_uv_the_venv_is_built_with_python_and_pip(self) -> None:
-        calls: list[tuple[list[str], dict[str, str]]] = []
-
-        def fake_run(cmd: list[str], payload: Any, timeout: float, env: dict[str, str], cwd: str) -> Any:
-            calls.append((cmd, env))
-            return mock.Mock(returncode=1, stderr="No module named ensurepip", stdout="")
-
-        for value in ("/nonexistent/uv", ""):
-            os.environ["GUARDRAILS_UV"] = value
-            with mock.patch.object(astrun, "uv_path", return_value=None), \
-                    mock.patch.object(astrun, "_run", fake_run), self.assertRaises(astrun.Unavailable) as ctx:
-                astrun.ensure(str(self.tmp / f"d{len(calls)}"))
-            self.assertIn("python -m venv and pip", str(ctx.exception))
-            self.assertIn("venv/ensurepip package", str(ctx.exception))
-        cmd, env = calls[0]
-        self.assertEqual(cmd[1:4], ["-I", "-m", "venv"])
-        self.assertEqual(env["PIP_CONFIG_FILE"], os.devnull)
-        self.assertNotIn("UV_FIND_LINKS", env)
-
-    def test_failed_download_is_remembered_for_a_while(self) -> None:
-        self.hook("pkill x", session="a")
-        self.assertEqual(self.worker_runs(), 2)
-        self.hook("pkill x", session="b")
-        self.assertEqual(self.worker_runs(), 2)
-        self.assertTrue((self.data / astrun.STAMP).exists())
-
-    def test_no_ast_rules_never_start_uv(self) -> None:
+    def test_no_ast_rules_never_look_for_the_venv(self) -> None:
         self.put(self.gpath, {"rules": {"strings": {"match": {"program": "strings"}, "message": "No."}}})
-        self.assertEqual(self.hook("strings x") is not None, True)
-        self.assertIsNone(self.hook("ls"))
-        self.assertFalse(self.marker.exists())
+        with mock.patch.object(astrun, "call", side_effect=AssertionError("called")):
+            self.assertIsNotNone(self.hook("strings x"))
+            self.assertIsNone(self.hook("ls"))
 
-    def test_disabled_or_filtered_ast_rules_never_start_uv(self) -> None:
+    def test_disabled_or_filtered_ast_rules_never_look_for_the_venv(self) -> None:
         self.put(self.gpath, {"rules": {"a": {"match": {"ast": BY_NAME}, "message": "m", "enabled": False},
                                         "b": {"match": {"ast": BY_NAME}, "message": "m", "requires": ["nope-xyz"]}}})
-        self.assertIsNone(self.hook("pkill x"))
-        self.assertFalse(self.marker.exists())
+        with mock.patch.object(astrun, "call", side_effect=AssertionError("called")):
+            self.assertIsNone(self.hook("pkill x"))
 
     def test_rule_test_reports_degradation_and_exits_zero(self) -> None:
         rule = json.dumps({"match": {"ast": BY_NAME, "regex": "zzz"}, "message": "m"})
@@ -716,42 +704,168 @@ class Fallback(Isolated):
         self.assertIn("cannot be evaluated", out)
 
 
-class SessionStart(Isolated):
+class Builder(Isolated):
+    """Building the venv, with the external commands stubbed."""
+
     def setUp(self) -> None:
         super().setUp()
-        self.marker = self.tmp / "uv-called"
-        fake = self.tmp / "fake-uv"
-        fake.write_text(f"#!/bin/sh\necho \"$@\" >> {self.marker}\nexit 0\n")
-        fake.chmod(0o755)
-        os.environ["GUARDRAILS_UV"] = str(fake)
+        self.calls: list[list[str]] = []
+        self.result = mock.Mock(returncode=1, stderr="nope", stdout="")
 
-    def warm(self) -> None:
-        import subprocess
-        import time
+        def fake_run(cmd: list[str], payload: Any, timeout: float, env: dict[str, str], cwd: str) -> Any:
+            self.calls.append(cmd)
+            return self.result
 
-        from helpers import HOOKS
+        for patch in (mock.patch.object(astrun, "_run", fake_run),
+                      mock.patch.object(astrun, "uv_path", return_value="/stub/uv"),
+                      mock.patch.object(astrun, "find_interpreter", return_value="/stub/python3.14")):
+            patch.start()
+            self.addCleanup(patch.stop)
+        self.dir = str(self.tmp / "d")
 
-        proc = subprocess.run(["bash", str(HOOKS / "guardrails.sh"), "warm"], input=json.dumps({"cwd": str(self.proj)}),
-                              capture_output=True, text=True, check=False, env=dict(os.environ))
-        self.assertEqual((proc.returncode, proc.stdout, proc.stderr), (0, "", ""))
-        for _ in range(40):
-            if self.marker.exists():
-                break
-            time.sleep(0.05)
+    def test_a_failed_build_writes_the_stamp_and_later_calls_skip_it(self) -> None:
+        with self.assertRaises(astrun.Unavailable):
+            astrun.ensure(self.dir)
+        first = len(self.calls)
+        self.assertGreater(first, 0)
+        self.assertTrue((Path(self.dir) / astrun.STAMP).exists())
+        with self.assertRaises(astrun.Unavailable):
+            astrun.ensure(self.dir)
+        self.assertEqual(len(self.calls), first)
 
+    def test_a_timed_out_build_writes_the_stamp_too(self) -> None:
+        def hang(*_: Any) -> Any:
+            raise astrun.Unavailable("timed out after 4.0s")
+
+        with mock.patch.object(astrun, "_run", hang), self.assertRaises(astrun.Unavailable):
+            astrun.ensure(self.dir)
+        self.assertTrue((Path(self.dir) / astrun.STAMP).exists())
+
+    def test_uv_steps_when_uv_is_found(self) -> None:
+        with self.assertRaises(astrun.Unavailable):
+            astrun.ensure(self.dir)
+        self.assertEqual(self.calls[0][:2], ["/stub/uv", "venv"])
+        self.assertIn("/stub/python3.14", self.calls[0])
+
+    def test_pip_steps_when_uv_is_missing(self) -> None:
+        with mock.patch.object(astrun, "uv_path", return_value=None), self.assertRaises(astrun.Unavailable):
+            astrun.ensure(self.dir)
+        self.assertEqual(self.calls[0][:4], ["/stub/python3.14", "-I", "-m", "venv"])
+
+    def test_a_ready_venv_is_never_replaced_or_rebuilt(self) -> None:
+        venv = Path(astrun.venv_dir(self.dir))
+        (venv / "bin").mkdir(parents=True)
+        (venv / "bin" / "python").write_text("#!/bin/sh\n")
+        (venv / "bin" / "python").chmod(0o755)
+        (venv / astrun.READY).write_text(astrun.requirements_digest() + "\n")
+        self.assertEqual(astrun.ensure(self.dir), str(venv / "bin" / "python"))
+        self.assertEqual(self.calls, [])
+
+    def test_a_concurrent_builder_that_finishes_first_wins(self) -> None:
+        venv = Path(astrun.venv_dir(self.dir))
+
+        def builder(cmd: list[str], payload: Any, timeout: float, env: dict[str, str], cwd: str) -> Any:
+            if "venv" in cmd and cmd[1] == "venv":
+                Path(cmd[-1]).mkdir(parents=True)
+                (Path(cmd[-1]) / "bin").mkdir()
+                (Path(cmd[-1]) / "bin" / "python").write_text("new")
+                (Path(cmd[-1]) / "bin" / "python").chmod(0o755)
+            elif cmd[1] == "pip":
+                (venv / "bin").mkdir(parents=True)
+                (venv / "bin" / "python").write_text("winner")
+                (venv / "bin" / "python").chmod(0o755)
+                (venv / astrun.READY).write_text(astrun.requirements_digest() + "\n")
+            return mock.Mock(returncode=0, stderr="", stdout="")
+
+        with mock.patch.object(astrun, "_run", builder):
+            astrun.ensure(self.dir)
+        self.assertEqual((venv / "bin" / "python").read_text(), "winner")
+
+    def test_stale_build_leftovers_are_reaped_and_fresh_ones_kept(self) -> None:
+        root = Path(self.dir)
+        root.mkdir()
+        old, new = root / ".venv-old", root / ".venv-new"
+        aside = root / "venv.old-1"
+        for path in (old, new, aside):
+            path.mkdir()
+        past = time.time() - 3600
+        os.utime(old, (past, past))
+        os.utime(aside, (past, past))
+        astrun.maintain(self.dir)
+        self.assertFalse(old.exists())
+        self.assertFalse(aside.exists())
+        self.assertTrue(new.exists())
+
+    def test_a_venv_python_that_fails_or_prints_garbage_is_unavailable(self) -> None:
+        venv = Path(astrun.venv_dir(self.dir))
+        (venv / "bin").mkdir(parents=True)
+        (venv / "bin" / "python").write_text("#!/bin/sh\n")
+        (venv / "bin" / "python").chmod(0o755)
+        (venv / astrun.READY).write_text(astrun.requirements_digest() + "\n")
+        for result in (mock.Mock(returncode=1, stdout="", stderr="Segmentation fault"),
+                       mock.Mock(returncode=0, stdout="not json", stderr=""),
+                       mock.Mock(returncode=0, stdout='{"ok": true}', stderr="")):
+            self.result = result
+            with self.assertRaises(astrun.Unavailable):
+                astrun.call({"op": "eval", "command": "x", "rules": {}}, self.dir)
+
+    def test_the_lock_is_honoured(self) -> None:
+        import fcntl
+
+        root = Path(self.dir)
+        root.mkdir()
+        fd = os.open(root / astrun.LOCK, os.O_RDWR | os.O_CREAT)
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        try:
+            with self.assertRaises(astrun.Unavailable) as ctx:
+                astrun.ensure(self.dir, 0.3)
+            self.assertIn("another process", str(ctx.exception))
+            self.assertEqual(self.calls, [])
+        finally:
+            os.close(fd)
+
+    def test_the_import_check_uses_the_remaining_budget(self) -> None:
+        timeouts: list[float] = []
+
+        def spy(cmd: list[str], payload: Any, timeout: float, env: dict[str, str], cwd: str) -> Any:
+            timeouts.append(timeout)
+            if cmd[1] == "venv":
+                Path(cmd[-1]).mkdir(parents=True)
+            return mock.Mock(returncode=0, stderr="", stdout="")
+
+        with mock.patch.object(astrun, "_run", spy):
+            astrun.ensure(self.dir, 3.0)
+        self.assertTrue(timeouts and all(t <= 3.0 for t in timeouts), timeouts)
+
+
+class SessionStart(Isolated):
     def test_warms_only_when_an_enabled_ast_rule_exists(self) -> None:
-        self.put(self.gpath, {"rules": {"s": {"match": {"program": "strings"}, "message": "m"}}})
-        self.warm()
-        self.assertFalse(self.marker.exists())
-        self.put(self.gpath, {"rules": {"a": {"match": {"ast": BY_NAME}, "message": "m", "enabled": False}}})
-        self.warm()
-        self.assertFalse(self.marker.exists())
-        self.put(self.ppath, {"rules": {"b": {"match": {"ast": BY_NAME}, "message": "m"}}})
-        self.warm()
-        self.assertTrue(self.marker.exists())
-        logged = self.marker.read_text()
-        for flag in ("pip install", "--no-config", "--require-hashes", "--only-binary"):
-            self.assertIn(flag, logged)
+        with mock.patch.object(astrun, "warm") as warm:
+            for rules in ({"s": {"match": {"program": "strings"}, "message": "m"}},
+                          {"a": {"match": {"ast": BY_NAME}, "message": "m", "enabled": False}}):
+                self.put(self.gpath, {"rules": rules})
+                engine.run_warm(io.StringIO(json.dumps({"cwd": str(self.proj)})))
+            warm.assert_not_called()
+            self.put(self.ppath, {"rules": {"b": {"match": {"ast": BY_NAME}, "message": "m"}}})
+            engine.run_warm(io.StringIO(json.dumps({"cwd": str(self.proj)})))
+            warm.assert_called_once_with(str(self.data))
+
+    def test_the_detached_build_gets_a_scrubbed_environment_and_respects_the_stamp(self) -> None:
+        hostile = {"UV_FIND_LINKS": "/evil", "PIP_INDEX_URL": "http://evil", "PYTHONPATH": "/evil",
+                   "UV_CACHE_DIR": "/cache"}
+        with mock.patch.dict(os.environ, hostile), mock.patch.object(astrun.subprocess, "Popen") as popen:
+            astrun.warm(str(self.data))
+        args, kwargs = popen.call_args
+        self.assertEqual(args[0][2:], ["warm-install", str(self.data)])
+        self.assertEqual(kwargs["env"].get("UV_CACHE_DIR"), "/cache")
+        for name in ("UV_FIND_LINKS", "PIP_INDEX_URL", "PYTHONPATH", "CLAUDE_PROJECT_DIR"):
+            self.assertNotIn(name, kwargs["env"])
+        self.assertTrue(kwargs["start_new_session"])
+        self.data.mkdir(parents=True, exist_ok=True)
+        (self.data / astrun.STAMP).write_text("")
+        with mock.patch.object(astrun.subprocess, "Popen") as popen:
+            astrun.warm(str(self.data))
+        popen.assert_not_called()
 
     def test_hooks_json_registers_warm_up_and_a_roomy_timeout(self) -> None:
         from helpers import HOOKS

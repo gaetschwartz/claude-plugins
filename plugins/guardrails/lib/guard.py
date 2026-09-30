@@ -12,21 +12,39 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
 import engine
 
+HOOK_BUDGET = 7.0
+VENV_FAILED = "--venv-failed"
+
+
+def hook(data: str, notes: tuple[str, ...]) -> None:
+    import watchdog
+
+    out = io.StringIO()
+    failure: BaseException = RuntimeError("unknown")
+    fast = False
+    watchdog.start(HOOK_BUDGET)
+    try:
+        engine.run_hook(io.StringIO(data), out, notes)
+        sys.stdout.write(out.getvalue())
+        return
+    except watchdog.Expired:
+        failure, fast = TimeoutError("hook time budget exceeded"), True
+    except Exception as exc:  # noqa: BLE001
+        failure = exc
+    finally:
+        watchdog.stop()
+    try:
+        engine.run_safe(data, sys.stdout, failure, fast)
+    except Exception:  # noqa: BLE001
+        json.dump({"systemMessage": "guardrails: the hook failed and could not evaluate this command, so it was "
+                   "allowed."}, sys.stdout)
+
 
 def main(argv: list[str] | None = None) -> int:
     args = sys.argv[1:] if argv is None else argv
-    if not args:
-        data = sys.stdin.read()
-        out = io.StringIO()
-        try:
-            engine.run_hook(io.StringIO(data), out)
-            sys.stdout.write(out.getvalue())
-        except Exception as exc:  # noqa: BLE001
-            try:
-                engine.run_safe(data, sys.stdout, exc)
-            except Exception:  # noqa: BLE001
-                json.dump({"systemMessage": "guardrails: the hook failed and could not evaluate this command, so it "
-                           "was allowed."}, sys.stdout)
+    if not args or args == [VENV_FAILED]:
+        notes = ("guardrails: the venv python failed, so this call ran under the system python.",) if args else ()
+        hook(sys.stdin.read(), notes)
         return 0
     if args == ["warm"]:
         try:
@@ -37,7 +55,9 @@ def main(argv: list[str] | None = None) -> int:
     if len(args) == 2 and args[0] == "warm-install":
         import astrun
 
+        astrun.BUILD_ALLOWED = True
         try:
+            astrun.maintain(args[1] or None)
             astrun.ensure(args[1] or None, 120.0)
         except astrun.Unavailable:
             pass
