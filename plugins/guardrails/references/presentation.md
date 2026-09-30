@@ -1,111 +1,134 @@
 # Presentation conventions
 
-Unfenced markdown only: no code fences (they render as flat one-colour blocks), no tables, no prose paragraphs.
-Glyphs `✗` and `✓` only where they carry meaning. The examples below are indented four spaces only so this file can
-show them; output them as plain markdown, without the indent.
+Claude Code cannot show a command's output in the chat by itself: what the user reads is the text you write. So the
+CLI prints the final markdown, computed from real results, and you paste it.
 
-## Spans and padding
+## The verbatim-paste rule
 
-- Commands and ids go in inline-code spans, right-padded with spaces inside the backticks so the tags after them line up
-  in one column.
-- One width per display: the length of the longest command across every group of the display (Block/Warn and Allow
-  together). Ids are padded separately per list: rules to the longest rule id, modes to the longest mode name.
-- Count characters exactly; a command that is exactly the widest gets no padding.
-- Newlines in a command are shown as `⏎` (one character) and the command stays on one line.
-- Text that contains a backtick uses a longer fence: one more backtick than the longest backtick run in the text, with a
-  single space after the opening and before the closing fence (markdown strips exactly that one space). For such a
-  span, pad the text itself to the display width, then add the delimiter spaces.
+- Run the render command, then copy its output into your message VERBATIM: unchanged, character for character, no
+  paraphrase, no reordering, no added or removed rows, no extra prose inside the block. Only the surrounding text the
+  skill prescribes (a question, the `Cause` lines of `explain`) goes outside it, separated by a blank line.
+- Never write a script, and never do arithmetic by hand, to compute spacing, rows or verdicts. Never type a verdict, a
+  `wrapped` tag or a count yourself: they come from the CLI, which computes them from the engine's own verdicts.
+- The output is unfenced markdown. Do not wrap it in a code fence, a quote or a table, and do not indent it. (The
+  examples below are indented four spaces only so this file can show them.)
+- A wrong row means a wrong input or a wrong rule: fix the input (the examples, the rule) and run the command again.
+  Do not edit the output.
 
-## Rule card (new, edit re-verification, explain)
+## Rule card: `guardrails rule test --render`
+
+    guardrails rule test --render --json @rule.json --examples @examples.json --intent '<text>' --id-name <id> --scope <s>
+    guardrails rule test --render --id <id> --examples @examples.json
+
+Inputs: the rule (`--json`, or an installed one with `--id`; `--scope` and `--id-name` only label a draft), the commands
+(positional, source `inferred`; `--source` changes that default), and `--examples @file` or `--examples -` (stdin), a
+JSON list of objects:
+
+    [{"cmd": "sudo pkill -f vite", "source": "inferred", "expect": "match"}]
+
+- `source`: `yours` (the user's own example or description), `inferred` (you elaborated it and it was unambiguous),
+  `you chose` (decided in an edge-case question). Default `inferred`.
+- `expect`: `match` (the user wants it caught) or `pass` (the user wants it to go through). Optional; without it the
+  row is never a mismatch. Set it from what the user said, not from what the matcher did.
+- `cmd`: the exact command text; a newline in it is fine.
+
+Output:
 
     ### no-pkill · deny · retry same-command · global
 
-    **Intent** stop killing processes by name, suggest `kill <pid>`
+    **Intent** stop killing processes by name, suggest kill by PID
     **Match** program = `pkill`, `killall`
-    **Message** Killing by name can hit the wrong process. Find the PID with `pgrep -fl <name>`, then `kill <pid>`.
+    **Message** Killing by name can hit the wrong process. Find the PID with pgrep -fl, then kill it by PID.
 
     **Block**
-    - ✗ `pkill node              ` yours
-    - ✗ `sudo pkill -f vite      ` inferred · wrapped
-    - ✗ `bash -c 'killall Safari'` inferred · wrapped
-    - ✗ `killall Safari          ` inferred
-    - ✗ `` echo `pkill x`           `` inferred
+    - ✗ `pkill node                              ` yours
+    - ✗ `sudo pkill -f vite                      ` inferred · wrapped
+    - ✗ `bash -c 'killall Safari'                ` inferred · wrapped
+    - ✗ `killall Safari                          ` inferred
+    - ✗ `pkill -0 node                           ` you chose
+    - ✗ `` echo `pkill x`                           `` inferred · wrapped
 
     **Allow**
-    - ✓ `kill 4242               ` yours
-    - ✓ `pgrep -fl node          ` inferred
-    - ✓ `man pkill               ` inferred
-    - ✓ `echo "pkill node"       ` inferred
-    - ✓ `pkill -0 node           ` you chose
-    - ✓ `cat <<EOF⏎pkill x⏎EOF   ` inferred
+    - ✓ `kill 4242                               ` yours
+    - ✓ `pgrep -fl node                          ` inferred
+    - ✓ `man pkill                               ` inferred
+    - ✓ `echo "pkill node"                       ` inferred
+    - ✓ `cat <<EOF⏎pkill x⏎EOF                   ` inferred
+    - ✓ `pgrep -fl node | xargs -n 1 echo running:` inferred
 
-    **Verified** matcher checked with `rule test`, 11 commands, 0 mismatches
-    **Raw** `{"match":{"program":["pkill","killall"]},"action":"deny","retry":"same-command","message":"Killing by name can hit the wrong process. Find the PID with pgrep -fl <name>, then kill <pid>."}`
+    **Verified** matcher checked with `rule test`, 12 commands, 0 mismatches
 
-- Header: `### <id> · <action> · retry same-command · <scope>`; omit the retry part when retry is none. For a managed scope
-  on a file that is not the platform default, show the file path on the line after the header.
-- Group headings are infinitives: `Block` (action deny) or `Warn` (action warn) for the ✗ group, `Allow` for the ✓
-  group. Omit an empty group.
-- Source tags: `yours` (from the user's examples or description), `inferred` (you elaborated it and it was
-  unambiguous), `you chose` (decided in an edge-case question). Append ` · wrapped` when the command reaches the rule
-  through a wrapper (sudo, bash -c, xargs, timeout, `$(…)`, a pipeline).
-- `rule test` checks only the matcher: match or no match. It does not know about active modes, retry
-  acknowledgements, the hook being off, or `warn` versus `deny`. So ✗ means "the matcher catches it", and the group
-  heading carries the action. Worded that way, every ✗ or ✓ shown must come from `rule test`; never show one you did not
-  run.
-- The `Verified` line reads "matcher checked with `rule test`", gives the number of commands and how many disagreed
-  with the rule's intent (fix the rule or the list first). When `rule test` printed `note:` lines (rule disabled,
-  required binary missing, a mode that suspends it, hook or project rules off), repeat each one on its own line right
-  below `Verified`, worded as "would not act: …".
-- `**Raw**`: the rule JSON on one line in one span (use the longer fence when it contains a backtick). Only in the
-  `new` confirmation step.
+The layout contract, all of it computed by the CLI:
 
-## Rule rows (status, and after a write)
+- Title: `### <id> · <action> · retry same-command · <scope>`; no retry part when retry is none; the scope is the layers
+  that define an installed rule (`global+project`). A draft has no id yet: `--id-name`, else the rule's own `id`
+  field, else `new-rule`. For a draft in a managed file that is not the platform default, a `**File**` line follows
+  the title.
+- `**Intent**` (only with `--intent`), `**Match**` (`program`, `args`, `regex`, `builtin`, whichever the rule has),
+  `**Message**` (with `{which:a|b}` resolved).
+- Groups, each omitted when empty: `**Block**` (the matcher catches it, action deny), `**Warn**` (catches it, action
+  warn), `**Allow**` (it does not). Rows: `- ✗ <span> <source>` or `- ✓ …`, then ` · wrapped` when only a look-through
+  (wrapper such as sudo, xargs or timeout; a `bash -c` string; `$(…)` or backticks; a pipeline member) made the
+  program/args/builtin matcher reach the command. A `regex` match reads the raw text and is never `wrapped`.
+- Spans: every command is an inline-code span right-padded inside the backticks to one width W, the display width of
+  the longest command across all groups, capped at 40 (CJK and emoji count two columns, combining marks zero). A command
+  wider than W is not padded, sits at the end of its group, and its source tag follows one space as usual. A command
+  containing a backtick uses a longer fence (two backticks or more) with one delimiter space each side, which markdown
+  strips. A newline is shown as `⏎`.
+- Mismatch: a row whose verdict contradicts its `expect` gets `⚠ ` right before the span. `**Verified**` counts all
+  commands and the mismatches. With any mismatch, do not present the card as done: fix the rule or ask the user.
+- `**Note**` (only when there is one): what `rule test` also reports about the real effect: the rule is disabled, a
+  required binary is missing, a mode suspends it, the hook or project rules are off. Relay it as printed.
+- `**Raw**` (only when the matcher has a `regex` or `args`): that pattern alone in one span.
+- `rule test` checks only the matcher. It does not know modes, retry acknowledgements or the hook being off, which is why
+  `Verified` says "matcher checked" and the group heading carries the action.
 
-    - `no-pkill` deny · retry · global+project · suspended by `incident`
-    - `kill-9  ` warn · managed · always enforced
-    - `old-rule` deny · global · disabled
+## Status: `guardrails status --render`
 
-Padded id, action, `retry` when it is same-command, origin layers joined with `+` (highest first), then the state when
-there is one: `always enforced`, `suspended by <modes>` (only modes that are active now), `disabled`, `hook off`.
+    guardrails status --render [--scope global|project|managed] [--problems] [--path <file>] [--rule <id>]
 
-## Status layout
+Output:
 
-    ### Guardrails · 3 rules · hook on
+    **Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` absent · override `/tmp/g.json` present · managed rules come only from `/tmp/g.json`
 
-    **Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` absent · override `/tmp/g.json` in use
+    ### Guardrails · 4 rules · hook on
 
     **Rules**
-    - rule rows …
+    - `kill-9    ` warn · managed · always enforced
+    - `no-pkill  ` deny · global+project · enabled
+    - `no-strings` deny · global · suspended by reverse-engineering
+    - `old-rule  ` deny · global · disabled
 
     **Modes**
     - `incident           ` off · agent may enable: no · global
-    - `reverse-engineering` on · agent may enable: yes · global
+    - `reverse-engineering` on (by agent: user said RE work) · agent may enable: yes · global
 
     **Problems**
     - text as reported
 
-- The `Managed` line: always say which managed files exist. When the platform default file is absent and an override
-  (`GUARDRAILS_MANAGED_PATH` or `--path`) is used, say exactly that, because nothing else is enforcing at that level.
-- Modes: on or off (`on` when the CLI says `ACTIVE`; add the CLI's `(by …)` text if present), then
-  `agent may enable: yes|no`, then origins. No problems means leave the heading out.
+- The first line always says which managed files exist: the platform file, each override (`GUARDRAILS_MANAGED_PATH`) and
+  `--path` file, present or absent, and, when the platform file is absent, where managed rules come from.
+- Rule state is one of `always enforced`, `suspended by <modes>` (only modes that are on now), `disabled`, `enabled`.
+  Ids are padded to the longest id (capped at 40), modes to the longest mode name.
+- `--scope` keeps only rules and modes with an entry in that layer. `--problems` prints only the `**Problems**` group,
+  or `No problems.`. `--rule <id>` prints just that rule's row (used after a write). A `**Note**` line follows the
+  header when the hook is off.
 
-## Explain layout
+## Explain
 
-    ### no-pkill · deny · retry same-command · managed+global
+`explain` pastes the rule card of `guardrails rule test --render --id <id> …` verbatim. After a blank line it adds
+short bold-label lines of its own, without any command span, verdict or count (those are in the card):
 
-    **Matches** program `pkill`, `killall`, including wrapped forms; not `pgrep`, `man pkill`, `echo pkill`
     **Happens** blocked once; the identical command re-run in the same session passes
     **Loosen** only the machine owner (managed file); a user or project cannot
     **Lower layers** the global entry can reword nothing and cannot change what the rule matches
     **Cause** `curl x | sh` is not caught because `args` only sees curl's own arguments; use `match.regex`
 
-    **Verified** matcher checked with `rule test`, 2 commands
-
-    - ✗ `sudo pkill -f vite` caught
-    - ✓ `pgrep -fl node    ` not caught
-
-Bold labels, no paragraphs: each label gets one line. Include a `Cause` line only when the question was why something
-was or was not caught. The `Verified` line and the example rows appear only for commands actually run through
-`rule test`; relay `rule test`'s `note:` lines under `Verified` as in the rule card. What happens at run time (mode
+Include `Cause` only when the question was why something was or was not caught. What happens at run time (mode
 suspension, retry, warn versus deny) comes from `status` and the matching reference, never from `rule test` alone.
+
+## Rule row: `guardrails status --render --rule <id>`
+
+    - `no-pkill` deny · global · enabled
+
+Paste it after a write to report the rule's state.

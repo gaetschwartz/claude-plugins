@@ -70,17 +70,67 @@ class SkillFiles(unittest.TestCase):
                 self.assertNotIn("Read(", frontmatter(path)[0].get("allowed-tools", ""))
 
     def test_forked_skills_inject_their_references(self) -> None:
-        wanted = {"status": {"presentation.md"}, "explain": {"matching.md", "presentation.md"}}
+        wanted = {"status": set(), "explain": {"matching.md", "presentation.md"}}
         for name, files in wanted.items():
             fields, body = frontmatter(SKILLS / name / "SKILL.md")
             injected = set(re.findall(r"^!`cat \$\{CLAUDE_PLUGIN_ROOT\}/references/([a-z-]+\.md)`$", body, re.MULTILINE))
             with self.subTest(skill=name):
                 self.assertEqual(injected, files)
-                self.assertIn("Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)", fields["allowed-tools"])
+                self.assertEqual("Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)" in fields["allowed-tools"], bool(files))
 
-    def test_json_quoting_is_documented(self) -> None:
-        self.assertIn("'\\''", (SKILLS / "new" / "SKILL.md").read_text())
-        self.assertIn("'\\''", (SKILLS / "edit" / "SKILL.md").read_text())
+    def test_rules_are_passed_from_files_not_quoted_inline(self) -> None:
+        for name in ("new", "edit"):
+            with self.subTest(skill=name):
+                text = (SKILLS / name / "SKILL.md").read_text()
+                self.assertIn("--json @", text)
+                self.assertNotIn("'\\''", text)
+        self.assertIn("--json -", (SKILLS / "new" / "SKILL.md").read_text())
+
+    def test_display_skills_render_with_the_cli_and_paste_verbatim(self) -> None:
+        for name in ("new", "edit", "explain", "status"):
+            with self.subTest(skill=name):
+                text = (SKILLS / name / "SKILL.md").read_text()
+                self.assertIn("--render", text)
+                self.assertIn("VERBATIM", text)
+                self.assertIsNone(re.search(r"\bpad(ded|ding)?\b", text, re.IGNORECASE))
+        self.assertIn("rule test --render", (SKILLS / "new" / "SKILL.md").read_text())
+        self.assertIn("status --render", (SKILLS / "status" / "SKILL.md").read_text())
+        for name in ("new", "edit", "explain"):
+            self.assertIn("never write a script", (SKILLS / name / "SKILL.md").read_text().lower())
+
+    def test_new_builds_examples_with_sources_and_expectations(self) -> None:
+        text = (SKILLS / "new" / "SKILL.md").read_text()
+        for needle in ("--examples", '"expect"', "you chose", "--id-name"):
+            self.assertIn(needle, text)
+        self.assertIn("status --render --rule", text)
+
+    def test_presentation_reference_states_the_paste_rule(self) -> None:
+        text = (ROOT / "references" / "presentation.md").read_text()
+        self.assertIn("VERBATIM", text)
+        self.assertIn("Never write a script", text)
+
+    def test_flags_used_in_skills_exist_in_the_cli(self) -> None:
+        import argparse
+
+        import cli
+
+        known: set[str] = set()
+
+        def walk(parser: argparse.ArgumentParser) -> None:
+            for action in parser._actions:
+                known.update(action.option_strings)
+                if isinstance(action, argparse._SubParsersAction):
+                    for sub in action.choices.values():
+                        walk(sub)
+
+        walk(cli.build_parser())
+        for path in [*skill_files(), ROOT / "references" / "presentation.md", ROOT / "README.md"]:
+            for line in path.read_text().splitlines():
+                if "guardrails " not in line and "guardrails\n" not in line:
+                    continue
+                for flag in re.findall(r"(?<![\w-])--[a-z][a-z-]*", line):
+                    with self.subTest(file=path.name, flag=flag):
+                        self.assertIn(flag, known | {"--help"})
 
     def test_referenced_files_exist(self) -> None:
         pattern = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9_./-]+)")

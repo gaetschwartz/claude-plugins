@@ -1,60 +1,18 @@
 from __future__ import annotations
 
 import json
-import re
 import shlex
 import unittest
 
 import policy
-from helpers import ROOT, Isolated
+from helpers import Isolated
 from shellwords import simple_commands
-
-PRESENTATION = (ROOT / "references" / "presentation.md").read_text()
-SPAN = re.compile(r"^\s*- [✗✓] (?P<fence>`+)(?P<body>.*?)(?P=fence)(?!`) ", re.MULTILINE)
-ROW = re.compile(r"^\s*- (?P<fence>`+)(?P<body>[^`].*?)(?P=fence)(?!`) ", re.MULTILINE)
-
-
-def width(fence: str, body: str) -> int:
-    return len(body) - 2 if len(fence) > 1 else len(body)
 
 
 def matches(rule: dict, command: str) -> bool:
     rule = policy.with_defaults(rule)
     policy.validate_rule(rule)
     return policy.rule_matches(rule, command, simple_commands(command))
-
-
-class PresentationAlignment(unittest.TestCase):
-    def cards(self) -> list[str]:
-        return re.split(r"^## ", PRESENTATION, flags=re.MULTILINE)[1:]
-
-    def test_command_spans_share_one_width_per_display(self) -> None:
-        card = next(c for c in self.cards() if c.startswith("Rule card"))
-        widths = {width(m["fence"], m["body"]) for m in SPAN.finditer(card)}
-        self.assertEqual(len(widths), 1, widths)
-        self.assertEqual(widths.pop(), max(len("cat <<EOF⏎pkill x⏎EOF"), len("bash -c 'killall Safari'")))
-
-    def test_explain_example_shares_one_width(self) -> None:
-        card = next(c for c in self.cards() if c.startswith("Explain layout"))
-        self.assertEqual(len({width(m["fence"], m["body"]) for m in SPAN.finditer(card)}), 1)
-
-    def test_id_lists_are_padded_per_list(self) -> None:
-        rows = next(c for c in self.cards() if c.startswith("Rule rows"))
-        self.assertEqual({len(m["body"]) for m in ROW.finditer(rows)}, {8})
-        status = next(c for c in self.cards() if c.startswith("Status layout"))
-        self.assertEqual({len(m["body"]) for m in ROW.finditer(status)}, {len("reverse-engineering")})
-
-    def test_card_has_raw_line_and_verified_wording(self) -> None:
-        card = next(c for c in self.cards() if c.startswith("Rule card"))
-        raw = re.search(r"^\s*\*\*Raw\*\* `(.*)`$", card, re.MULTILINE)
-        assert raw is not None
-        self.assertIn("matcher checked with `rule test`", card)
-        self.assertTrue(json.loads(raw.group(1))["message"])
-
-    def test_card_counts_its_commands(self) -> None:
-        card = next(c for c in self.cards() if c.startswith("Rule card"))
-        count = len(SPAN.findall(card))
-        self.assertIn(f"{count} commands", card)
 
 
 class MatchingClaims(unittest.TestCase):

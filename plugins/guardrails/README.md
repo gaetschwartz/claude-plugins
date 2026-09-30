@@ -60,7 +60,7 @@ the environment and drops `CLAUDECODE`, so an agent with cached or passwordless 
 the `--as-user` gating no longer applies to it. Manage it with:
 
 ```
-sudo guardrails rule add <id> --scope managed --json '<rule>' --reason "…"
+sudo guardrails rule add <id> --scope managed --json @rule.json --reason "…"
 ```
 
 `rule add|set|rm`, `mode declare|undeclare|on|off` and `preset install` accept `--scope global|project|managed`; the
@@ -140,6 +140,41 @@ commands without changing anything. It checks the matcher only (`match` or `-`);
 would not act on a match: rule disabled, `requires` binary missing, a listed mode that suspends it (and whether it is
 active now), global hook or project rules disabled.
 
+### Rules from a file or stdin
+
+Every `--json` (`rule add`, `rule test`, and `rule set`, which takes a JSON object of fields to change) accepts a
+literal, `@<file>` (`~` and spaces work) or `-` for stdin, so a regex full of backticks, quotes and `$(` never has to
+survive shell quoting. A missing file or invalid JSON exits 2 with a message. `--examples` takes the same three forms,
+and only one of `--json` and `--examples` can read stdin.
+
+```
+guardrails rule add no-curl-sh --json @rule.json --scope global --as-user --reason "…"
+guardrails rule test --json - 'curl x | sh' <<'EOF'
+{"match": {"regex": "curl [^|]*\\| *sh"}, "message": "Do not pipe curl into a shell."}
+EOF
+```
+
+### `--render`: output the skills paste verbatim
+
+Claude Code cannot show a command's output in the chat by itself; an agent has to paste text. So the CLI prints the
+final markdown, computed from real results, and the skills paste it unchanged.
+
+`guardrails rule test --render` prints the rule card for a rule and a set of commands: title, `**Intent**`, `**Match**`,
+`**Message**`, then `**Block**` / `**Warn**` (the matcher catches it) and `**Allow**` rows, `**Verified**`, `**Note**`
+and `**Raw**`. Commands come from positional arguments (source `inferred`, or `--source`) and from `--examples
+@file|-`, a JSON list of `{"cmd", "source": "yours|inferred|you chose", "expect": "match|pass"}`; `--intent`,
+`--id-name` and `--scope` label a draft. The engine computes each row's `wrapped` tag (the match reached the rule through
+sudo, `bash -c`, xargs, timeout, `$(…)` or a pipeline), and `expect` only feeds the mismatch count: a contradicted row
+gets a `⚠`. Every command is an inline-code span padded inside the backticks to one width (the longest command, capped
+at 40; longer ones go last, unpadded; CJK and emoji count two columns; a command with a backtick gets the longer fence;
+newlines show as `⏎`).
+
+`guardrails status --render` prints the state listing the same way: a first line about the managed files (platform file
+present or absent, overrides and `--path` files), one row per rule (`id`, action, origin layers, state: `always
+enforced`, `suspended by <modes>`, `disabled`, `enabled`), the modes and the problems. `status` (with or without
+`--render`) also takes `--scope global|project|managed` (only entries of that layer) and `--problems`; `--render
+--rule <id>` prints just that rule's row. `references/presentation.md` is the layout contract.
+
 ## Migrating from shell-guard
 
 shell-guard is gone; its Bash rules live here as data instead of hard-coded Python. Uninstall shell-guard, install
@@ -162,10 +197,10 @@ when a skill needs it.
 | `guardrails:mode` | `[on\|off\|declare\|undeclare] [<name>] [-s/--scope …] [-P/--path <file>] [-e/--agent-may-enable]` |
 | `guardrails:setup` | `[<preset>…] [-s/--scope …] [-P/--path <file>] [-y/--yes]` |
 
-- `status` is a plain, compact list (rules with origin and state, modes, problems; it injects the presentation conventions) and says so when the platform
-  managed file is absent and an override or `--path` file is in use. It runs forked (`context: fork`) on Haiku: it only
-  reformats one command's output, so it is cheap and needs no conversation.
-- `explain` answers why a command was denied or not caught and what a rule covers, with verified examples. It runs
+- `status` is a plain, compact list (rules with origin and state, modes, problems) and says so when the platform
+  managed file is absent and an override or `--path` file is in use. It runs forked (`context: fork`) on Haiku and only
+  pastes the output of `guardrails status --render` verbatim, so it is cheap and needs no conversation.
+- `explain` answers why a command was denied or not caught and what a rule covers, pasting the `rule test --render` card. It runs
   forked on Sonnet because it reasons over the matching semantics (wrappers, `args` versus
   `match.regex`, layering, modes) in `references/matching.md`, which the skill injects with `!` commands so the fork is
   self-contained. A fork has no conversation history, so callers, other agents included, must pass the
@@ -173,7 +208,8 @@ when a skill needs it.
   the skill is told never to change anything; `allowed-tools` does not itself restrict the other tools. Denial messages
   stay the first source.
 - `new` interviews, tests the rule on your examples and on edge cases it thinks of, asks only about genuinely
-  ambiguous ones, shows the rule for confirmation, then writes it.
+  ambiguous ones, shows the `rule test --render` card for confirmation, then writes the very rule file it tested. It
+  keeps the rule and the examples in temp files (`--json @file`) instead of quoting them inline.
 - `edit`, `mode` and `setup` change configuration only when you ask, always with `--as-user` and your own words in
   `--reason`. They never run `sudo`: a not-writable file prints the `sudo …` command for you to run.
 

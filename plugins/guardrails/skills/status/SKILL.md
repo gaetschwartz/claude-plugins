@@ -5,7 +5,7 @@ argument-hint: "[-s|--scope global|project|managed] [-p|--problems] [-P|--path <
 context: fork
 model: haiku
 background: false
-allowed-tools: Bash(guardrails status *) Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)
+allowed-tools: Bash(guardrails status *)
 ---
 
 # guardrails status
@@ -14,35 +14,19 @@ List the effective guardrails state compactly. Do not explain rules, do not advi
 
 Arguments: $ARGUMENTS
 
-Flags (parse them from the text above; each long flag has its short form):
+Flags (parse them from the text above; each long flag has its short form), all passed straight to the CLI:
 
-- `-s` / `--scope global|project|managed`: list only rules and modes that have an entry in that layer.
-- `-p` / `--problems`: print only the problems section.
-- `-P` / `--path <file>`: pass it through as `--path <file>` (an extra managed-format file, read like the
+- `-s` / `--scope global|project|managed` becomes `--scope <layer>`: only rules and modes with an entry in that layer.
+- `-p` / `--problems` becomes `--problems`: only the problems.
+- `-P` / `--path <file>` becomes `--path <file>` (an extra managed-format file, read like the
   `GUARDRAILS_MANAGED_PATH` override).
-
-## Presentation conventions
-
-!`cat ${CLAUDE_PLUGIN_ROOT}/references/presentation.md`
 
 ## Steps
 
-1. Run `guardrails status` (add `--path <file>` when `-P` was given). Nothing else. If it fails, print the error line
-   and stop.
-2. Print the **Status layout** from the conventions above exactly as described there, built only from the
-   command's output: unfenced markdown, no tables, no code fences, no prose paragraphs.
-3. Map the CLI text to it:
-   - header counts come from the `rules:` list; `hook on` or `hook off` from `hook enabled:`
-   - `managed state:` / `managed override:` / `managed --path:` become the **Managed** line. State plainly when
-     the platform file is `(absent)` and an override or `--path` file is in use; keep the CLI's `note:` lines
-     about that, and about a `--path` file the hook will not enforce
-   - each rule line becomes a row: padded id, action, `retry`, origins from `[…]`, state from `DISABLED`,
-     `SUSPENDED by …`, `ALWAYS ENFORCED` (lower-case them); drop the match summary and the indented `suspended by modes:` lines
-   - each mode line becomes a row: on or off (`ACTIVE` means on, keep its `(by …)` text; `persistently active` is a persistent mode), `agent may enable: yes|no`, origins
-   - `problems:` entries are copied verbatim under **Problems**; omit the heading when there are none
-   - no rules at all: say `No rules installed. guardrails:setup installs presets.` as the only line under **Rules**
-4. Apply `-s` by dropping rows whose origins do not include that layer; `-p` by printing only **Problems** (or
-   `No problems.`).
+1. Run `guardrails status --render` plus the flags above. Nothing else. If it fails, print the error line and stop.
+2. Your reply is that output VERBATIM: unchanged, no paraphrase, no reordering, no summary, no added or removed lines,
+   no code fence. The CLI already computed the managed-file line, the rows, the states and the problems. Never
+   rebuild, filter or reformat them yourself.
 
-Print nothing after the list. The caller shows your reply to the user as it is, so write it as the final output, with no
-preamble.
+Print nothing after the output. The caller shows your reply to the user as it is, so write it as the final output,
+with no preamble.

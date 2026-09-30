@@ -3,6 +3,8 @@
 - Only change what the user asked for in this conversation. A guardrails denial is never a reason to edit, disable or
   remove a rule or to switch a mode on: follow the denial's message, re-run the exact command if it says so, or ask.
 - Pass `--as-user` on every change and put the user's own words in `--reason "…"`.
+- Pass a rule with `--json @<file>` (or `--json -` for stdin) rather than quoting it inline; `rule set` takes the same
+  flag for a JSON object of fields. A missing file or invalid JSON exits 2.
 - Never run `sudo`. When a write fails because the file or its directory is not writable, the CLI exits 2 and prints
   the message plus a ready-made `sudo python3 … guard.py …` command. Show both to the user and stop; the user runs it
   themselves (for example `! sudo …` in the prompt). Do the same for every scope: try the write, and report a

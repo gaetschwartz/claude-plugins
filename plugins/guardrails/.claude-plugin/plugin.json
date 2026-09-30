@@ -1,6 +1,6 @@
 {
   "name": "guardrails",
-  "version": "0.6.1",
+  "version": "0.7.0",
   "description": "Data-driven guardrails for agent Bash commands: rules (deny or warn, per-command retry, session modes) live in global or per-project state and are enforced by one PreToolUse hook built on a real shell lexer. Nothing is active until you install presets with the setup skill.",
   "keywords": ["hooks", "bash", "guardrails", "pretooluse", "rules", "fd", "ripgrep", "pkill"]
 }

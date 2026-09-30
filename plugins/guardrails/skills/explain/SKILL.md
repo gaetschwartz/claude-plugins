@@ -36,14 +36,24 @@ plain chat what to explain instead.)
 
 ## Steps
 
-1. The references below are already loaded above; use them, do not guess.
+1. The references above are already loaded; use them, do not guess.
 2. Run `guardrails status` (with `--path` when given) to see the effective rules, origins, active modes and problems.
    A deny message names the rule as `[guardrails:<id>]`, or `<id> (managed)`.
-3. With an id: run `guardrails rule test --id <id> '<cmd>' …` on the command from `-c`, and on the few commands
-   that answer the question (the one in question, its wrapped and look-alike forms). With only a command: find the
-   rules whose `program`/`regex` could apply and test that command against each of them by id.
-4. Answer with the **Explain layout** from the presentation reference. State the cause when the matching reference
-   explains it; do not hedge and do not say "possibly". The reference covers the usual causes:
+3. Decide the commands that answer the question: the one in question (from `-c`; source `yours`), its wrapped and
+   look-alike forms (source `inferred`). Set `expect` only when the caller said what should happen. With an id run
+   `guardrails rule test --render --id <id> --examples - [--path <file>]` with the examples list on stdin:
+
+       guardrails rule test --render --id no-pkill --examples - <<'EOF'
+       [{"cmd": "sudo pkill -f vite", "source": "yours"}, {"cmd": "pgrep -fl node"}]
+       EOF
+
+   With only a command, find the rules whose `program` or `regex` could apply and run it once per rule id.
+4. Answer with the rule card: paste the `--render` output VERBATIM, unchanged, no paraphrase, no added prose inside
+   it. Never write a script or compute rows, spacing, verdicts or counts yourself; every ✗ or ✓ comes from the CLI.
+5. After a blank line add the bold-label lines from the Explain section of the presentation reference (`Happens`,
+   `Loosen`, `Lower layers`, and `Cause` only when the question was why something was or was not caught), with no
+   command spans or verdicts of your own. State the cause when the matching reference explains it; do not hedge and do
+   not say "possibly". The reference covers the usual causes:
    - a wrapper or `bash -c` was looked through, or was not (ssh, `find -exec`, scripts are invisible)
    - `args` only sees that one command's own arguments, so a pipe to `sh` is invisible to it and needs `match.regex`
    - the rule was suspended by an active mode, disabled, or skipped because `requires` is not installed, or the hook
@@ -52,8 +62,6 @@ plain chat what to explain instead.)
    - a retry acknowledged the identical command earlier in the session
    - a project or global entry cannot loosen what a higher layer defines; a managed rule without modes is always
      enforced
-5. When the fix for a pipeline case is a rule change, name `match.regex` as the fix and leave the change to the user
-   (`guardrails:edit`). Only mention verified behaviour: every ✗ or ✓ you show came from `rule test` in this run, and
-   the `Verified` line counts them and reads "matcher checked with `rule test`". `rule test` checks only the matcher:
-   repeat its `note:` lines (disabled, missing binary, suspending mode, hook off) below `Verified`, and take mode, retry
-   and warn-versus-deny behaviour from `status` and the reference.
+6. When the fix for a pipeline case is a rule change, name `match.regex` as the fix and leave the change to the user
+   (`guardrails:edit`). The card's `Verified` line and `Note` come from `rule test`, which checks only the matcher:
+   take mode, retry and warn-versus-deny behaviour from `status` and the reference.

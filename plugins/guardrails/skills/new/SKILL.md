@@ -9,7 +9,8 @@ allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guard
 
 Create one rule. Before anything else read `${CLAUDE_PLUGIN_ROOT}/references/changing-config.md` (ground rules: only
 what the user asked, `--as-user`, never sudo, exit codes), `${CLAUDE_PLUGIN_ROOT}/references/matching.md` (what
-each matcher sees) and `${CLAUDE_PLUGIN_ROOT}/references/presentation.md` (the exact display).
+each matcher sees) and `${CLAUDE_PLUGIN_ROOT}/references/presentation.md` (what the CLI prints and the verbatim-paste
+rule).
 
 Arguments: $ARGUMENTS
 
@@ -48,9 +49,9 @@ alternative (what to do instead). Derive the `id` from the intent (`no-pkill`); 
 A pipeline question (what a command is piped into) needs `regex`: `args` cannot see it. The wrappers and shells
 themselves (`sudo`, `bash`) can never be matched by `program`; use `regex` for them.
 
-**1.b.2** With examples, test them: `guardrails rule test --json '<rule>' 'cmd' …`. If no matcher can satisfy every
-example, say so and ask (chat) which example to drop or rephrase. Adjust the matcher and re-test, at most 3 rounds
-before asking.
+**1.b.2** With examples, test them: `guardrails rule test --json @<rule file> 'cmd' …` (see "Passing the rule as JSON").
+If no matcher can satisfy every example, say so and ask (chat) which example to drop or rephrase. Adjust the matcher
+and re-test, at most 3 rounds before asking.
 
 **1.b.3** Elaborate more examples yourself: reasonable edge cases the description does not cover (more of them when no
 examples were given): wrapped forms (`sudo`, `bash -c`, `xargs`, pipelines), look-alikes (`pgrep` vs `pkill`, `man X`,
@@ -82,11 +83,19 @@ sure the final rule agrees with every decision. Record the command as an example
 Skip this call entirely in one-liner mode (a description was given) when the user passed no settings flags: use the
 defaults, unless something is ambiguous. Ask for message wording in chat only when the alternative is unknown.
 
-**1.c** Show your understanding with exactly the rule card from the presentation reference, plus the `**Raw**` line
-with the rule JSON. Before showing it, run one final `rule test` over every command listed; the display never shows a
-verdict that `rule test` did not produce. `rule test` checks only the matcher: word the `Verified` line as "matcher
-checked with `rule test`" and put every `note:` it printed (disabled, missing binary, suspending mode, hook off) on its
-own line below it.
+**1.c** Show your understanding with the CLI's own rule card; you never build it.
+
+1. Collect every command from 1.a to 1.b.4 as an examples list: `{"cmd": "<exact command>", "source": "yours" |
+   "inferred" | "you chose", "expect": "match" | "pass"}`. `source` is where the command came from. `expect` is what
+   the user wants, never what the matcher did: `match` for a command they want caught, `pass` for one they want to go
+   through, and for an edge case the answer they gave. Write the list to a temp file with the Write tool.
+2. Run `guardrails rule test --render --json @<rule file> --examples @<examples file> --intent '<the user's
+   description as one short plain line>' --id-name <id> --scope <s> [--path <file>]`.
+3. Paste its output VERBATIM as your message: unchanged, no paraphrase, no added prose, no fence. The CLI computed the
+   rows, verdicts, `wrapped` tags, spacing and counts from real results; never write a script for them and never type a
+   verdict yourself.
+4. A `⚠` row or a mismatch count above 0 means the rule and the user's intent disagree: fix the rule (or ask which
+   example is wrong), re-run, and paste the new output instead. A `**Note**` line is part of the output: leave it in.
 
 **1.d** AskUserQuestion: `header` `Confirm`, question "Does this match what you want?", options `Looks good
 (Recommended)` and `Change something`. `Looks good` goes to step 2. `Change something` returns to 1.a, asking in chat
@@ -94,20 +103,24 @@ for more description and/or examples, keeping earlier examples and decisions. `-
 
 ## Passing the rule as JSON
 
-Put the rule after `--json` in single quotes. A single quote inside the JSON (an apostrophe in the message, `bash -c
-'…'` in a regex) is written `'\''` (close the quote, an escaped quote, reopen). Test the quoting with `rule test --json`
-first; invalid JSON exits 2.
+Write the rule to a temp file with the Write tool (under `$TMPDIR` or the session scratchpad; no `id` key, the id goes
+on the command line) and pass `--json @<path>` to `rule test` and `rule add`. `@` paths accept `~` and spaces, and
+`--json -` reads stdin. Do not embed the JSON in the command line: backticks, quotes and `$(` in a regex break shell
+quoting. A missing file or invalid JSON exits 2 with a message.
 
 ## Step 2: write and report
 
 ```
-guardrails rule add <id> --json '<rule>' --scope <s> [--path <file>] --as-user --reason "<the user's own words>"
+guardrails rule add <id> --json @<rule file> --scope <s> [--path <file>] --as-user --reason "<the user's own words>"
 ```
+
+Use the same rule file that 1.c tested, so the stored rule is the one the user confirmed.
 
 A new mode declared for this rule is written first with `guardrails mode declare <name> [--agent-may-enable]
 [--scope <s>] [--path <file>] --as-user --reason "…"`.
 
 On a permission failure (exit 2, not writable): say so, show the printed message and the `sudo …` command, and stop;
-do not run it. After a successful write print the rule's row in the status style (rule rows in the presentation
-reference). For a managed `--path` file that is neither the platform default nor the current
-`GUARDRAILS_MANAGED_PATH`, repeat the note: the hook enforces it only if `GUARDRAILS_MANAGED_PATH` points there.
+do not run it. After a successful write run `guardrails status --render --rule <id> --scope <s> [--path <file>]` and
+paste its one line VERBATIM. For a managed `--path` file that is neither the platform default nor the current
+`GUARDRAILS_MANAGED_PATH`, repeat the note the `rule add` printed: the hook enforces it only if
+`GUARDRAILS_MANAGED_PATH` points there.

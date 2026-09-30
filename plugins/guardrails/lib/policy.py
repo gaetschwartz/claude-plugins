@@ -285,18 +285,31 @@ def _command_matches(rule: Rule, cmd: SimpleCommand) -> bool:
     return not builtin or BUILTINS[builtin](cmd)
 
 
-def rule_matches(rule: Rule, command: str, cmds: list[SimpleCommand] | None) -> bool:
-    """cmds is None when the command could not be lexed (unbalanced quotes)."""
+def match_kind(rule: Rule, command: str, cmds: list[SimpleCommand] | None) -> str | None:
+    """None when the rule's matcher does not select the command, else "direct" or "wrapped".
+
+    "wrapped" means only the look-through (wrapper, shell string, substitution, pipeline member) made a
+    program/args/builtin match; a regex match reads the raw text and never counts as wrapped.
+    """
     match = view(rule, "match")
+    kind: str | None = None
     if cmds is not None:
-        if any(_command_matches(rule, c) for c in cmds):
-            return True
+        hits = [c for c in cmds if _command_matches(rule, c)]
+        if hits:
+            kind = "direct" if any(not c.wrapped for c in hits) else "wrapped"
     elif (programs_of(rule) and not match.get("builtin")
           and any(_fallback(p).search(command) for p in programs_of(rule))
           and (not match.get("args") or re.search(match["args"], command))):
-        return True
+        kind = "direct"
     regex = match.get("regex")
-    return bool(regex) and re.search(regex, command) is not None
+    if regex and re.search(regex, command) is not None:
+        return "direct"
+    return kind
+
+
+def rule_matches(rule: Rule, command: str, cmds: list[SimpleCommand] | None) -> bool:
+    """cmds is None when the command could not be lexed (unbalanced quotes)."""
+    return match_kind(rule, command, cmds) is not None
 
 
 def requirements_met(rule: Rule) -> bool:

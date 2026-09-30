@@ -47,6 +47,7 @@ class SimpleCommand:
     name: str
     args: list[str] = field(default_factory=list)
     assigns: list[str] = field(default_factory=list)
+    wrapped: bool = False
 
 
 def strip_heredocs(text: str) -> str:
@@ -113,8 +114,12 @@ def simple_commands(text: str, depth: int = 0) -> list[SimpleCommand]:
     skip_next = False
     inline_script = False
     sink = SimpleCommand("")
+    last: SimpleCommand | None = None
+    pipe_next = False
+    subst: list[bool] = []
 
-    for token in _tokens(text):
+    tokens = _tokens(text)
+    for index, token in enumerate(tokens):
         if skip_next:
             skip_next = False
             continue
@@ -126,6 +131,18 @@ def simple_commands(text: str, depth: int = 0) -> list[SimpleCommand]:
                 assigns = []
                 wrapper = None
                 inline_script = False
+                for offset, char in enumerate(token):
+                    if char == "(":
+                        subst.append(offset == 0 and index > 0 and tokens[index - 1] == "$")
+                    elif char == ")" and subst:
+                        subst.pop()
+                if token in ("|", "|&"):
+                    if last is not None:
+                        last.wrapped = True
+                    pipe_next = True
+                else:
+                    pipe_next = False
+                last = None
             continue
         if current is not None:
             current.args.append(token)
@@ -155,9 +172,11 @@ def simple_commands(text: str, depth: int = 0) -> list[SimpleCommand]:
             wrapper = base
             inline_script = True
             continue
-        current = SimpleCommand(base, [], assigns)
+        current = SimpleCommand(base, [], assigns, bool(wrapper) or depth > 0 or pipe_next or any(subst))
         assigns = []
         wrapper = None
+        pipe_next = False
+        last = current
         cmds.append(current)
 
     for groups in SUBST.findall(mask_single_quoted(text)):
