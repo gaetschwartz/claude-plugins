@@ -21,7 +21,7 @@ from policy import Invalid, view
 
 PRESETS_DIR = os.path.join(os.path.dirname(store.HERE), "presets")
 SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description",
-            "program", "args", "builtin", "regex", "ast", "requires")
+            "program", "args", "builtin", "regex", "ast", "mentions", "requires")
 SCOPES = ("global", "project", "managed")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
@@ -259,6 +259,8 @@ def snapshot(args: Args) -> Snapshot:
             if m not in modes:
                 report(f"rule {rid}: mode '{m}' is not declared (the rule stays enforced)",
                        *rule_origins.get(rid, []))
+    for text in policy.wrapper_problems(mstate, gstate, pstate):
+        report(text, "managed", "global", "project")
     asts = {rid: ast for rid, rule in rules.items() if rule.get("enabled") is True and (ast := policy.ast_of(rule))
             and not any(p.startswith(f"rule {rid}:") for p in problems)}
     if asts:
@@ -504,6 +506,8 @@ def apply_assignment(rule: dict[str, Any], key: str, value: str) -> None:
         elif key == "program":
             names = [x.strip() for x in value.split(",") if x.strip()]
             match["program"] = names[0] if len(names) == 1 else names
+        elif key == "mentions":
+            match["mentions"] = [x.strip() for x in value.split(",") if x.strip()]
         else:
             match[key] = value
         rule["match"] = match
@@ -689,9 +693,9 @@ def verdict(rule: policy.Rule, command: str) -> str | None:
 def ast_notes(rule: policy.Rule, degraded: str | None) -> list[str]:
     notes = []
     if degraded:
-        notes.append(f"the AST matcher could not run ({degraded}), so match.ast was NOT evaluated and these verdicts "
-                     "cover only program/args/builtin/regex; the hook skips match.ast the same way and warns once "
-                     "per session")
+        notes.append(f"the AST matcher could not run ({degraded}), so match.ast was applied only by command name "
+                     "(a command that mentions one of its names counts as a match, anything else passes); the hook "
+                     "does the same and warns the session once")
     return notes
 
 
@@ -804,6 +808,9 @@ def wrapper_entry(args: Args) -> dict[str, Any]:
         wrapper_table.validate(args.name, entry)
     except ValueError as exc:
         raise Invalid(str(exc)) from exc
+    if args.name in wrapper_table.DEFAULTS:
+        raise Invalid(f"wrapper '{args.name}' is built in and cannot be redefined: a lower layer may only add new "
+                      "wrapper names")
     return entry
 
 
@@ -822,8 +829,8 @@ def cmd_wrapper_add(args: Args) -> int:
 
     existed = change_state(scope, path, change)
     print(f"{'replaced' if existed else 'added'} wrapper {args.name} in {path}")
-    if args.name in wrapper_table.DEFAULTS:
-        print(f"note: {args.name} is built in; this entry only adds to it")
+    if scope != "managed" and args.name in view(managed_state(args), "wrappers"):
+        print(f"note: {args.name} is also a managed wrapper, which wins: this entry is ignored")
     return 0
 
 

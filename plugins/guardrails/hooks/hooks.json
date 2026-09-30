@@ -3,11 +3,11 @@
   "hooks": {
     "PreToolUse": [
       {
-        "matcher": "Bash",
+        "matcher": "Bash|Monitor",
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guardrails.sh\"",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/guardrails.sh\"",
             "timeout": 10
           }
         ]
@@ -18,7 +18,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "bash \"${CLAUDE_PLUGIN_ROOT}/hooks/guardrails.sh\" warm",
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/guardrails.sh\" warm",
             "timeout": 5
           }
         ]

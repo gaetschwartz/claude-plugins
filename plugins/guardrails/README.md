@@ -1,6 +1,8 @@
 # guardrails
 
-A PreToolUse hook for the Bash tool whose rules are data. Each command is tokenised with a real shell lexer
+A PreToolUse hook for the Bash and Monitor tools whose rules are data (a rule for `Bash` also applies to a `Monitor`
+command; a Monitor call with only a `ws` URL has no command and is ignored; monitors a plugin declares in
+`monitors/monitors.json` start without any tool call, so this hook cannot cover them). Each command is tokenised with a real shell lexer
 (wrappers like `sudo`/`xargs`/`timeout` are looked through, `bash -c` strings and `$(…)` are descended into, heredoc
 bodies and redirect targets are ignored), then checked against the rules in state. Rules that need structure can use a
 real syntax-tree matcher (`match.ast`, below).
@@ -36,18 +38,46 @@ parses the string as code) and matches the inner command too, recursively, keepi
 `sudo doas env timeout nice ionice nohup time command exec builtin stdbuf setsid xargs watch script eval bash sh zsh dash
 ksh`. Add more with `guardrails wrapper add <name> --json '{"flagsWithValue": ["-x"], "shellString": "-c"}'`
 (`--scope global|project|managed`, `--path`, `--as-user` for agents, like `rule`); `wrapper rm` and `wrapper list` do
-the rest. Layers only add look-through, so a project can never remove what a managed or global file, or the built-in
-table, looks through. An unknown wrapper, or an unknown flag that takes a value, is a false-negative risk: the first
-non-flag word after the known flags is taken as the command.
+the rest. Look-through only ever grows: the built-in wrappers cannot be redefined and a layer can only introduce NEW
+names (an entry for a name that is built in or defined by a higher layer is ignored, with a warning naming it), and a
+declared wrapper never hides itself: `pkill x` is still matched as a command even when `pkill` is declared a wrapper.
+An unknown wrapper, or an unknown flag that takes a value, is a false-negative risk: the first non-flag word after the
+known flags is taken as the command.
 
-**Requirements and fallback.** `match.ast` runs through `uv run --with ast-grep-py==0.45.3` (the wheel bundles the
-Bash grammar): `uv` must be installed, and the first run needs network once to fill uv's cache (a SessionStart hook does
-that in the background when an enabled rule uses `match.ast`). One `uv` process serves a whole hook call, about 100 ms
-warm, and a call with no applicable `match.ast` rule never starts it. If `uv` is missing, the run fails or takes too
-long, the hook does not fail open silently: every other rule is evaluated by the stdlib lexer and regex as before, the
-`match.ast` rules are skipped for that call, and the session gets one visible warning. `rule test` reports the same
-degradation as a note. When the parse tree contains errors (unbalanced quotes, an unterminated heredoc) the stdlib
-lexer's commands are checked against `match.ast` rules as well.
+**Requirements and fallback.** `match.ast` needs the PyPI wheel `ast-grep-py==0.45.3` (it bundles the Bash grammar), which
+exists for CPython 3.10 to 3.14 on macOS and Linux (x86_64, arm64). It lives in a venv at
+`${CLAUDE_PLUGIN_DATA}/venv`, built once, atomically, from `lib/ast-requirements.txt` (a sha256 for every wheel;
+`scripts/regen-ast-requirements.py` rewrites it on a pin bump) with `uv venv` and `uv pip install --require-hashes`
+when uv is found (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, then PATH), else `python -m venv` and
+`pip install --require-hashes`. A SessionStart hook builds it in the background when an enabled rule uses `match.ast`;
+the first hook call that needs it tries within a 4 s deadline and remembers a failure for ten minutes. The build runs
+from the plugin data directory with `--no-config` and an allowlisted environment (`HOME`, `LANG`, `TMPDIR`, a fixed
+`PATH`, plus only cache-dir and proxy variables): a repository's `uv.toml`, `UV_*`, `PIP_*`, `PYTHON*` or `SSL_*`
+settings can neither redirect the install nor supply code, and a tampered or unpublished wheel fails the hash check. If
+the running Python has no wheel (macOS `/usr/bin/python3` is 3.9), the build looks for a newer `python3.N` and otherwise
+reports "no wheel for Python X.Y; it needs 3.10 to 3.14". Trust model: the venv is user-owned, hash-pinned at creation,
+and sits in the plugin data directory, not in the repository.
+
+**Interpreter selection.** `hooks/guardrails.sh` is a tiny POSIX `sh` script that never changes `PATH` (hooks inherit
+Claude Code's environment and the wrapper must not make a macOS lookup touch the `/home` automount). It runs, by absolute
+path, the first of: the ready venv's python (steady state: one python process, about 50 ms with AST rules, nothing
+else on `PATH` needed); `python3` from the inherited `PATH`; `/opt/homebrew/bin/python3`; `/usr/local/bin/python3`;
+`/home/linuxbrew/.linuxbrew/bin/python3` on Linux only; `/usr/bin/python3`. With none it prints a one-line
+`systemMessage` on every call (it cannot keep per-session state without python) and lets the call through. Latency
+measured here: no AST rules about 35 ms, 3 or 30 AST rules about 53 ms, a system python that must start the venv's python
+as a second process about 78 ms.
+
+**Degraded mode.** If the wheel cannot be built or run, the run exceeds its deadline, a worker reply is malformed, a
+command nests wrappers more than 16 deep or expands past 512 units, or a command is larger than 64 KiB, the hook does
+not allow silently. Every non-AST rule runs as usual (oversize commands skip the lexer and use command names and
+regexes), and a rule with `match.ast` is applied when the command mentions one of its command names as a word: the
+names derived from its patterns and regexes, or the optional `match.mentions` list. A deny rule then denies with its
+message plus a note that the AST matcher was unavailable and why, a warn rule warns, and commands that mention none of
+the names pass. The warning reaches both the user (`systemMessage`) and the agent (`additionalContext`, or the deny
+reason), once per session. An ast rule with no derivable names and no `mentions` cannot fire in this mode. Any other
+exception in the hook falls back to a minimal evaluation (stdlib matchers and names, no session state) and, if that also
+fails, a visible warning; it never exits silently. `rule test` reports degradation as a note and exits 0. The plain
+lexer's commands are always matched against `match.ast` rules too, so the AST path never sees less than the lexer does.
 
 ### Worked example: one bundled policy, three AST rules
 
@@ -79,8 +109,7 @@ cannot express.
 a fuzz over command shapes through both: on the corpus the only difference is the unbalanced-quote fallback, and on
 the fuzz the tree is right where the lexer loses commands in nested substitutions (`echo "$(nm $(z))"`) or misses a
 pipeline marker; an `args` regex anchored on the joined arguments cannot be expressed as an ast rule, so the two
-engines are not interchangeable. Environment knobs for tests: `GUARDRAILS_UV` (path of `uv`, empty or missing means
-unavailable) and `GUARDRAILS_AST_INPROCESS=1` (use an importable `ast_grep_py`, no `uv`).
+engines are not interchangeable. Environment knobs for tests: `GUARDRAILS_UV` (path of `uv`; empty or missing means not found), `GUARDRAILS_AST_BOOTSTRAP=none` (never build the venv) and `GUARDRAILS_AST_INPROCESS=1` (use an importable `ast_grep_py`, no venv).
 
 ## Modes
 
@@ -278,17 +307,19 @@ when a skill needs it.
 - `edit`, `mode` and `setup` change configuration only when you ask, always with `--as-user` and your own words in
   `--reason`. They never run `sudo`: a not-writable file prints the `sudo …` command for you to run.
 
-`just test` runs the suite under `uv run --with ast-grep-py==0.45.3`, so the AST tests run; plain
-`python3 -m unittest discover -s tests` works too, the tests that need `ast-grep-py` then use `uv` (network once) or
-skip with a message saying how to get it, and the fallback tests simulate a missing `uv` with `GUARDRAILS_UV`.
+`just test` runs the suite under `uv run --with ast-grep-py==0.45.3` (an unhashed, test-only install), so the AST tests run;
+plain `python3 -m unittest discover -s tests` works too, and the tests that need `ast-grep-py` then build the hashed venv
+(network once) or skip with a message saying how to get it; set `GUARDRAILS_REQUIRE_AST=1` to make that a failure instead
+(for CI). The fallback tests simulate a missing or failing `uv` with `GUARDRAILS_UV`.
 `just check` lints and type-checks, `just validate` runs `claude plugin validate`.
 
 ## Layout
 
 | path | role |
 |---|---|
-| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `matching.py` (the one evaluation path), `policy.py`, `store.py`, `cli.py`, `shellwords.py` (plain lexer), `wrappers.py` (wrapper table), `astrun.py` + `astworker.py` (the `uv` launcher and the ast-grep worker), `parity.py` |
-| `hooks/` | `hooks.json` (PreToolUse, and SessionStart to warm the `uv` cache) and the `guardrails.sh` wrapper Claude Code runs |
+| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `matching.py` (the one evaluation path), `policy.py`, `store.py`, `cli.py`, `shellwords.py` (plain lexer), `wrappers.py` (wrapper table), `astrun.py` + `astworker.py` (the venv builder/runner and the ast-grep worker), `parity.py` |
+| `hooks/` | `hooks.json` (PreToolUse on `Bash\|Monitor`, and SessionStart to build the AST venv) and the `guardrails.sh` POSIX wrapper that picks the interpreter |
+| `scripts/` | `regen-ast-requirements.py`: rewrites the hashed requirements for the pin |
 | `references/` | text the skills read on demand: matching semantics, presentation conventions, config-change rules |
 | `bin/guardrails` | the CLI wrapper on the Bash tool's PATH |
 | `presets/`, `skills/`, `tests/` | preset rule sets, the six skills, shared skill references, the unittest suite |

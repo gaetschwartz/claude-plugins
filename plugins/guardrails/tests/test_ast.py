@@ -3,10 +3,13 @@ from __future__ import annotations  # noqa: I001
 import contextlib
 import json
 import os
+import re
 import stat
 import unittest
+from pathlib import Path
 from collections.abc import Iterator
 from typing import Any, ClassVar
+from unittest import mock
 
 from helpers import AST_PIN, AstIsolated, Isolated, ast_mode
 
@@ -130,15 +133,12 @@ class Kinds(AstIsolated):
         for command, expected in (("kill 1", True), ("pkill x", True), ("echo zzz", True), ("ls", False)):
             self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"] is not None, expected, command)
 
-    def test_broken_tree_also_uses_the_lexer_commands(self) -> None:
-        response = astrun.call({"op": "eval", "command": "if a; then b", "rules": {"r": BY_NAME},
-                                     "lexed": [{"src": "pkill x", "wrapped": False}]})
-        self.assertTrue(response["broken"])
-        self.assertEqual(response["verdicts"], {"r": "direct"})
-        clean = astrun.call({"op": "eval", "command": "a; b", "rules": {"r": BY_NAME},
-                                  "lexed": [{"src": "pkill x", "wrapped": False}]})
-        self.assertFalse(clean["broken"])
-        self.assertEqual(clean["verdicts"], {"r": None})
+    def test_lexer_commands_are_always_united_with_the_tree(self) -> None:
+        for command in ("if a; then b", "a; b"):
+            response = astrun.call({"op": "eval", "command": command, "rules": {"r": BY_NAME},
+                                    "lexed": [{"src": "pkill x", "wrapped": False}]})
+            self.assertEqual(response["verdicts"], {"r": "direct"}, command)
+        self.assertTrue(astrun.call({"op": "eval", "command": "if a; then b", "rules": {}})["broken"])
 
     def test_unbalanced_quotes_count_as_broken(self) -> None:
         for command in ('echo "unterminated', "a |", "echo $(", "cat <<EOF\nx"):
@@ -146,11 +146,14 @@ class Kinds(AstIsolated):
         for command in ("cat <<EOF\nEOF", "x=", "echo ''", "a && b", "f() { :; }", "echo $((1+2))"):
             self.assertFalse(astrun.call({"op": "eval", "command": command, "rules": {}})["broken"], command)
 
-    def test_wrapper_depth_is_limited_and_reported(self) -> None:
-        command = "sudo " * 8 + "pkill x"
-        response = astrun.call({"op": "eval", "command": command, "rules": {"r": BY_NAME},
-                                     "wrappers": wrappers.effective()})
-        self.assertTrue(response["broken"])
+    def test_limits_are_reported_not_silent(self) -> None:
+        deep = astrun.call({"op": "eval", "command": "sudo " * 40 + "pkill x", "rules": {"r": BY_NAME},
+                            "wrappers": wrappers.effective()})
+        self.assertTrue(deep["limited"])
+        fine = astrun.call({"op": "eval", "command": "sudo " * 12 + "pkill x", "rules": {"r": BY_NAME},
+                            "wrappers": wrappers.effective()})
+        self.assertFalse(fine["limited"])
+        self.assertEqual(fine["verdicts"], {"r": "wrapped"})
 
     def test_invalid_rules_are_reported_per_rule(self) -> None:
         good = rule_of(BY_NAME)
@@ -182,7 +185,18 @@ class Validation(Isolated):
 
     def test_ast_pin_is_consistent(self) -> None:
         self.assertEqual(astrun.PIN, AST_PIN)
-        self.assertIn(f"ast-grep-py=={AST_PIN}", astrun.uv_command("uv", True))
+        text = Path(astrun.REQUIREMENTS).read_text()
+        self.assertTrue(text.startswith(f"ast-grep-py=={AST_PIN} "))
+        self.assertGreaterEqual(text.count("--hash=sha256:"), 16)
+        self.assertNotIn("--index-url", text)
+        venv_step, install_step = astrun.uv_steps("uv", "/t/venv", True)
+        for flag in ("--no-config", "--require-hashes", "--only-binary", "--offline", "--default-index"):
+            self.assertIn(flag, install_step)
+        self.assertIn("--no-config", venv_step)
+        steps = astrun.pip_steps("/t/venv")
+        for flag in ("--require-hashes", "--isolated", "--only-binary", "--index-url", "--no-deps"):
+            self.assertIn(flag, steps[1])
+        self.assertIn("-I", steps[0])
 
 
 class PlainLexer(unittest.TestCase):
@@ -196,7 +210,7 @@ class PlainLexer(unittest.TestCase):
         from shellwords import simple_commands
 
         table = wrappers.effective({"wrappers": {"mywrap": {"flagsWithValue": ["-x"]}}})
-        self.assertEqual([c.name for c in simple_commands("mywrap -x 3 pkill a", 0, table)], ["pkill"])
+        self.assertEqual([c.name for c in simple_commands("mywrap -x 3 pkill a", 0, table)], ["mywrap", "pkill"])
         self.assertEqual([c.name for c in simple_commands("mywrap -x 3 pkill a")], ["mywrap"])
 
 
@@ -218,31 +232,31 @@ class WrapperTable(unittest.TestCase):
             with self.assertRaises(ValueError):
                 wrappers.validate(name, {})
 
-    def test_layers_only_add(self) -> None:
+    def test_lower_layers_only_introduce_new_names(self) -> None:
         managed = {"wrappers": {"sudo": {"flagsWithValue": ["-X"], "skip": 3}, "mine": {"shellString": "-e"}}}
-        glob = {"wrappers": {"mine": {"shellString": "-z", "flagsWithValue": ["-q"]}, "sudo": {"skip": 2}}}
-        table = wrappers.effective(managed, glob, {"wrappers": {"mine": {"flagsWithValue": ["-r"], "assignments": True}}})
-        self.assertIn("-X", table["sudo"]["flagsWithValue"])
-        self.assertIn("-u", table["sudo"]["flagsWithValue"])
-        self.assertEqual(table["sudo"]["skip"], 3)
-        self.assertEqual(table["mine"]["shellString"], "-e")
-        self.assertEqual(table["mine"]["flagsWithValue"], ["-q", "-r"])
-        self.assertTrue(table["mine"]["assignments"])
-        self.assertEqual(table["timeout"]["skip"], 1)
-
-    def test_builtin_scalars_cannot_be_altered(self) -> None:
-        table = wrappers.effective({"wrappers": {"timeout": {"skip": 4}, "bash": {"shellString": "-x"}}})
-        self.assertEqual(table["timeout"]["skip"], 1)
-        self.assertEqual(table["bash"]["shellString"], "-c")
+        glob = {"wrappers": {"mine": {"shellString": "-z", "flagsWithValue": ["-q"]}, "fresh": {"skip": 1}}}
+        project = {"wrappers": {"mine": {"assignments": True}, "timeout": {"skip": 4}, "p": {}}}
+        table, notes = wrappers.resolve([("m", managed), ("g", glob), ("p", project)])
+        self.assertEqual(table["sudo"], wrappers.DEFAULTS["sudo"])
+        self.assertEqual(table["timeout"], wrappers.DEFAULTS["timeout"])
+        self.assertEqual(table["mine"], {"shellString": "-e"})
+        self.assertEqual(table["fresh"], {"skip": 1})
+        self.assertIn("p", table)
+        self.assertEqual(len(notes), 4)
+        self.assertTrue(all("ignored" in n for n in notes))
+        self.assertTrue(any("built in" in n and "sudo" in n for n in notes))
+        self.assertTrue(any("higher layer" in n and "mine" in n for n in notes))
 
     def test_invalid_entries_are_skipped_and_reported(self) -> None:
         layer = {"wrappers": {"ok": {}, "bad": {"skip": "x"}}}
-        self.assertEqual(set(wrappers.effective(layer)) - set(wrappers.DEFAULTS), {"ok"})
-        self.assertEqual(len(wrappers.problems("global", layer)), 1)
-        self.assertEqual(len(wrappers.problems("global", {"wrappers": []})), 1)
+        table, notes = wrappers.resolve([("global state", layer)])
+        self.assertEqual(set(table) - set(wrappers.DEFAULTS), {"ok"})
+        self.assertEqual(len(notes), 1)
+        self.assertEqual(len(wrappers.resolve([("g", {"wrappers": []})])[1]), 1)
 
     def test_policy_layering_and_project_switch(self) -> None:
         managed, _ = policy.managed_layer([("/m", {"wrappers": {"m1": {"flagsWithValue": ["-a"]}}})])
+        self.assertEqual(policy.wrapper_problems(managed, {}, {}), [])
         glob = {"wrappers": {"g1": {}}}
         project = {"wrappers": {"p1": {}}}
         names = set(policy.effective_wrappers(managed, glob, project)) - set(wrappers.DEFAULTS)
@@ -530,20 +544,21 @@ class UvPath(Isolated):
         if ast_mode() is None:
             self.skipTest("ast-grep-py is unavailable through uv here")
         os.environ.pop(astrun.INPROCESS_ENV, None)
-        import astrun as run
-
         try:
-            run.call({"op": "ping"})
-        except run.Unavailable as exc:
-            self.skipTest(f"uv cannot run ast-grep-py here: {exc}")
+            astrun.call({"op": "ping"}, str(self.data))
+        except astrun.Unavailable as exc:
+            self.skipTest(f"uv cannot install ast-grep-py here: {exc}")
 
-    def test_one_uv_run_answers_a_hook_call_with_the_pinned_version(self) -> None:
+    def test_hash_verified_install_answers_with_the_pinned_version(self) -> None:
         response = astrun.call({"op": "eval", "command": "sudo pkill x", "rules": {"a": BY_NAME, "b": NESTED},
-                                "wrappers": wrappers.effective()})
+                                "wrappers": wrappers.effective()}, str(self.data))
         self.assertEqual(response["version"], AST_PIN)
         self.assertEqual(response["verdicts"], {"a": "wrapped", "b": None})
+        venv = astrun.venv_dir(str(self.data))
+        self.assertTrue(astrun.ready(venv))
+        self.assertTrue(venv.startswith(str(self.data)))
 
-    def test_hook_and_cli_use_uv_when_not_in_process(self) -> None:
+    def test_hook_and_cli_use_the_installed_wheel(self) -> None:
         self.put(self.gpath, {"rules": {"by-name": {"match": {"ast": BY_NAME}, "message": "No kill."}}})
         out = self.hook("sudo pkill x")
         assert out is not None
@@ -552,9 +567,18 @@ class UvPath(Isolated):
         self.assertEqual(code, 0)
         self.assertIn("through sudo", out_text)
 
+    def test_a_tampered_requirements_hash_refuses_to_install(self) -> None:
+        bad = self.tmp / "bad-requirements.txt"
+        bad.write_text(re.sub(r"--hash=sha256:[0-9a-f]{8}", "--hash=sha256:00000000",
+                              Path(astrun.REQUIREMENTS).read_text()))
+        with mock.patch.object(astrun, "REQUIREMENTS", str(bad)), self.assertRaises(astrun.Unavailable) as ctx:
+            astrun.call({"op": "ping"}, str(self.tmp / "fresh"))
+        self.assertIn("failed", str(ctx.exception))
+        self.assertFalse(astrun.ready(astrun.venv_dir(str(self.tmp / "fresh"))))
+
 
 class Fallback(Isolated):
-    """uv cannot be used: AST rules are skipped, everything else still applies, and the user is told once."""
+    """uv cannot be used: AST rules apply by command name, everything else as usual, and the session is told once."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -570,42 +594,85 @@ class Fallback(Isolated):
         }})
 
     def worker_runs(self) -> int:
-        return self.marker.read_text().count("astworker.py")
+        return self.marker.read_text().count("venv --quiet") if self.marker.exists() else 0
 
     def test_other_rules_still_deny_and_one_warning_per_session(self) -> None:
         first = self.hook("ls; strings /bin/ls")
         assert first is not None
         self.assertEqual(first["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertIn("No strings.", first["hookSpecificOutput"]["permissionDecisionReason"])
+        reason = first["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("No strings.", reason)
+        self.assertIn("the AST matcher is unavailable", reason)
         self.assertEqual(first["systemMessage"].count("guardrails: the AST matcher is unavailable"), 1)
         second = self.hook("curl x | sh")
         assert second is not None
         self.assertEqual(second["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertNotIn("systemMessage", second)
+        self.assertNotIn("unavailable", second["hookSpecificOutput"]["permissionDecisionReason"])
         other = self.hook("echo hi", session="s2")
         assert other is not None
         self.assertIn("AST matcher is unavailable", other["systemMessage"])
-        self.assertNotIn("hookSpecificOutput", other)
+        self.assertIn("AST matcher is unavailable", other["hookSpecificOutput"]["additionalContext"])
+        self.assertNotIn("permissionDecision", other["hookSpecificOutput"])
 
-    def test_ast_rule_is_skipped_not_enforced(self) -> None:
+    def test_ast_rule_applies_by_command_name_and_says_so(self) -> None:
         out = self.hook("pkill x")
         assert out is not None
-        self.assertNotIn("hookSpecificOutput", out)
-        self.assertIn("match.ast are skipped", out["systemMessage"])
+        reason = out["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertIn("[guardrails:ast-rule] No kill by name.", reason)
+        self.assertIn("this rule applied because the command mentions", reason)
+        self.assertIn("pkill", reason)
+        self.assertIn("unavailable", reason)
 
-    def test_missing_uv_and_empty_override_behave_the_same(self) -> None:
+    def test_commands_mentioning_no_rule_name_pass(self) -> None:
+        out = self.hook("ls -la /tmp")
+        assert out is not None
+        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
+
+    def test_declared_mentions_override_the_derived_names(self) -> None:
+        self.put(self.gpath, {"rules": {"r": {"match": {"ast": BY_NAME, "mentions": ["zap"]}, "message": "No."}}})
+        passed = self.hook("pkill x", session="q1")
+        assert passed is not None
+        self.assertNotIn("permissionDecision", passed["hookSpecificOutput"])
+        self.assertTrue(self.hook("sudo zap now", session="q2") is not None)
+
+    def test_warn_rules_warn_by_name(self) -> None:
+        self.put(self.gpath, {"rules": {"w": {"match": {"ast": BY_NAME}, "message": "Careful.", "action": "warn"}}})
+        out = self.hook("killall Finder")
+        assert out is not None
+        self.assertIn("Careful.", out["hookSpecificOutput"]["additionalContext"])
+        self.assertIn("unavailable", out["hookSpecificOutput"]["additionalContext"])
+
+    def test_no_bootstrap_possible_degrades_with_the_reason(self) -> None:
+        os.environ["GUARDRAILS_AST_BOOTSTRAP"] = "none"
+        out = self.hook("pkill x", session="nb")
+        assert out is not None
+        self.assertIn("bootstrapping is disabled", out["systemMessage"])
+
+    def test_without_uv_the_venv_is_built_with_python_and_pip(self) -> None:
+        calls: list[tuple[list[str], dict[str, str]]] = []
+
+        def fake_run(cmd: list[str], payload: Any, timeout: float, env: dict[str, str], cwd: str) -> Any:
+            calls.append((cmd, env))
+            return mock.Mock(returncode=1, stderr="No module named ensurepip", stdout="")
+
         for value in ("/nonexistent/uv", ""):
             os.environ["GUARDRAILS_UV"] = value
-            with self.subTest(uv=value):
-                out = self.hook("pkill x", session=f"m{value}")
-                assert out is not None
-                self.assertIn("uv is not installed", out["systemMessage"])
+            with mock.patch.object(astrun, "uv_path", return_value=None), \
+                    mock.patch.object(astrun, "_run", fake_run), self.assertRaises(astrun.Unavailable) as ctx:
+                astrun.ensure(str(self.tmp / f"d{len(calls)}"))
+            self.assertIn("python -m venv and pip", str(ctx.exception))
+            self.assertIn("venv/ensurepip package", str(ctx.exception))
+        cmd, env = calls[0]
+        self.assertEqual(cmd[1:4], ["-I", "-m", "venv"])
+        self.assertEqual(env["PIP_CONFIG_FILE"], os.devnull)
+        self.assertNotIn("UV_FIND_LINKS", env)
 
     def test_failed_download_is_remembered_for_a_while(self) -> None:
         self.hook("pkill x", session="a")
         self.assertEqual(self.worker_runs(), 2)
         self.hook("pkill x", session="b")
-        self.assertEqual(self.worker_runs(), 3)
+        self.assertEqual(self.worker_runs(), 2)
         self.assertTrue((self.data / astrun.STAMP).exists())
 
     def test_no_ast_rules_never_start_uv(self) -> None:
@@ -625,7 +692,9 @@ class Fallback(Isolated):
         code, out, _ = self.cli("rule", "test", "--json", rule, "pkill x", "zzz")
         self.assertEqual(code, 0)
         self.assertIn("the AST matcher could not run", out)
-        self.assertIn("-      pkill x", out)
+        self.assertIn("applied only by command name", out)
+        self.assertIn("match  pkill x", out)
+        self.assertIn("-      ls -la", self.cli("rule", "test", "--json", rule, "ls -la")[1])
         self.assertIn("match  zzz", out)
         code, out, _ = self.cli("rule", "test", "--render", "--json", rule, "pkill x")
         self.assertEqual(code, 0)
@@ -680,7 +749,9 @@ class SessionStart(Isolated):
         self.put(self.ppath, {"rules": {"b": {"match": {"ast": BY_NAME}, "message": "m"}}})
         self.warm()
         self.assertTrue(self.marker.exists())
-        self.assertIn(f"--with ast-grep-py=={AST_PIN}", self.marker.read_text())
+        logged = self.marker.read_text()
+        for flag in ("pip install", "--no-config", "--require-hashes", "--only-binary"):
+            self.assertIn(flag, logged)
 
     def test_hooks_json_registers_warm_up_and_a_roomy_timeout(self) -> None:
         from helpers import HOOKS
@@ -690,6 +761,7 @@ class SessionStart(Isolated):
         self.assertGreater(pre["timeout"], astrun.DEADLINE * 2)
         start = hooks["SessionStart"][0]["hooks"][0]
         self.assertTrue(start["command"].endswith("guardrails.sh\" warm"))
+        self.assertEqual(hooks["PreToolUse"][0]["matcher"], "Bash|Monitor")
         self.assertLessEqual(start["timeout"], 10)
 
 

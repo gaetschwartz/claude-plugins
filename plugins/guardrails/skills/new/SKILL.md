@@ -30,6 +30,9 @@ Parse the text above; every long flag has a short one. Flags pre-answer the matc
 Defaults when a setting is neither given nor asked: action deny, retry same-command (only when deny), scope global,
 no modes.
 
+A rule applies to Bash commands and to Monitor commands alike (the hook matches both); a Monitor call that only
+opens a `ws` URL has no command, and monitors a plugin declares itself are not covered.
+
 ## Asking
 
 - Free text (the description, examples, message wording) is always asked in a plain chat message, never with

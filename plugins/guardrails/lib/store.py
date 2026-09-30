@@ -8,9 +8,7 @@ import fcntl
 import json
 import os
 import re
-import subprocess
 import sys
-import tempfile
 from collections.abc import Iterator
 from typing import Any, Callable, TypeVar
 
@@ -140,6 +138,8 @@ def project_root(cwd: str | None = None) -> str | None:
     if env:
         return os.path.realpath(env)
     try:
+        import subprocess
+
         proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd or os.getcwd(), capture_output=True,
                               text=True, timeout=3, stdin=subprocess.DEVNULL, check=False)
     except (OSError, subprocess.SubprocessError):
@@ -214,6 +214,8 @@ def write(path: str, state: State, mode: int | None = None) -> None:
         os.makedirs(directory, exist_ok=True)
     else:
         make_dirs(directory, MANAGED_DIR_MODE)
+    import tempfile
+
     fd, tmp = tempfile.mkstemp(dir=directory, suffix=".tmp")
     try:
         with os.fdopen(fd, "w") as fh:

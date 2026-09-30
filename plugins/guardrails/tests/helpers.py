@@ -94,11 +94,12 @@ class Isolated(unittest.TestCase):
     def get(self, path: Path) -> dict[str, Any]:
         return json.loads(path.read_text())
 
-    def hook(self, command: str, session: str = "s1") -> dict[str, Any] | None:
+    def hook(self, command: str, session: str = "s1", tool: str = "Bash",
+             tool_input: Any = None) -> dict[str, Any] | None:
         import engine
 
-        payload = {"session_id": session, "cwd": str(self.proj), "tool_name": "Bash",
-                   "tool_input": {"command": command}}
+        payload = {"session_id": session, "cwd": str(self.proj), "tool_name": tool,
+                   "tool_input": {"command": command} if tool_input is None else tool_input}
         out = io.StringIO()
         self.hook_err = io.StringIO()
         with contextlib.redirect_stderr(self.hook_err):
@@ -129,6 +130,8 @@ class AstIsolated(Isolated):
         super().setUp()
         mode = ast_mode()
         if mode is None:
+            if os.environ.get("GUARDRAILS_REQUIRE_AST") == "1":
+                self.fail(SKIP_AST)
             self.skipTest(SKIP_AST)
         if mode == "inprocess":
             os.environ["GUARDRAILS_AST_INPROCESS"] = "1"

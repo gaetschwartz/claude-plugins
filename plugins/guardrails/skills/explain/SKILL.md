@@ -66,6 +66,7 @@ plain chat what to explain instead.)
      or project rules are switched off (the "Why a rule may not fire" list)
    - `program` never matches a wrapper or shell itself (`sudo`, `bash`); `bash script.sh` is program `script.sh`
    - a retry acknowledged the identical command earlier in the session
+   - the call was not a command the hook sees: a Monitor with only a `ws` URL, or a monitor a plugin declares itself
    - a project or global entry cannot loosen what a higher layer defines; a managed rule without modes is always
      enforced
 6. When the fix for a pipeline case is a rule change, name `match.ast` (or `match.regex`) as the fix and leave the change to the user

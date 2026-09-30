@@ -12,8 +12,8 @@ import re
 import sys
 from typing import Any
 
-MAX_DEPTH = 6
-MAX_UNITS = 64
+MAX_DEPTH = 16
+MAX_UNITS = 512
 CONTEXT_KINDS = frozenset({"pipeline", "command_substitution", "process_substitution"})
 REDIRECTS = frozenset({"file_redirect", "heredoc_redirect", "herestring_redirect"})
 ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
@@ -43,13 +43,15 @@ def span(node: Any) -> tuple[int, int]:
     return rng.start.index, rng.end.index
 
 
-def has_errors(root: Any) -> bool:
-    """ERROR nodes, or zero-width nodes the parser invented to recover (MISSING)."""
+def has_errors(root: Any, deep: bool = True) -> bool:
+    """ERROR nodes, or (when deep) zero-width nodes the parser invented to recover (MISSING)."""
+    if root.find({"rule": {"kind": "ERROR"}}) is not None:
+        return True
+    if not deep:
+        return False
     stack = [root]
     while stack:
         node = stack.pop()
-        if node.kind() == "ERROR":
-            return True
         lo, hi = span(node)
         if lo == hi and node.kind() not in ("program", "heredoc_body") and node is not root:
             return True
@@ -74,7 +76,16 @@ def dequote(node: Any) -> str:
 
 def is_flag(node: Any) -> bool:
     text = node.text()
-    return node.kind() in ("word", "number") and text.startswith("-") and len(text) > 1
+    return node.kind() in ("word", "number", "concatenation") and text.startswith("-")
+
+
+def cluster_takes_value(word: str, flags: set[str]) -> bool:
+    if len(word) < 3 or word[1] == "-" or not word[1:].isalpha():
+        return False
+    for i, letter in enumerate(word[1:]):
+        if f"-{letter}" in flags:
+            return i == len(word) - 2
+    return False
 
 
 def shell_flag_matches(word: str, flag: str) -> bool:
@@ -115,12 +126,13 @@ def resolve(entry: dict[str, Any], args: list[Any]) -> tuple[str, Any] | None:
             break
         if is_flag(word):
             if shell and shell != "rest" and shell_flag_matches(text, shell):
-                return ("shell", dequote(args[i + 1])) if i + 1 < len(args) else None
+                at = i + 1 + (1 if i + 1 < len(args) and args[i + 1].text() == "--" else 0)
+                return ("shell", dequote(args[at])) if at < len(args) else None
             if text in inert:
                 return None
-            i += 2 if text in with_value else 1
+            i += 2 if text in with_value or cluster_takes_value(text, with_value) else 1
             continue
-        if entry.get("assignments") and ASSIGN.match(text):
+        if entry.get("assignments") and ASSIGN.match(dequote(word)):
             i += 1
             continue
         break
@@ -169,13 +181,22 @@ def normalise(src: str) -> str:
     return apply_edits(src, edits)
 
 
-def variants(src: str, root: Any, table: Table) -> list[tuple[str, int, int, str]]:
-    """(rewritten source, region start, region end, label) for each wrapper command in the tree."""
+def variants(src: str, root: Any, table: Table, within: tuple[int, int] | None = None
+             ) -> list[tuple[str, int, int, str]]:
+    """(rewritten source, region start, region end, label) for each wrapper command in the tree.
+
+    After the first round only commands inside the region a rewrite exposed are expanded: the others were already
+    handled from the original tree, and expanding their combinations would grow without bound.
+    """
     out = []
     for cmd in root.find_all({"rule": {"kind": "command"}}):
         parts = command_parts(cmd)
         if parts is None:
             continue
+        if within is not None:
+            c_lo, c_hi = span(cmd)
+            if not (c_lo < within[1] and c_hi > within[0]):
+                continue
         name, args = parts
         base = name.text().strip("\"'").rsplit("/", 1)[-1]
         entry = table.get(base)
@@ -209,20 +230,20 @@ def unit_trees(command: str, table: Table) -> tuple[list[tuple[Any, int, int, st
         base_src, base_root = plain, sg_root(plain)
         units.append((base_root, -1, -1, "", plain))
         seen.add(plain)
-    queue = [(base_src, base_root, 0)]
+    queue: list[tuple[str, Any, int, tuple[int, int] | None]] = [(base_src, base_root, 0, None)]
     limited = False
-    while queue:
-        src, tree, depth = queue.pop(0)
-        for new_src, lo, hi, label in variants(src, tree, table):
+    while queue and not limited:
+        src, tree, depth, within = queue.pop(0)
+        for new_src, lo, hi, label in variants(src, tree, table, within):
             if new_src in seen:
                 continue
             if depth + 1 > MAX_DEPTH or len(units) >= MAX_UNITS:
                 limited = True
-                continue
+                break
             seen.add(new_src)
             new_root = sg_root(new_src)
             units.append((new_root, lo, hi, label, new_src))
-            queue.append((new_src, new_root, depth + 1))
+            queue.append((new_src, new_root, depth + 1, (lo, hi)))
     return units, limited
 
 
@@ -277,7 +298,7 @@ def evaluate(request: dict[str, Any]) -> dict[str, Any]:
     live, errors = prepare(rules)
     verdicts: dict[str, str | None] = {rid: None for rid in live}
     units, limited = unit_trees(request["command"], request.get("wrappers") or {})
-    broken = limited or any(has_errors(u[0]) for u in units)
+    broken = any(has_errors(u[0], u[1] < 0) for u in units)
     for root, lo, hi, _label, _src in units:
         for rid, rule in live.items():
             for node in root.find_all({"rule": rule}):
@@ -286,13 +307,13 @@ def evaluate(request: dict[str, Any]) -> dict[str, Any]:
                     if not (n_lo < hi and n_hi > lo):
                         continue
                 verdicts[rid] = best(verdicts[rid], kind_of(node, lo >= 0))
-    if broken:
-        for item in request.get("lexed") or ():
-            root = sg_root(item["src"])
-            for rid, rule in live.items():
-                for node in root.find_all({"rule": rule}):
-                    verdicts[rid] = best(verdicts[rid], "wrapped" if item.get("wrapped") else kind_of(node, False))
-    return {"ok": True, "verdicts": verdicts, "errors": errors, "broken": broken, "version": version()}
+    for item in request.get("lexed") or ():
+        root = sg_root(item["src"])
+        for rid, rule in live.items():
+            for node in root.find_all({"rule": rule}):
+                verdicts[rid] = best(verdicts[rid], "wrapped" if item.get("wrapped") else kind_of(node, False))
+    return {"ok": True, "verdicts": verdicts, "errors": errors, "broken": broken, "limited": limited,
+            "version": version()}
 
 
 def dump(node: Any, depth: int, out: list[list[Any]]) -> None:
@@ -327,6 +348,8 @@ def handle(request: dict[str, Any]) -> dict[str, Any]:
 
 
 def main() -> int:
+    for extra in sys.argv[1:]:
+        sys.path.insert(0, extra)
     try:
         response = handle(json.load(sys.stdin))
     except Exception as exc:  # noqa: BLE001

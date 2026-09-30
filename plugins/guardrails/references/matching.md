@@ -61,6 +61,7 @@ matching, so it also has the false positives described below.
   an alternative: the rule fires when the program/args/builtin part matches OR the regex matches.
 - `match.ast`: an ast-grep rule object over the parsed syntax tree; see the next sections. Like `regex` it is an
   alternative: the rule fires when the program/args/builtin part matches OR `regex` matches OR `ast` matches.
+- `match.mentions`: optional list of command names, only used when the AST matcher is unavailable (see degraded mode).
 - A command with unbalanced quotes cannot be split. The fallback then scans the raw text for the program name (and
   `args` against the raw text); `builtin` never matches there; `regex` works as usual.
 
@@ -132,8 +133,8 @@ tree-sitter sees `sudo pkill -f vite` as a `command` named `sudo` whose argument
 engine rewrites the source and parses the result as another unit. For a wrapper it drops the wrapper's own words (its
 flags, the values of flags that take one, a `timeout` duration, `env` assignments) and keeps everything around it, so
 relations such as `inside` still see the real surroundings. For a shell (`bash|sh|zsh|dash|ksh -c '...'`, `eval`,
-`watch`, `script -c`) it replaces the command by the string's content, parsed as code. Units nest up to 6 levels and 64
-in all; beyond that the plain lexer is consulted too.
+`watch`, `script -c`) it replaces the command by the string's content, parsed as code. Units nest up to 16 levels and 512
+in all; beyond that the rule is applied by command name and the session is warned (degraded mode below).
 
 Built in: `sudo doas env timeout nice ionice nohup time command exec builtin stdbuf setsid xargs watch script eval bash
 sh zsh dash ksh`. Each entry is data:
@@ -147,11 +148,12 @@ sh zsh dash ksh`. Each entry is data:
 | `noCommandFlags` | flags after which nothing is executed (`command -v`) |
 
 Add your own with `guardrails wrapper add <name> --json '{"flagsWithValue": ["-x"]}'` (`--scope global|project|managed`
-and `--path`, like `rule`), `wrapper rm <name>`, `wrapper list`. Layers only add look-through: the effective entry for a
-name is the union of the built-in, managed, global and project entries. Flag lists are unioned; a scalar (`shellString`,
-`skip`) that an earlier one set is kept, so a lower layer can neither remove nor alter a higher layer's entry or a
-built-in. Invalid entries are skipped and reported. The plain lexer (the fallback path) honours the flags of user
-wrappers too.
+and `--path`, like `rule`), `wrapper rm <name>`, `wrapper list`. Look-through only grows: a built-in wrapper cannot be
+redefined and a layer can only introduce NEW names; an entry for a name that is built in, or defined by a higher layer, is
+ignored and reported as a warning naming it (so a repository's project state can never change how `sudo` parses). A
+declared wrapper never hides itself: `mywrap -x 1 pkill a` is matched both as the `mywrap` command and as `pkill a`,
+in both engines. Invalid entries are skipped and reported. The plain lexer honours the flags of user wrappers too, and in
+both engines clustered short flags whose last letter takes a value (`sudo -nu bob cmd`) consume the next word.
 
 **False-negative risk.** The first word after the wrapper's known flags is taken as the wrapped command. A wrapper the
 table does not know (`mywrap pkill x`) is an ordinary command, so the `pkill x` inside is not seen, and an unknown flag
@@ -181,15 +183,30 @@ on text that only mentions the command, including heredocs.
 
 ### Requirements and fallback
 
-The matcher needs `uv` and the PyPI wheel `ast-grep-py` (pinned; it bundles the Bash grammar). One `uv run --with`
-process serves a whole hook call, and only when an enabled rule with `match.ast` could apply: a call without such rules
-never starts `uv`. The hook uses `uv`'s offline cache first; when that misses it tries one download within a short
-deadline and remembers a failure for ten minutes. A SessionStart hook fills the cache in the background when an enabled
-rule uses `match.ast`. If `uv` is missing, the download fails or the run exceeds its deadline, the hook does not allow
-silently: every other rule is evaluated by the plain lexer and regex as usual, the `match.ast` rules are skipped for that
-call, and the session gets one `systemMessage` warning. `rule test` prints the same degradation as a note and exits 0.
-When the parse tree has `ERROR` or missing nodes (unbalanced quotes, an unterminated heredoc), the commands found by the
-plain lexer are matched against `match.ast` rules too.
+The matcher needs the PyPI wheel `ast-grep-py` (pinned, installed hash-checked into a venv in the plugin data dir, for
+CPython 3.10 to 3.14; it bundles the Bash grammar). The hook runs it in-process when it runs under that venv's python,
+and only when an enabled rule with `match.ast` could apply: a call without such rules never loads it. A SessionStart hook
+builds the venv in the background when an enabled rule uses `match.ast`; the build uses `uv` when found, else
+`python -m venv` and `pip`, from the data dir with an allowlisted environment and `--no-config`, so repo-controlled
+`uv.toml`, `UV_*`, `PIP_*` or `PYTHON*` settings cannot change what is installed. The README has the details.
+
+Degraded mode (no wheel, build failure, deadline, bad worker reply, nesting over 16 or more than 512 units, a command over
+64 KiB, or an unexpected error): every non-AST rule runs as usual and each `match.ast` rule is applied when the command
+mentions one of its command names as a word. The names are derived from the literal words in its patterns and from its
+regexes, or given by `match.mentions`. A deny rule denies with its message plus a note that the AST matcher was
+unavailable and why; a warn rule warns; a command that mentions none of the names passes. This is coarse on purpose (it
+also fires on `echo pkill` inside a heredoc), and a rule with no derivable names cannot fire. One warning per session
+reaches the user and the agent. `rule test` prints the same as a note and exits 0.
+
+The AST path always also matches the plain lexer's commands, so it never sees less than the lexer. Unbalanced quotes or
+an unterminated heredoc (`ERROR` or missing nodes) therefore still get the lexer's view. The lexer itself descends into
+`$(...)` (nested too), backticks, `eval`/`bash -c` strings and the substitutions of an unquoted heredoc body; a
+quoted-delimiter heredoc stays data.
+
+Bash and Monitor: the hook matches `Bash|Monitor`. A rule for `Bash` applies to a Monitor command too (a rule with
+`"tool": "Monitor"` applies to Monitor only), retry acknowledgements and warn-once work the same, and a Monitor call
+with no `command` (only a `ws` URL) is ignored. Monitors declared by a plugin start without a tool call and are not
+covered.
 
 ## Pipelines: `args` does not see them
 

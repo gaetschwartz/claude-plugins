@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import re
-import shutil
 from collections.abc import Sequence
 from typing import Any, Callable
 
@@ -15,12 +14,15 @@ Mode = dict[str, Any]
 
 ACTIONS = ("deny", "warn")
 RETRIES = ("none", "same-command")
-MATCH_KEYS = ("program", "args", "builtin", "regex", "ast")
+MATCH_KEYS = ("program", "args", "builtin", "regex", "ast", "mentions")
 AST_KEYS = ("pattern", "kind", "regex", "inside", "has", "follows", "precedes", "not", "any", "all", "stopBy", "field")
 AST_RELATIONS = ("inside", "has", "follows", "precedes")
 AST_PATTERN_KEYS = ("context", "selector", "strictness")
 AST_MAX_DEPTH = 12
 PLACEHOLDER = re.compile(r"\{which:([^{}]+)\}")
+NAME_WORD = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*")
+SHELL_WORDS = frozenset({"if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac",
+                         "in", "function", "select", "time"})
 
 GREPS = {"grep", "egrep", "fgrep"}
 # grep short options whose argument may be glued on (-e r ≠ -r)
@@ -120,6 +122,44 @@ def validate_ast(node: object, path: str = "match.ast", depth: int = 0) -> None:
             raise Invalid(f"'{path}.stopBy' must be \"neighbor\", \"end\" or a rule")
 
 
+def mentions_of(rule: Rule) -> list[str]:
+    """Command names that must appear in a command for this rule to possibly match it.
+
+    Used when the real matcher cannot run: the declared 'match.mentions', else the names in the ast patterns and
+    regexes, else the program names.
+    """
+    match = view(rule, "match")
+    declared = match.get("mentions")
+    if isinstance(declared, list):
+        return [x for x in declared if isinstance(x, str)]
+    found: list[str] = []
+    for text in ast_patterns(match.get("ast")) + ast_regexes(match.get("ast")):
+        found += [w for w in NAME_WORD.findall(re.sub(r"\$+[A-Za-z_]*", " ", text))
+                  if w not in SHELL_WORDS and len(w) > 1 and re.search(r"[A-Za-z]", w)]
+    found += programs_of(rule)
+    if match.get("builtin") == "grep-recursive":
+        found += sorted(GREPS)
+    return list(dict.fromkeys(found))
+
+
+def ast_regexes(node: object) -> list[str]:
+    out: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "regex" and isinstance(value, str):
+                out.append(value)
+            else:
+                out += ast_regexes(value)
+    elif isinstance(node, list):
+        for item in node:
+            out += ast_regexes(item)
+    return out
+
+
+def mentioned(command: str, names: list[str]) -> bool:
+    return any(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(n) + r"(?![A-Za-z0-9_-])", command) for n in names)
+
+
 def ast_of(rule: Rule) -> dict[str, Any] | None:
     ast = view(rule, "match").get("ast")
     return ast if isinstance(ast, dict) else None
@@ -162,6 +202,9 @@ def validate_rule(rule: object) -> None:
         raise Invalid(f"unknown builtin '{builtin}' (known: {', '.join(sorted(BUILTINS))})")
     if "ast" in match:
         validate_ast(match["ast"])
+    if "mentions" in match and not (isinstance(match["mentions"], list) and match["mentions"] and all(
+            isinstance(x, str) and NAME_WORD.fullmatch(x) for x in match["mentions"])):
+        raise Invalid("'match.mentions' must be a non-empty list of command names")
     for key in ("args", "regex"):
         if key in match:
             if not isinstance(match[key], str):
@@ -255,12 +298,20 @@ def effective_rules(managed: object, global_state: object, project_state: object
     return rules
 
 
-def effective_wrappers(managed: object, global_state: object, project_state: object) -> wrapper_table.Table:
-    """Built-in wrappers plus every layer's additions; a layer can only add look-through, never remove it."""
-    layers = [managed, global_state]
+def wrapper_layers(managed: object, global_state: object, project_state: object) -> list[tuple[str, object]]:
+    layers = [("managed state", managed), ("global state", global_state)]
     if not isinstance(project_state, dict) or project_state.get("enabled", True) is not False:
-        layers.append(project_state)
-    return wrapper_table.effective(*layers)
+        layers.append(("project state", project_state))
+    return layers
+
+
+def effective_wrappers(managed: object, global_state: object, project_state: object) -> wrapper_table.Table:
+    """Built-in wrappers plus new names from each layer; existing wrappers are never altered."""
+    return wrapper_table.resolve(wrapper_layers(managed, global_state, project_state))[0]
+
+
+def wrapper_problems(managed: object, global_state: object, project_state: object) -> list[str]:
+    return wrapper_table.resolve(wrapper_layers(managed, global_state, project_state))[1]
 
 
 def _mode(m: dict[str, Any]) -> Mode:
@@ -311,13 +362,18 @@ def managed_layer(sources: Sequence[tuple[str, object]]) -> tuple[dict[str, Any]
     extra: dict[str, dict[str, Any]] = {}
     for path, state in sources:
         problems += _shape_problems(path, state)
-        problems += wrapper_table.problems(f"managed state {path}", state)
+        if isinstance(state, dict) and "wrappers" in state and not isinstance(state["wrappers"], dict):
+            problems.append(f"managed state {path}: 'wrappers' must be an object, so all its entries are ignored")
         for name, entry in _entries(state, "wrappers").items():
             try:
                 wrapper_table.validate(name, entry)
-            except ValueError:
+            except ValueError as exc:
+                problems.append(f"managed state {path}: {exc}, so it is ignored")
                 continue
-            extra[name] = wrapper_table.merge(extra.get(name, {}), entry)
+            if name in wrapper_table.DEFAULTS or name in extra:
+                problems.append(f"managed state {path}: wrapper '{name}' is already defined, so this entry is ignored")
+                continue
+            extra[name] = {k: v for k, v in entry.items() if k != "setBy"}
         for name, m in _entries(state, "modes").items():
             modes[name] = merge_mode(modes[name], m, False) if name in modes else _mode(m)
         for rid, r in _entries(state, "rules").items():
@@ -399,6 +455,8 @@ def rule_matches(rule: Rule, command: str, cmds: list[SimpleCommand] | None) -> 
 
 def requirements_met(rule: Rule) -> bool:
     required = rule.get("requires")
+    import shutil
+
     return not required or any(shutil.which(b) for b in required)
 
 
@@ -407,6 +465,8 @@ def render(text: str) -> str:
 
     def pick(m: re.Match[str]) -> str:
         candidates = [c.strip() for c in m.group(1).split("|") if c.strip()]
+        import shutil
+
         return next((c for c in candidates if shutil.which(c)), candidates[0] if candidates else "")
 
     return PLACEHOLDER.sub(pick, text)

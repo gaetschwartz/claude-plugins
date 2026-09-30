@@ -61,44 +61,34 @@ def validate(name: object, entry: object) -> None:
         raise ValueError(f"wrapper '{name}': 'assignments' must be true or false")
 
 
-def merge(base: Entry, extra: Entry) -> Entry:
-    """Add look-through: flag lists union, scalars keep the existing value, 'assignments' can only be turned on."""
-    out = dict(base)
-    for key in ("flagsWithValue", "noCommandFlags"):
-        if key in extra:
-            out[key] = sorted({*out.get(key, []), *extra[key]})
-    for key in ("shellString", "skip"):
-        if key in extra and key not in out:
-            out[key] = extra[key]
-    if extra.get("assignments") is True:
-        out["assignments"] = True
-    return out
+def resolve(labelled: list[tuple[str, object]]) -> tuple[Table, list[str]]:
+    """The built-ins plus new names from each layer (highest first), and why entries were ignored.
+
+    A layer can only introduce a name nobody above it defines: changing how an existing wrapper parses could hide
+    a command from a rule.
+    """
+    table: Table = {name: dict(entry) for name, entry in DEFAULTS.items()}
+    notes: list[str] = []
+    for where, layer in labelled:
+        entries = layer.get("wrappers") if isinstance(layer, dict) else None
+        if entries is None:
+            continue
+        if not isinstance(entries, dict):
+            notes.append(f"{where}: 'wrappers' must be an object, so all its entries are ignored")
+            continue
+        for name, entry in entries.items():
+            try:
+                validate(name, entry)
+            except ValueError as exc:
+                notes.append(f"{where}: {exc}, so it is ignored")
+                continue
+            if name in table:
+                owner = "built in" if name in DEFAULTS else "defined by a higher layer"
+                notes.append(f"{where}: wrapper '{name}' is {owner}, so this entry is ignored")
+                continue
+            table[name] = {k: v for k, v in entry.items() if k != "setBy"}
+    return table, notes
 
 
 def effective(*layers: object) -> Table:
-    """The built-in table plus each layer's 'wrappers' entries, earlier (higher) layers first; invalid ones are skipped."""
-    table: Table = {name: dict(entry) for name, entry in DEFAULTS.items()}
-    for layer in layers:
-        entries = layer.get("wrappers") if isinstance(layer, dict) else None
-        for name, entry in (entries.items() if isinstance(entries, dict) else ()):
-            try:
-                validate(name, entry)
-            except ValueError:
-                continue
-            table[name] = merge(table.get(name, {}), entry)
-    return table
-
-
-def problems(where: str, layer: object) -> list[str]:
-    entries = layer.get("wrappers") if isinstance(layer, dict) else None
-    if entries is None:
-        return []
-    if not isinstance(entries, dict):
-        return [f"{where}: 'wrappers' must be an object, so all its entries are ignored"]
-    out = []
-    for name, entry in entries.items():
-        try:
-            validate(name, entry)
-        except ValueError as exc:
-            out.append(f"{where}: {exc}, so it is ignored")
-    return out
+    return resolve([(f"layer {i}", layer) for i, layer in enumerate(layers)])[0]

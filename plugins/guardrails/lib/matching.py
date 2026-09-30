@@ -4,12 +4,8 @@ from __future__ import annotations
 
 import os
 import re
-import shlex
-from dataclasses import dataclass, field
 from typing import Any
 
-import astrun
-import parity
 import policy
 import wrappers as wrapper_table
 from shellwords import SimpleCommand, simple_commands
@@ -17,24 +13,38 @@ from shellwords import SimpleCommand, simple_commands
 PARITY_ENV = "GUARDRAILS_PARITY"
 COMPILED = "#compiled"
 DEGRADED_KEY = "ast-unavailable"
-UNCACHED_HINT = f"uv run --with ast-grep-py=={astrun.PIN} python -c pass"
+LIMITED_KEY = "ast-limited"
+OVERSIZE_KEY = "command-oversize"
+MAX_PARSE = 65536
 
 
-@dataclass
 class Evaluation:
-    kinds: dict[str, str | None] = field(default_factory=dict)
-    degraded: str | None = None
-    invalid: dict[str, str] = field(default_factory=dict)
+    def __init__(self, degraded: str | None = None, oversize: bool = False) -> None:
+        self.kinds: dict[str, str | None] = {}
+        self.degraded = degraded
+        self.invalid: dict[str, str] = {}
+        self.approx: dict[str, list[str]] = {}
+        self.approx_reason = ""
+        self.limited = False
+        self.oversize = oversize
 
     def warnings(self) -> list[tuple[str, str]]:
         """(stable key, text) per problem, so a session reports each only once."""
         out = [(f"ast-invalid:{rid}", f"guardrails: match.ast rule {rid} does not compile ({why}) and is skipped")
                for rid, why in sorted(self.invalid.items())]
         if self.degraded:
-            text = (f"guardrails: the AST matcher is unavailable ({self.degraded}), so rules with match.ast are "
-                    "skipped and every other rule still applies. It needs uv and network access once; "
-                    f"try `{UNCACHED_HINT}`.")
+            text = (f"guardrails: the AST matcher is unavailable ({self.degraded}). Rules with match.ast are applied "
+                    "only when the command mentions one of their command names; every other rule is unaffected. "
+                    "It needs uv and, once, network access to install a hash-pinned ast-grep-py.")
             out.append((DEGRADED_KEY, text))
+        if self.limited:
+            text = ("guardrails: a command nests wrappers or shells too deeply to analyse completely, so rules with "
+                    "match.ast are applied only when it mentions their command names.")
+            out.append((LIMITED_KEY, text))
+        if self.oversize:
+            text = (f"guardrails: a command larger than {MAX_PARSE // 1024} KiB is not parsed, so rules are applied "
+                    "only when it mentions their command names (regex rules still run).")
+            out.append((OVERSIZE_KEY, text))
         return out
 
 
@@ -46,7 +56,9 @@ def lex(command: str, table: wrapper_table.Table | None = None) -> list[SimpleCo
 
 
 def synthesized(cmds: list[SimpleCommand] | None) -> list[dict[str, Any]]:
-    """The lexer's commands as clean sources, so ast rules still see something when the parse tree is broken."""
+    import shlex
+
+    """The lexer's commands as clean sources, so ast rules also see what the lexer sees."""
     return [{"src": " ".join([*c.assigns, shlex.join([c.name, *c.args])]), "wrapped": c.wrapped}
             for c in cmds or ()]
 
@@ -64,12 +76,61 @@ def clean_error(text: str) -> str:
     return re.sub(r"^\d+:\s*", "", text)
 
 
+def apply_mentions(ev: Evaluation, command: str, rules: dict[str, policy.Rule], rids: list[str], reason: str) -> None:
+    """Treat a rule as matching when the command names one of its commands, for rules the matcher could not judge."""
+    for rid in rids:
+        names = policy.mentions_of(rules[rid])
+        if ev.kinds.get(rid) is None and names and policy.mentioned(command, names):
+            ev.kinds[rid] = "direct"
+            ev.approx[rid] = names
+            ev.approx_reason = ev.approx_reason or reason
+
+
+def oversize(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
+    ev = Evaluation(oversize=True)
+    for rid, rule in rules.items():
+        regex = policy.view(rule, "match").get("regex")
+        ev.kinds[rid] = "direct" if regex and re.search(regex, command) is not None else None
+    apply_mentions(ev, command, rules, list(rules), f"the command is larger than {MAX_PARSE // 1024} KiB")
+    return ev
+
+
+def plain(command: str, rules: dict[str, policy.Rule], reason: str) -> Evaluation:
+    """Stdlib matchers plus command-name matching for ast rules, for when nothing else can run."""
+    ev = Evaluation(degraded=reason)
+    cmds = lex(command) if len(command) <= MAX_PARSE else None
+    for rid, rule in rules.items():
+        ev.kinds[rid] = policy.match_kind(rule, command, cmds)
+    apply_mentions(ev, command, rules, list(rules), reason)
+    return ev
+
+
 def evaluate(command: str, rules: dict[str, policy.Rule], table: wrapper_table.Table | None = None,
              state_dir: str | None = None) -> Evaluation:
-    """How each rule's matcher selects the command: "direct", "wrapped" or None; ast rules need the AST worker."""
+    """How each rule's matcher selects the command: "direct", "wrapped" or None; ast rules need the AST worker.
+
+    Never raises: an unexpected failure degrades to matching by command name and says so.
+    """
+    if len(command) > MAX_PARSE:
+        return oversize(command, rules)
+    try:
+        return _evaluate(command, rules, table, state_dir)
+    except Exception as exc:  # noqa: BLE001
+        ev = Evaluation(degraded=f"unexpected error: {type(exc).__name__}")
+        for rid, rule in rules.items():
+            regex = policy.view(rule, "match").get("regex")
+            ev.kinds[rid] = "direct" if regex and re.search(regex, command) is not None else None
+        apply_mentions(ev, command, rules, list(rules), ev.degraded or "")
+        return ev
+
+
+def _evaluate(command: str, rules: dict[str, policy.Rule], table: wrapper_table.Table | None,
+              state_dir: str | None) -> Evaluation:
     table = table if table is not None else wrapper_table.effective()
     cmds = lex(command, table)
     in_ast = os.environ.get(PARITY_ENV) == "ast"
+    if in_ast:
+        import parity
     ev = Evaluation()
     asts: dict[str, dict[str, Any]] = {}
     for rid, rule in rules.items():
@@ -82,17 +143,29 @@ def evaluate(command: str, rules: dict[str, policy.Rule], table: wrapper_table.T
             asts[rid] = ast
     if not asts:
         return ev
+    import astrun
+
+    ast_rids = [rid for rid in rules if policy.ast_of(rules[rid])]
     request = {"op": "eval", "command": command, "rules": asts, "wrappers": table, "lexed": synthesized(cmds)}
     try:
         response = astrun.call(request, state_dir)
     except astrun.Unavailable as exc:
         ev.degraded = str(exc)
+        apply_mentions(ev, command, rules, ast_rids, f"the AST matcher is unavailable: {exc}")
+        return ev
+    except Exception as exc:  # noqa: BLE001
+        ev.degraded = f"unexpected error: {type(exc).__name__}"
+        apply_mentions(ev, command, rules, ast_rids, ev.degraded)
         return ev
     for rid, kind in response["verdicts"].items():
         base = rid.removesuffix(COMPILED) if rid.endswith(COMPILED) else rid
-        ev.kinds[base] = best(ev.kinds[base], kind)
+        if base in ev.kinds and kind in ("direct", "wrapped"):
+            ev.kinds[base] = best(ev.kinds[base], kind)
     for rid, why in response["errors"].items():
-        ev.invalid[rid.removesuffix(COMPILED)] = clean_error(why)
+        ev.invalid[rid.removesuffix(COMPILED)] = clean_error(str(why))
+    if response.get("limited"):
+        ev.limited = True
+        apply_mentions(ev, command, rules, ast_rids, "the command nests wrappers or shells too deeply to analyse")
     return ev
 
 
@@ -100,10 +173,14 @@ def check(asts: dict[str, dict[str, Any]], state_dir: str | None = None) -> dict
     """Compile errors per rule id; raises astrun.Unavailable when ast-grep cannot run."""
     if not asts:
         return {}
+    import astrun
+
     response = astrun.call({"op": "check", "rules": asts}, state_dir)
-    return {rid: clean_error(why) for rid, why in response["errors"].items()}
+    return {rid: clean_error(str(why)) for rid, why in response["errors"].items()}
 
 
 def tree(command: str, table: wrapper_table.Table | None = None, state_dir: str | None = None) -> dict[str, Any]:
+    import astrun
+
     table = table if table is not None else wrapper_table.effective()
     return astrun.call({"op": "tree", "command": command, "wrappers": table}, state_dir)
