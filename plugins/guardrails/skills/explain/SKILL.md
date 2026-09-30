@@ -60,7 +60,7 @@ plain chat what to explain instead.)
    - `args` only sees that one command's own arguments, so a pipe to `sh` is invisible to it and needs `match.ast`
      (an `inside` relation) or `match.regex`
    - for a rule with `match.ast`: run `guardrails rule ast '<cmd>'` to show the tree and the wrapper units; the
-     matcher may have been unavailable (a note says so), a wrapper or flag may be unknown to the wrapper table, or the
+     matcher may have been unavailable (a note says so; the user can run `guardrails engine status` for the fix), a wrapper or flag may be unknown to the wrapper table, or the
      text was data (a heredoc body, single quotes)
    - the rule was suspended by an active mode, disabled, or skipped because `requires` is not installed, or the hook
      or project rules are switched off (the "Why a rule may not fire" list)

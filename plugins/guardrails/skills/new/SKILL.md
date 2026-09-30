@@ -156,8 +156,8 @@ alternative (what to do instead). Derive the `id` from the intent (`no-pkill`); 
 A question about what a command is piped into is out of reach for `program`/`args`: use `ast` with `inside` when the
 shape is structural, `regex` for dataflow across commands (`regex` also fires inside heredocs and quoted text). The
 wrappers and shells themselves (`sudo`, `bash`) can never be matched by `program`; use `ast` (`pattern: "sudo $$$"`)
-or `regex` for them. A rule with `match.ast` needs `uv` at run time; if `rule test` prints a note that the AST matcher
-could not run, tell the user before going on.
+or `regex` for them. A rule with `match.ast` needs the ast-grep engine (npm's install or `guardrails engine install`); if `rule test` prints a note
+that the AST matcher could not run, tell the user before going on (`guardrails engine status` shows the fix).
 
 **1.b.2** With examples, test them: `guardrails rule test --json - 'cmd' …` with the rule on stdin (see "Passing the
 rule as JSON").

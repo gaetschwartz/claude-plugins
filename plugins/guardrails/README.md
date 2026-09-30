@@ -47,41 +47,85 @@ declared wrapper never hides itself: `pkill x` is still matched as a command eve
 An unknown wrapper, or an unknown flag that takes a value, is a false-negative risk: the first non-flag word after the
 known flags is taken as the command.
 
-**Requirements and fallback.** `match.ast` needs the PyPI wheel `ast-grep-py==0.45.3` (it bundles the Bash grammar), which
-exists for CPython 3.10 to 3.14 on macOS and Linux (x86_64, arm64). It lives in a venv at
-`${CLAUDE_PLUGIN_DATA}/venv`, built once, atomically, under a lock, from `lib/ast-requirements.txt` (a sha256 for every
-wheel; `scripts/regen-ast-requirements.py` rewrites it on a pin bump) with `uv venv` and `uv pip install
---require-hashes` when uv is found, else `python -m venv` and `pip install --require-hashes`. Only the SessionStart
-hook (in a detached process, when an enabled rule uses `match.ast`) and CLI commands you run build it; the PreToolUse
-hook never installs or downloads anything, it only checks locally whether the venv is ready. A failed or timed-out
-build is remembered for ten minutes, stale `.venv-*` leftovers older than ten minutes are removed at the next warm-up,
-and a second builder never replaces a good venv. The build runs from the plugin data directory with `--no-config` and
-an allowlisted environment (`HOME`, `LANG`, `TMPDIR`, a fixed `PATH`, plus only cache-dir and proxy variables): a
-repository's `uv.toml`, `UV_*`, `PIP_*`, `PYTHON*` or `SSL_*` settings can neither redirect the install nor supply
-code, and a tampered or unpublished wheel fails the hash check. There is no environment variable that chooses which
-executable or engine mode runs (the former test knobs `GUARDRAILS_UV`, `GUARDRAILS_AST_INPROCESS`,
-`GUARDRAILS_AST_BOOTSTRAP` and `GUARDRAILS_PARITY` are gone; tests use module attributes). uv and the build
-interpreter are looked up in fixed locations first (`~/.local/bin`, `/opt/homebrew/bin`, `/usr/local/bin`, Linux
-linuxbrew, PATH last, newest `python3.N` from 3.10 to 3.14 first) and any candidate inside the project directory or the
-hook's cwd, owned by another user, in a world-writable directory, or in a group-writable directory owned by another user
-is ignored and reported once per session. If the running Python has no wheel (macOS `/usr/bin/python3` is 3.9), a newer
-`python3.N` is used for the build, else the notice says "no wheel for Python X.Y; it needs 3.10 to 3.14". Trust model:
-the venv is user-owned, hash-pinned at creation, and sits in the plugin data directory, not in the repository. A custom CA
-or package mirror is not supported.
+**Requirements and fallback.** `match.ast` runs the standalone Rust `ast-grep` binary (pinned to 0.45.3, which bundles the
+Bash grammar) as a child process of the hook. The hook itself is plain stdlib Python, any Python 3.9 or newer, so macOS
+`/usr/bin/python3` works: there is no venv, no uv and no pip. The binary reaches the machine by two mechanisms, tried in
+this order:
+
+1. **npm.** The plugin ships `package.json` and `package-lock.json` (an exact pin, sha512 integrity for all four platform
+   packages, no second lockfile: with several Claude Code would pick bun first and not fall back to npm). When Claude Code
+   copies a marketplace plugin into its cache it runs `npm ci --ignore-scripts` there (60 s limit; a failure never blocks
+   the plugin), which installs `node_modules/@ast-grep/cli-<platform>/ast-grep`. The hook runs that real binary by
+   absolute path; the `@ast-grep/cli` launcher script, `node_modules/.bin` and `PATH` are never involved.
+   **A plugin loaded in place from a local-directory marketplace never gets this install** (Claude Code skips it), so it
+   uses the wheel fallback, or you run `cd <plugin root> && npm ci --ignore-scripts` once.
+2. **Wheel fallback.** PyPI's `ast-grep-cli` ships the same binary in a `py3-none-<platform>` wheel. `guardrails engine
+   install` (foreground, with progress and exit codes) or the detached SessionStart warm-up downloads it with urllib from
+   the one https://files.pythonhosted.org URL recorded in `lib/engine-manifest.json` (connect and total time limits, 60 s),
+   checks the wheel's sha256 **before** reading it, unpacks exactly one named member (no other entry, no symlink, no
+   absolute or `..` path is ever read), and places `${CLAUDE_PLUGIN_DATA}/engine/<pin>/ast-grep` (temp file, `chmod 0755`,
+   atomic rename) and then a marker (pin, wheel hash, binary hash, size, mtime, inode). Installs run under a lock, never
+   replace an install that still passes its checks, and any failure (timeouts included) is remembered for ten minutes: the
+   warm-up obeys that backoff, an explicit `engine install` does not. Temp files older than ten minutes are removed.
+   Only the SessionStart hook (detached, silent, and only when neither mechanism works and an enabled rule uses
+   `match.ast`) and the CLI ever download; the PreToolUse hook only looks.
+3. **Neither.** A loud notice (below) and the degraded mode.
+
+`lib/engine-manifest.json` (wheel filenames, URLs, sha256, expected member and binary hashes per platform, and the binary
+hash of each npm platform package) is generated by `scripts/gen-engine-manifest.py` from PyPI and npm for the version in
+`package.json`; a test checks that `package.json`, `package-lock.json` and the manifest pin the same version.
+
+| platform | npm package | wheel |
+|---|---|---|
+| macOS arm64 | `@ast-grep/cli-darwin-arm64` | `macosx_10_12_universal2` |
+| macOS x86_64 | `@ast-grep/cli-darwin-x64` | `macosx_10_12_universal2` |
+| Linux glibc x86_64 | `@ast-grep/cli-linux-x64-gnu` | `manylinux_2_28_x86_64` (glibc 2.28+) |
+| Linux glibc aarch64 | `@ast-grep/cli-linux-arm64-gnu` | `manylinux_2_28_aarch64` (glibc 2.28+) |
+
+Linux musl (Alpine) and Windows are not supported: there is no build, and the notice says so.
+
+**Trust model.** Before each run the hook checks the binary cheaply. npm binary: a regular file (no symlink) that resolves
+inside the plugin root, executable, owned by you or root, not writable by group or others, every directory up to the plugin
+root owned by you or root and not world-writable, not inside the project directory or the hook's cwd, and its platform
+package's `package.json` version equals the pin. Wheel binary: the same, plus size, mtime and inode must match the marker
+and the marker's pin and hashes must match the manifest. The one relaxation is that a group-writable directory owned by you
+or root is fine, because a `0002` umask (and some Homebrew layouts) creates them that way. A full re-hash happens only at
+install time and in `guardrails engine verify` (the active binary against the manifest's `binarySha256`; for npm also npm's
+own install record against `package-lock.json`). The child runs with the environment `PATH=/usr/bin:/bin` and nothing else
+(no `UV_*`, `PYTHON*`, `NODE_*`, `LD_*`), from `/`, with `-c lib/engine-sgconfig.yml`: without an explicit config ast-grep
+reads an `sgconfig.yml` from the working directory or a parent, which can name a dynamic library to load. No environment
+variable selects the binary, the URL or the plugin root (the root is the parent of `lib/`, which is where Claude Code runs
+`npm ci`); tests use module attributes. Install and verify change no configuration, so `--as-user` does not apply to them.
+
+**Troubleshooting.** `guardrails engine status` shows which mechanism is active (npm or wheel), the pin, the platform,
+both paths with their state (usable, or why it was rejected), the last download failure with its retry time, and the exact
+fix commands: `guardrails engine install` and `cd "<plugin root>" && npm ci --ignore-scripts`. `guardrails engine verify`
+re-hashes the active binary. `guardrails status --problems` and `rule test` repeat the fix when the engine is missing.
 
 **Interpreter selection.** `hooks/guardrails.sh` is a tiny POSIX `sh` script that never changes `PATH` (hooks inherit
 Claude Code's environment and the wrapper must not make a macOS lookup touch the `/home` automount). It runs, by absolute
-path, the first of: the ready venv's python (steady state: one python process, about 55 ms with AST rules, nothing else on
-`PATH` needed); `/opt/homebrew/bin/python3`; `/usr/local/bin/python3`; `/home/linuxbrew/.linuxbrew/bin/python3` on Linux
+path, the first of: `/opt/homebrew/bin/python3`; `/usr/local/bin/python3`; `/home/linuxbrew/.linuxbrew/bin/python3` on Linux
 only (after a `uname -s` check, before any stat of `/home`); `python3` from the inherited `PATH`, skipping entries inside
-the project or the cwd; `/usr/bin/python3`. The venv python runs as a child, not via `exec`: if it exits non-zero the
-wrapper reruns the same payload with the system python and a notice. With no python at all it prints a one-line
+the project or the cwd; `/usr/bin/python3`, always with `-I -S`. With no python at all it prints a one-line
 `systemMessage` on every call (it cannot keep per-session state without python) and lets the call through. Latency
-measured here: no AST rules about 35 ms, 3 or 30 AST rules about 55 ms, a system python that must start the venv's python
-as a second process about 78 ms.
+measured here (Python 3.14 from Homebrew, 3 AST rules, typical command, warm, machine load about 5): about 50 ms for a
+command with no wrapper, 55 to 60 ms through a wrapper or shell string, against about 35 ms with no AST rules. Apple's
+`/usr/bin/python3` 3.9 spends about 50 ms just importing the standard library (it ships no cached bytecode), so a hook
+running under it takes about 115 ms; install a newer `python3` in `/opt/homebrew/bin` or `/usr/local/bin` to avoid that. The very
+first run of a binary that was just written takes about half a second once (the OS inspects it); the 4 s engine deadline
+covers that.
 
-**Degraded mode.** If the venv is not built yet or cannot run, the run exceeds its deadline, a worker reply is
-malformed, a command nests wrappers more than 16 deep or expands past 512 units, or a command is larger than 16 KiB, the
+**How an evaluation runs.** `ast-grep` has no ancestry or wrapper knowledge, so the worker drives it with small tasks: the
+parse tree of each candidate source comes from `ast-grep run --debug-query`, the wrapper and normalisation rewrites are done
+in Python exactly as before, and every unit (the command as written, its normalised form, each rewrite, the plain
+lexer's commands) is scanned with `ast-grep scan --inline-rules` (your rule plus a twin that adds `inside pipeline |
+command_substitution | process_substitution`, which is how `wrapped` is told from `direct`). One unit is scanned over stdin
+(about 3 ms); several are written to a temporary directory and scanned in one process (about 70 ms for 512). Units that
+cannot hide another wrapper are not even parsed. Expansion stops after 0.5 s and then counts as "too many variants" (the
+same fallback as the 512-unit cap), so even an adversarial command is bounded at about one second.
+
+**Degraded mode.** If the engine is missing or cannot run, the run exceeds its deadline, a reply is malformed, a command
+nests wrappers more than 16 deep or expands past 512 units (or 0.5 s), or a command is larger than 16 KiB, the
 hook does not allow silently. Every non-AST rule runs as usual (oversize commands skip the lexer and use command names
 and regexes, scanning the whole text linearly), and a rule with `match.ast` is applied when the command mentions one of
 its command names as a word, after shell quoting is resolved (`p''kill`, `p\kill`, `$'p\x6bill'` and `"pkill"` all read
@@ -93,6 +137,18 @@ The lexer is linear-time on every construct and the whole hook runs under a 7 s 
 or any other exception it falls back to a minimal evaluation (stdlib matchers and names, no session state) and, if that
 also fails, a visible warning; it never exits silently. `rule test` reports degradation as a note and exits 0. The plain
 lexer's commands are always matched against `match.ast` rules too, so the AST path never sees less than the lexer does.
+
+**The missing-engine notice.** When neither the npm binary nor the wheel binary is usable and an enabled `match.ast`
+rule applies, the first Bash or Monitor call of every session (until it is fixed) carries, in both the user-facing
+`systemMessage` and the agent-facing `additionalContext`, a notice that begins `GUARDRAILS ENGINE MISSING`: it says
+`match.ast` rules are not being enforced, what still is, the precise reason (unsupported platform, npm install missing or
+failed, or the download failure with its retry time), tells the agent to tell the user first, and gives both fixes. The
+text is sanitised and is framed as coming from the guardrails plugin, not from the repository. If the once-per-session
+mark cannot be saved, the notice simply repeats.
+
+Every `$'...'` string is decoded the way the shell does (`\xHH`, octal, `\u`/`\U`, `\n \t \e \a \b \f \r \v`, `\cX`, a NUL
+ends the string) in command names and arguments by the plain lexer, by the wrapper and normalisation step, and by the
+degraded name scan, so `$'p\x6bill' x` is seen as `pkill x` everywhere.
 
 Known gaps, for any engine: `find -exec`/`-execdir`, variable-held names (`P=pkill; $P x`), `bash <<< 'cmd'`,
 `echo cmd | sh`, `su -c`, `ssh host cmd`, and scripts run from a file.
@@ -327,19 +383,22 @@ when a skill needs it.
 - `edit`, `mode` and `setup` change configuration only when you ask, always with `--as-user` and your own words in
   `--reason`. They never run `sudo`: a not-writable file prints the `sudo …` command for you to run.
 
-`just test` runs the suite under `uv run --with ast-grep-py==0.45.3` (an unhashed, test-only install), so the AST tests run;
-plain `python3 -m unittest discover -s tests` works too, and the tests that need `ast-grep-py` then build the hashed venv
-(network once) or skip with a message saying how to get it; set `GUARDRAILS_REQUIRE_AST=1` to make that a failure instead
-(for CI). The fallback and build tests stub the external commands.
-`just check` lints and type-checks, `just validate` runs `claude plugin validate`.
+`just test` first runs `just engine`, which installs the pinned binary through the wheel path into
+`~/.cache/guardrails-engine-dev` (network once; it is skipped quietly when offline), then runs the suite; the tests that need
+the real binary use that install, or one they make themselves in a temporary directory, and otherwise skip with a message
+saying how to get it (set `GUARDRAILS_REQUIRE_AST=1` to make that a failure, for CI). Plain `python3 -m unittest discover -s
+tests` works too, under any Python from 3.9 (`just test-39` runs it under `/usr/bin/python3`). The install, download and
+fallback tests stub the network and use a stub binary. `just check` lints and type-checks, `just validate` runs
+`claude plugin validate`.
 
 ## Layout
 
 | path | role |
 |---|---|
-| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `matching.py` (the one evaluation path), `policy.py`, `store.py`, `cli.py`, `shellwords.py` (plain lexer), `wrappers.py` (wrapper table), `astrun.py` + `astworker.py` (the venv builder/runner and the ast-grep worker), `parity.py` |
-| `hooks/` | `hooks.json` (PreToolUse on `Bash\|Monitor`, and SessionStart to build the AST venv) and the `guardrails.sh` POSIX wrapper that picks the interpreter |
-| `scripts/` | `regen-ast-requirements.py`: rewrites the hashed requirements for the pin |
+| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `matching.py` (the one evaluation path), `policy.py`, `store.py`, `cli.py`, `shellwords.py` (plain lexer), `wrappers.py` (wrapper table), `astbin.py` (find, install and verify the ast-grep binary), `astrun.py` (run a request against it), `astworker.py` (the wrapper look-through and rule evaluation) and `astcli.py` (the ast-grep subprocess calls), `ansic.py` (`$'...'` decoding), `parity.py`; data: `engine-manifest.json`, `engine-sgconfig.yml` |
+| `hooks/` | `hooks.json` (PreToolUse on `Bash\|Monitor`, and SessionStart to fetch the AST engine) and the `guardrails.sh` POSIX wrapper that picks the interpreter |
+| `package.json`, `package-lock.json` | the npm pin Claude Code installs with `npm ci --ignore-scripts` |
+| `scripts/` | `gen-engine-manifest.py`: rewrites `lib/engine-manifest.json` for the pin |
 | `references/` | text the skills read on demand: matching semantics, presentation conventions, config-change rules, the rule-writing guide (`writing-rules.md`) and the tested `ast/` cookbook |
 | `bin/guardrails` | the CLI wrapper on the Bash tool's PATH |
 | `presets/`, `skills/`, `tests/` | preset rule sets, the six skills, shared skill references, the unittest suite |

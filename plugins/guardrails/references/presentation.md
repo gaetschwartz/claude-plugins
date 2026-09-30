@@ -99,7 +99,7 @@ Plain text, not a card: for authors, not for pasting. It prints the command, the
 unit: `tree: command as written`, then `tree: through <wrapper>, source: <rewritten command>` for each wrapper or shell
 string. Each line is a named node, indented by depth, with the text in `«…»` for leaves; text is sanitised like every
 other renderer (newline `⏎`, ESC `␛`). Use it to learn node kinds before writing `inside` / `has` rules. It needs the
-AST matcher and exits 2 with a message when that is unavailable.
+AST engine (ast-grep) and exits 2 with a message, including the fix commands, when that is unavailable.
 
 ## Status: `guardrails status --render`
 

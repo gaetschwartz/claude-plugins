@@ -183,21 +183,37 @@ on text that only mentions the command, including heredocs.
 
 ### Requirements and fallback
 
-The matcher needs the PyPI wheel `ast-grep-py` (pinned, installed hash-checked into a venv in the plugin data dir, for
-CPython 3.10 to 3.14; it bundles the Bash grammar). The hook runs it in-process when it runs under that venv's python (else in a child under it),
-and only when an enabled rule with `match.ast` could apply: a call without such rules never loads it. A SessionStart hook
-builds the venv in the background when an enabled rule uses `match.ast` (the PreToolUse hook itself never installs
-anything); the build uses `uv` when found, else
-`python -m venv` and `pip`, from the data dir with an allowlisted environment and `--no-config`, so repo-controlled
-`uv.toml`, `UV_*`, `PIP_*` or `PYTHON*` settings cannot change what is installed. The README has the details.
+The matcher runs the standalone `ast-grep` binary (pinned, Bash grammar built in) as a child of the hook, which is plain
+stdlib Python 3.9 or newer; there is no venv, uv or pip. The binary comes from two places, tried in order: the npm platform
+package that Claude Code's automatic `npm ci --ignore-scripts` puts in the plugin's `node_modules`, then a hash-checked
+wheel that `guardrails engine install` (or the detached SessionStart warm-up, only when neither source works and an enabled
+rule uses `match.ast`) unpacks into `${CLAUDE_PLUGIN_DATA}/engine/<pin>/`. The PreToolUse hook only looks; it never downloads
+or installs. A plugin loaded in place from a local-directory marketplace never gets the automatic npm install, so it uses
+the wheel fallback or a manual `cd <plugin root> && npm ci --ignore-scripts`. A call without enabled `match.ast` rules never
+touches the engine.
 
-Degraded mode (no wheel, build failure, deadline, bad worker reply, nesting over 16 or more than 512 units, a command over
+Platforms: macOS arm64 and x86_64, Linux glibc x86_64 and aarch64 (the wheel needs glibc 2.28). Linux musl and Windows are
+unsupported and get the notice below with the reason.
+
+Trust model: the binary must be a regular file inside the plugin root (npm) or the plugin data dir (wheel), executable, owned
+by you or root, not writable by group or others, in directories not writable by others, and not inside the project or the
+hook's cwd; an npm binary's package version must equal the pin and a wheel binary must match its marker (pin, hashes, size,
+mtime, inode). It runs with `PATH=/usr/bin:/bin` as its only environment variable, from `/`, with an explicit empty config so
+a repository's `sgconfig.yml` is never read. No environment variable selects the binary, the URL or the root. The README has
+the details.
+
+Troubleshooting: `guardrails engine status` says which source is active, why another was rejected, the last download failure
+and its retry time, and prints the fix commands (`guardrails engine install`, or `cd <plugin root> && npm ci
+--ignore-scripts`); `guardrails engine verify` re-hashes the active binary against the committed manifest.
+
+Degraded mode (no engine, deadline, bad worker reply, nesting over 16, more than 512 units or 0.5 s of expansion, a command over
 16 KiB, or an unexpected error): every non-AST rule runs as usual and each `match.ast` rule is applied when the command
 mentions one of its command names as a word. The names are derived from the literal words in its patterns and from its
 regexes, or given by `match.mentions`. A deny rule denies with its message plus a note that the AST matcher was
 unavailable and why; a warn rule warns; a command that mentions none of the names passes. This is coarse on purpose (it
 also fires on `echo pkill` inside a heredoc), and a rule with no derivable names cannot fire. One warning per session
-reaches the user and the agent. `rule test` prints the same as a note and exits 0.
+reaches the user and the agent; when the engine itself is missing it is the loud `GUARDRAILS ENGINE MISSING` notice with both
+fixes. `rule test` prints the same as a note and exits 0.
 
 The AST path always also matches the plain lexer's commands, so it never sees less than the lexer. Unbalanced quotes or
 an unterminated heredoc (`ERROR` or missing nodes) therefore still get the lexer's view. The lexer itself descends into
