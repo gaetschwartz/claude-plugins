@@ -649,3 +649,178 @@ class ManagedNotWritable(Isolated):
         self.lock_down(self.tmp / "ro")
         os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.tmp / "ro" / "guardrails.json")
         self.assertEqual(self.cli("rule", "add", "x", "--json", RULE)[0], 0)
+
+
+class PathOption(Isolated):
+    def setUp(self) -> None:
+        super().setUp()
+        self.fpath = self.tmp / "custom" / "rules.json"
+
+    def with_path(self, *argv: str, agent: bool = False) -> tuple[int, str, str]:
+        return self.cli(*argv, "--scope", "managed", "--path", str(self.fpath), agent=agent)
+
+    def test_every_write_verb_targets_the_path_file(self) -> None:
+        self.assertEqual(self.with_path("rule", "add", "no-pkill", "--json", MANAGED_RULE)[0], 0)
+        self.assertEqual(self.with_path("rule", "set", "no-pkill", "action=warn")[0], 0)
+        self.assertEqual(self.with_path("mode", "declare", "incident")[0], 0)
+        self.assertEqual(self.with_path("mode", "on", "incident")[0], 0)
+        self.assertTrue(self.get(self.fpath)["modes"]["incident"]["active"])
+        self.assertEqual(self.with_path("mode", "off", "incident")[0], 0)
+        self.assertEqual(self.with_path("mode", "undeclare", "incident")[0], 0)
+        self.assertEqual(self.with_path("preset", "install", "process-safety")[0], 0)
+        self.assertEqual(sorted(self.get(self.fpath)["rules"]), ["kill-9", "no-pkill"])
+        self.assertEqual(self.with_path("rule", "rm", "no-pkill")[0], 0)
+        self.assertNotIn("no-pkill", self.get(self.fpath)["rules"])
+        self.assertFalse(self.mpath.exists())
+        self.assertFalse(self.dpath.exists())
+        self.assertFalse(self.gpath.exists())
+
+    def test_path_needs_managed_scope_on_write_verbs(self) -> None:
+        p = str(self.fpath)
+        for argv in (("rule", "add", "x", "--json", RULE, "--path", p),
+                     ("rule", "add", "x", "--json", RULE, "--path", p, "--scope", "global"),
+                     ("rule", "add", "x", "--json", RULE, "--path", p, "--project"),
+                     ("rule", "set", "x", "action=warn", "--path", p),
+                     ("rule", "rm", "x", "--path", p),
+                     ("mode", "declare", "m", "--path", p),
+                     ("mode", "undeclare", "m", "--path", p),
+                     ("mode", "on", "m", "--scope", "global", "--path", p),
+                     ("mode", "off", "m", "--scope", "project", "--path", p),
+                     ("preset", "install", "docs-first", "--path", p)):
+            with self.subTest(argv=argv):
+                code, _, err = self.cli(*argv)
+                self.assertEqual(code, 2)
+                self.assertIn("--path names a managed-format file and needs --scope managed", err)
+        self.assertFalse(self.fpath.exists())
+        self.assertFalse(self.gpath.exists())
+
+    def test_note_when_the_hook_will_not_read_the_file(self) -> None:
+        _, out, _ = self.with_path("rule", "add", "x", "--json", RULE)
+        self.assertIn(f"note: the hook enforces {self.fpath} only if GUARDRAILS_MANAGED_PATH points at it", out)
+
+    def test_no_note_for_env_override_or_platform_default(self) -> None:
+        for target in (self.mpath, self.dpath):
+            with self.subTest(target=target):
+                code, out, _ = self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", str(target))
+                self.assertEqual(code, 0)
+                self.assertNotIn("the hook enforces", out)
+        self.assertTrue(self.mpath.exists() and self.dpath.exists())
+
+    def test_no_note_when_env_points_at_the_path(self) -> None:
+        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.fpath)
+        _, out, _ = self.with_path("rule", "add", "x", "--json", RULE)
+        self.assertNotIn("the hook enforces", out)
+
+    def test_status_loads_the_path_file_as_extra_source(self) -> None:
+        self.put(self.fpath, {"rules": {"no-pkill": {"match": {"program": "pkill"}, "message": "no"}}})
+        code, out, _ = self.cli("status", "--path", str(self.fpath))
+        self.assertEqual(code, 0)
+        self.assertIn(f"managed --path: {self.fpath}", out)
+        self.assertIn(f"managed override: {self.mpath} (absent)", out)
+        self.assertIn("no-pkill [managed] deny ALWAYS ENFORCED", out)
+        self.assertIn(f"note: the platform default managed file is absent; managed rules come only from {self.fpath}",
+                      out)
+        self.assertIn("is read for this status only; the hook enforces it only if GUARDRAILS_MANAGED_PATH points "
+                      "at it", out)
+        self.assertNotIn("no-pkill", self.cli("status")[1])
+
+    def test_status_says_when_default_is_absent_and_override_used(self) -> None:
+        self.put(self.mpath, {"rules": {}})
+        out = self.cli("status")[1]
+        self.assertIn(f"note: the platform default managed file is absent; managed rules come only from {self.mpath}",
+                      out)
+        del os.environ["GUARDRAILS_MANAGED_PATH"]
+        self.assertNotIn("platform default managed file is absent", self.cli("status")[1])
+        self.put(self.dpath, {"rules": {}})
+        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.mpath)
+        self.assertNotIn("platform default managed file is absent", self.cli("status")[1])
+
+    def test_status_has_no_default_absent_note_without_any_override_file(self) -> None:
+        self.assertNotIn("platform default managed file is absent", self.cli("status")[1])
+
+    def test_status_path_equal_to_env_is_not_duplicated(self) -> None:
+        out = self.cli("status", "--path", str(self.mpath))[1]
+        self.assertEqual(out.count(str(self.mpath)), 1)
+        self.assertNotIn("managed --path", out)
+
+    def test_rank_below_default_and_tightening_only(self) -> None:
+        strict = {"rules": {"r": {"match": {"program": "pkill"}, "message": "default", "action": "deny"}}}
+        loose = {"rules": {"r": {"match": {"program": "kill"}, "message": "other", "action": "warn"}}}
+        self.put(self.dpath, strict)
+        self.put(self.fpath, loose)
+        out = self.cli("status", "--path", str(self.fpath))[1]
+        self.assertIn("r [managed] deny ALWAYS ENFORCED: program=pkill", out)
+        out = self.cli("rule", "test", "--id", "r", "pkill x", "kill 1", "--path", str(self.fpath))[1]
+        self.assertIn("match  pkill x", out)
+        self.assertIn("message: default", out)
+
+    def test_path_reports_problems_like_the_override(self) -> None:
+        self.put(self.fpath, "{nope")
+        out = self.cli("status", "--path", str(self.fpath))[1]
+        self.assertIn("unreadable managed state, so its rules are NOT enforced until it is fixed", out)
+        self.put(self.fpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x"}}})
+        out = self.cli("status", "--path", str(self.fpath))[1]
+        self.assertIn("managed rule bad is invalid and ignored", out)
+
+    def test_path_file_ownership_problems_are_reported(self) -> None:
+        if os.geteuid() == 0:
+            self.skipTest("root owns everything")
+        self.put(self.fpath, {"rules": {}})
+        out = self.cli("status", "--path", str(self.fpath))[1]
+        self.assertIn(f"managed file {self.fpath} is not owned by root", out)
+
+    def test_rule_test_by_id_uses_the_path_file(self) -> None:
+        self.put(self.fpath, {"rules": {"only-here": {"match": {"program": "pkill"}, "message": "no"}}})
+        self.assertEqual(self.cli("rule", "test", "--id", "only-here", "pkill x")[0], 2)
+        code, out, _ = self.cli("rule", "test", "--id", "only-here", "pkill x", "--path", str(self.fpath))
+        self.assertEqual(code, 0)
+        self.assertIn("match  pkill x", out)
+
+    def test_session_mode_on_reads_modes_from_the_path_file(self) -> None:
+        self.put(self.fpath, {"modes": {"incident": {"description": "fire", "agentMayEnable": True}}})
+        self.assertEqual(self.cli("mode", "on", "incident", "--session-id", "s1")[0], 2)
+        code, _, _ = self.cli("mode", "on", "incident", "--session-id", "s1", "--path", str(self.fpath))
+        self.assertEqual(code, 0)
+
+    def test_relative_path_and_home_are_resolved(self) -> None:
+        self.addCleanup(os.chdir, os.getcwd())
+        os.chdir(self.tmp)
+        self.assertEqual(self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", "rel.json")[0], 0)
+        self.assertTrue((self.tmp / "rel.json").is_file())
+
+    def test_agent_gating_still_applies(self) -> None:
+        code, _, err = self.with_path("rule", "add", "x", "--json", RULE, agent=True)
+        self.assertEqual(code, 3)
+        self.assertIn("refused:", err)
+        self.assertEqual(self.with_path("rule", "add", "x", "--json", RULE, "--as-user", agent=True)[0], 0)
+
+
+class PathNotWritable(Isolated):
+    def setUp(self) -> None:
+        super().setUp()
+        if os.geteuid() == 0:
+            self.skipTest("root ignores permissions")
+
+    def test_sudo_hint_keeps_the_path_argument(self) -> None:
+        ro = self.tmp / "ro"
+        ro.mkdir()
+        ro.chmod(0o555)
+        self.addCleanup(ro.chmod, 0o755)
+        target = str(ro / "sub" / "rules.json")
+        argv = ("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", target)
+        code, _, err = self.cli(*argv)
+        self.assertEqual(code, 2)
+        self.assertIn("Re-run with sudo: sudo python3", err)
+        self.assertIn(shlex.join(argv), err)
+        self.assertFalse((ro / "sub").exists())
+
+    def test_sudo_hint_adds_the_env_override_as_path(self) -> None:
+        ro = self.tmp / "ro"
+        ro.mkdir()
+        ro.chmod(0o555)
+        self.addCleanup(ro.chmod, 0o755)
+        target = str(ro / "sub" / "rules.json")
+        os.environ["GUARDRAILS_MANAGED_PATH"] = target
+        code, _, err = self.cli("rule", "rm", "x", "--scope", "managed")
+        self.assertEqual(code, 2)
+        self.assertIn(f"--scope managed --path {target}", err)

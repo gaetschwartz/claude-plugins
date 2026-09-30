@@ -75,18 +75,31 @@ def resolve_scope(args: Args) -> str:
     if args.project:
         if scope not in (None, "project"):
             raise Invalid(f"--project conflicts with --scope {scope}")
-        return "project"
-    return scope or "global"
+        resolved = "project"
+    else:
+        resolved = scope or "global"
+    check_path_scope(args, resolved)
+    return resolved
 
 
-def scope_path(scope: str) -> str:
+def extra_path(args: Args) -> str | None:
+    path = getattr(args, "path", None)
+    return os.path.abspath(os.path.expanduser(path)) if path else None
+
+
+def scope_path(scope: str, args: Args | None = None) -> str:
     if scope == "managed":
-        return store.managed_write_path()
+        return store.managed_write_path(extra_path(args) if args else None)
     return project_path() if scope == "project" else store.global_state_path()
 
 
 def target_path(args: Args) -> str:
-    return scope_path(resolve_scope(args))
+    return scope_path(resolve_scope(args), args)
+
+
+def check_path_scope(args: Args, scope: str) -> None:
+    if extra_path(args) and scope != "managed":
+        raise Invalid("--path names a managed-format file and needs --scope managed")
 
 
 def change_state(scope: str, path: str, fn: Callable[[store.State], Any]) -> Any:
@@ -100,16 +113,16 @@ def change_state(scope: str, path: str, fn: Callable[[store.State], Any]) -> Any
                                "state file") from exc
 
 
-def managed_state() -> store.State:
-    return store.load_managed()[0]
+def managed_state(args: Args) -> store.State:
+    return store.load_managed(extra_path(args))[0]
 
 
-def managed_rule_ids() -> set[str]:
-    return set(policy.origins("rules", managed_state(), {}, {}))
+def managed_rule_ids(args: Args) -> set[str]:
+    return set(policy.origins("rules", managed_state(args), {}, {}))
 
 
-def refuse_managed_rule(scope: str, rid: str, path: str) -> None:
-    if scope == "managed" or rid not in managed_rule_ids():
+def refuse_managed_rule(args: Args, scope: str, rid: str, path: str) -> None:
+    if scope == "managed" or rid not in managed_rule_ids(args):
         return
     try:
         own = rid in view(store.load(path), "rules")
@@ -147,7 +160,8 @@ def describe_match(rule: policy.Rule) -> str:
 
 
 def cmd_status(args: Args) -> int:
-    mstate, problems = store.load_managed()
+    extra = extra_path(args)
+    mstate, problems = store.load_managed(extra)
 
     def safe_load(path: str | None, what: str) -> store.State:
         try:
@@ -163,17 +177,28 @@ def cmd_status(args: Args) -> int:
 
     gpath, ppath = store.global_state_path(), store.project_state_path()
     gstate, pstate = safe_load(gpath, "global"), safe_load(ppath, "project")
-    for path in store.managed_paths():
+    sources = store.managed_paths(extra)
+    for path in sources:
         problems.extend(store.trust_problems(path))
     for name, m in view(pstate, "modes").items():
         if name in view(mstate, "modes") and isinstance(m, dict) and m.get("active") is True:
             problems.append(f"project state switches on mode '{name}', which the managed file declares (ignored)")
     disabled = f" ({gstate['disabledReason']})" if gstate.get("disabledReason") else ""
     hook_on = gstate.get("enabled", True) is not False
-    default, *override = store.managed_paths()
+    default, *override = sources
     print(f"managed state: {default}{store.presence(default)}")
+    env = os.environ.get(store.MANAGED_ENV)
     for path in override:
-        print(f"managed override: {path}{store.presence(path)}")
+        if extra and path == extra and not (env and os.path.abspath(env) == path):
+            print(f"managed --path: {path}{store.presence(path)}")
+        else:
+            print(f"managed override: {path}{store.presence(path)}")
+    in_use = [path for path in override if not store.presence(path)]
+    if in_use and store.presence(default) == " (absent)":
+        print(f"note: the platform default managed file is absent; managed rules come only from {', '.join(in_use)}")
+    if extra and not store.hook_enforces(extra):
+        print(f"note: --path {extra} is read for this status only; the hook enforces it only if "
+              f"{store.MANAGED_ENV} points at it")
     print(f"global state:  {gpath}")
     print(f"project state: {ppath or '(not in a project)'}")
     kept = "" if hook_on or not view(mstate, "rules") else "; managed rules stay enforced"
@@ -247,7 +272,7 @@ def cmd_rule_add(args: Args) -> int:
     policy.validate_rule(rule)
     rule["setBy"] = stamp(args.reason)
     scope = resolve_scope(args)
-    path = scope_path(scope)
+    path = scope_path(scope, args)
 
     def change(state: store.State) -> bool:
         rules = table(state, "rules")
@@ -257,7 +282,7 @@ def cmd_rule_add(args: Args) -> int:
 
     existed = change_state(scope, path, change)
     print(f"{'replaced' if existed else 'added'} rule {args.id} in {path}")
-    if scope != "managed" and args.id in managed_rule_ids():
+    if scope != "managed" and args.id in managed_rule_ids(args):
         print(f"note: {args.id} is also a managed rule; this entry can only tighten it, not reword it")
     note = always_enforced(scope, args.id, rule)
     if note:
@@ -311,14 +336,14 @@ def ineffective(pairs: list[tuple[str, str]], base: policy.Rule) -> list[str]:
 def cmd_rule_set(args: Args) -> int:
     require_user(args, "rule set")
     scope = resolve_scope(args)
-    path = scope_path(scope)
+    path = scope_path(scope, args)
     pairs: list[tuple[str, str]] = []
     for item in args.assignments:
         key, sep, value = item.partition("=")
         if not sep or key not in SETTABLE:
             raise Invalid(f"expected key=value with key one of {', '.join(SETTABLE)}; got {item!r}")
         pairs.append((key, value))
-    refuse_managed_rule(scope, args.id, path)
+    refuse_managed_rule(args, scope, args.id, path)
     base = policy.effective_rules({}, store.load(store.global_state_path()), {}).get(args.id) \
         if scope == "project" else None
 
@@ -350,8 +375,8 @@ def cmd_rule_set(args: Args) -> int:
 def cmd_rule_rm(args: Args) -> int:
     require_user(args, "rule rm")
     scope = resolve_scope(args)
-    path = scope_path(scope)
-    refuse_managed_rule(scope, args.id, path)
+    path = scope_path(scope, args)
+    refuse_managed_rule(args, scope, args.id, path)
 
     def change(state: store.State) -> None:
         rules = table(state, "rules")
@@ -374,7 +399,7 @@ def cmd_rule_test(args: Args) -> int:
         rule = policy.with_defaults(rule)
         label = "(draft)"
     else:
-        managed, gstate, pstate = (managed_state(), store.load(store.global_state_path()),
+        managed, gstate, pstate = (managed_state(args), store.load(store.global_state_path()),
                                    store.load(store.project_state_path()))
         rules = policy.effective_rules(managed, gstate, pstate)
         if args.id not in rules:
@@ -409,7 +434,7 @@ def cmd_mode_declare(args: Args) -> int:
     require_user(args, "mode declare")
     check_name("mode", args.name)
     scope = resolve_scope(args)
-    path = scope_path(scope)
+    path = scope_path(scope, args)
 
     def change(state: store.State) -> None:
         modes = table(state, "modes")
@@ -421,7 +446,7 @@ def cmd_mode_declare(args: Args) -> int:
 
     change_state(scope, path, change)
     print(f"declared mode {args.name} in {path} (agent may enable: {'yes' if args.agent_may_enable else 'no'})")
-    if scope != "managed" and args.name in view(managed_state(), "modes"):
+    if scope != "managed" and args.name in view(managed_state(args), "modes"):
         print(f"note: mode {args.name} is also declared in the managed file, which wins: this declaration can "
               "only tighten it")
     return 0
@@ -430,7 +455,7 @@ def cmd_mode_declare(args: Args) -> int:
 def cmd_mode_undeclare(args: Args) -> int:
     require_user(args, "mode undeclare")
     scope = resolve_scope(args)
-    path = scope_path(scope)
+    path = scope_path(scope, args)
 
     def change(state: store.State) -> None:
         modes = table(state, "modes")
@@ -445,8 +470,9 @@ def cmd_mode_undeclare(args: Args) -> int:
 
 def set_persistent(args: Args, active: bool) -> int:
     require_user(args, f"mode {'on' if active else 'off'} --scope {args.scope}")
-    path = scope_path(args.scope)
-    managed, gstate = managed_state(), store.load(store.global_state_path())
+    check_path_scope(args, args.scope)
+    path = scope_path(args.scope, args)
+    managed, gstate = managed_state(args), store.load(store.global_state_path())
     above = {"managed": ({}, {}), "global": (managed, {}), "project": (managed, gstate)}[args.scope]
     declared_elsewhere = args.name in policy.effective_modes(*above, {})
 
@@ -474,7 +500,7 @@ def cmd_mode_on(args: Args) -> int:
     if args.scope != "session":
         return set_persistent(args, True)
     sid = session_id(args)
-    modes = policy.effective_modes(managed_state(), store.load(store.global_state_path()),
+    modes = policy.effective_modes(managed_state(args), store.load(store.global_state_path()),
                                    store.load(store.project_state_path()))
     if args.name not in modes:
         raise Invalid(f"mode '{args.name}' is not declared (declared: {', '.join(sorted(modes)) or 'none'})")
@@ -563,7 +589,7 @@ def cmd_preset_install(args: Args) -> int:
     wanted = {m for r in chosen.values() for m in policy.modes_of(r)}
     modes = {name: m for name, m in view(preset, "modes").items() if name in wanted}
     scope = resolve_scope(args)
-    path = scope_path(scope)
+    path = scope_path(scope, args)
     by = stamp(args.reason or f"preset {args.name}")
     report: list[str] = []
 
@@ -600,13 +626,17 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--as-user", action="store_true", help="agents only: the user explicitly asked for this change")
     common.add_argument("--session-id", help="session to act on (default: $CLAUDE_CODE_SESSION_ID)")
     common.add_argument("--reason", help="recorded with the change")
-    scoped = argparse.ArgumentParser(add_help=False)
+    pathed = argparse.ArgumentParser(add_help=False)
+    pathed.add_argument("--path", metavar="FILE", help="a managed-format file: with --scope managed writes go there, "
+                        "read verbs load it as an extra managed source; the hook enforces it only if "
+                        "GUARDRAILS_MANAGED_PATH points at it")
+    scoped = argparse.ArgumentParser(add_help=False, parents=[pathed])
     scoped.add_argument("--scope", choices=SCOPES, help="which state file to change (default: global); "
                         "managed needs root: sudo guardrails --scope managed ...")
 
     parser = argparse.ArgumentParser(prog="guardrails", description="Manage guardrails rules, modes and presets.")
     verbs = parser.add_subparsers(dest="verb", required=True)
-    verbs.add_parser("status", parents=[common], help="show effective rules and modes")
+    verbs.add_parser("status", parents=[common, pathed], help="show effective rules and modes")
 
     rule = verbs.add_parser("rule", help="add, change or remove rules").add_subparsers(dest="op", required=True)
     add = rule.add_parser("add", parents=[common, scoped], help="add or replace a rule")
@@ -617,7 +647,7 @@ def build_parser() -> argparse.ArgumentParser:
     set_.add_argument("assignments", nargs="+", metavar="key=value")
     rm = rule.add_parser("rm", parents=[common, scoped], help="remove a rule")
     rm.add_argument("id")
-    test = rule.add_parser("test", parents=[common], help="dry-run a rule against sample commands")
+    test = rule.add_parser("test", parents=[common, pathed], help="dry-run a rule against sample commands")
     source = test.add_mutually_exclusive_group(required=True)
     source.add_argument("--json", help="a draft rule as a JSON object")
     source.add_argument("--id", help="an installed rule's id")
@@ -632,7 +662,7 @@ def build_parser() -> argparse.ArgumentParser:
     undeclare = mode.add_parser("undeclare", parents=[common, scoped], help="remove a mode declaration")
     undeclare.add_argument("name")
     for op in ("on", "off"):
-        toggle = mode.add_parser(op, parents=[common], help=f"switch a mode {op}")
+        toggle = mode.add_parser(op, parents=[common, pathed], help=f"switch a mode {op}")
         toggle.add_argument("name")
         toggle.add_argument("--scope", choices=("session", *SCOPES), default="session")
 
@@ -667,16 +697,35 @@ HANDLERS: dict[tuple[str, str | None], Callable[[Args], int]] = {
 }
 
 
+def unenforced_note(args: Args) -> str:
+    path = extra_path(args)
+    if path and getattr(args, "scope", None) == "managed" and not store.hook_enforces(path):
+        return f"note: the hook enforces {path} only if {store.MANAGED_ENV} points at it"
+    return ""
+
+
+def sudo_hint(args: Args, argv: list[str]) -> str:
+    if getattr(args, "scope", None) != "managed" or extra_path(args):
+        return shlex.join(argv)
+    target = scope_path("managed", args)
+    extra = [] if target == store.default_managed_path() else ["--path", target]
+    return shlex.join([*argv, *extra])
+
+
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     try:
-        return HANDLERS[(args.verb, getattr(args, "op", None))](args)
+        code = HANDLERS[(args.verb, getattr(args, "op", None))](args)
+        note = unenforced_note(args) if code == 0 else ""
+        if note:
+            print(note)
+        return code
     except Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 3
     except store.NotWritable as exc:
         guard = os.path.join(store.HERE, "guard.py")
-        print(f"error: {exc}. Re-run with sudo: sudo python3 {guard} {shlex.join(argv)}", file=sys.stderr)
+        print(f"error: {exc}. Re-run with sudo: sudo python3 {guard} {sudo_hint(args, argv)}", file=sys.stderr)
         return 2
     except (Invalid, store.StateError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)

@@ -64,24 +64,30 @@ def default_managed_path() -> str:
     return MANAGED_DARWIN if sys.platform == "darwin" else MANAGED_LINUX
 
 
-def managed_paths() -> list[str]:
-    """Managed sources, highest ranked first: the platform default, then the env override if it differs."""
-    default = default_managed_path()
-    override = os.environ.get(MANAGED_ENV)
-    if override and os.path.abspath(override) != os.path.abspath(default):
-        return [default, override]
-    return [default]
+def managed_paths(extra: str | None = None) -> list[str]:
+    """Managed sources, highest ranked first: the platform default, the env override, then an explicit extra file."""
+    paths = [default_managed_path()]
+    for candidate in (os.environ.get(MANAGED_ENV), extra):
+        if candidate and all(os.path.abspath(candidate) != os.path.abspath(p) for p in paths):
+            paths.append(candidate)
+    return paths
 
 
-def managed_write_path() -> str:
-    return os.environ.get(MANAGED_ENV) or default_managed_path()
+def managed_write_path(extra: str | None = None) -> str:
+    return extra or os.environ.get(MANAGED_ENV) or default_managed_path()
 
 
-def load_managed() -> tuple[State, list[str]]:
+def hook_enforces(path: str) -> bool:
+    """Whether the hook loads this managed file (the platform default or the env override)."""
+    known = [default_managed_path(), os.environ.get(MANAGED_ENV) or ""]
+    return any(k and os.path.abspath(path) == os.path.abspath(k) for k in known)
+
+
+def load_managed(extra: str | None = None) -> tuple[State, list[str]]:
     """The combined managed layer and what is wrong with it; an unusable source is skipped, never fatal."""
     sources: list[tuple[str, State]] = []
     problems: list[str] = []
-    for path in managed_paths():
+    for path in managed_paths(extra):
         try:
             sources.append((path, load(path)))
         except StateError as exc:
