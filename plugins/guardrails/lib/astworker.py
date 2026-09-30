@@ -8,15 +8,19 @@ from __future__ import annotations
 
 import json
 import re
-import time
 from typing import Any
 
 import ansic
+import policy
 from astcli import Cli, Node, RuleError, Src, Unavailable
 
 MAX_DEPTH = 16
 MAX_UNITS = 512
-EXPANSION_BUDGET = 0.5
+MAX_UNIT_BYTES = 32768
+MAX_SOURCE_BYTES = 4 << 20
+MAX_PARSE_BYTES = 1 << 20
+PARSE_COST = 256
+MAX_RULES_BYTES = 256 * 1024
 CONTEXT = {"any": [{"kind": "pipeline"}, {"kind": "command_substitution"}, {"kind": "process_substitution"}],
            "stopBy": "end"}
 REDIRECTS = frozenset({"file_redirect", "heredoc_redirect", "herestring_redirect"})
@@ -211,20 +215,18 @@ def mentions_wrapper(src: str, table: Table) -> bool:
     return any(name in src for name in table)
 
 
-def parse_units(units: list[Unit], cli: Cli, wanted: list[bool], until: float | None = None) -> bool:
-    """Parse the wanted units; False when `until` passed first."""
+def parse_units(units: list[Unit], cli: Cli, wanted: list[bool]) -> None:
     chosen = [u for u, want in zip(units, wanted) if want]
-    trees = cli.dump([Src(u.src) for u in chosen], "ast", until)
-    for unit, tree in zip(chosen, trees):
+    for unit, tree in zip(chosen, cli.dump([Src(u.src) for u in chosen])):
         unit.tree = tree
-    return len(trees) == len(chosen)
 
 
-def unit_trees(command: str, table: Table, cli: Cli, everything: bool = False) -> tuple[list[Unit], bool]:
-    """Every tree to evaluate; `everything` parses units even when nothing in them can be rewritten or unwrapped.
+def unit_trees(command: str, table: Table, cli: Cli, everything: bool = False) -> tuple[list[Unit], str | None]:
+    """Every tree to evaluate, and why the expansion stopped early ("depth", "units" or "size"), if it did.
 
-    Parsing costs a process, so a unit whose text has no wrapper name (and, for the command itself, nothing that
-    normalise() would rewrite) is left without a tree: it can expose no further unit.
+    `everything` parses units even when nothing in them can be rewritten or unwrapped. Parsing costs a process, so a
+    unit whose text has no wrapper name (and, for the command itself, nothing that normalise() would rewrite) is left
+    without a tree: it can expose no further unit. The work is bounded by counts and bytes, never by the clock.
     """
     first = Unit(command)
     parse_units([first], cli, [everything or bool(REWRITABLE.search(command)) or mentions_wrapper(command, table)])
@@ -237,14 +239,11 @@ def unit_trees(command: str, table: Table, cli: Cli, everything: bool = False) -
         parse_units([base], cli, [True])
         units.append(base)
         seen.add(plain)
-    until = time.monotonic() + EXPANSION_BUDGET
+    spent = len(command) + len(plain) + 2 * PARSE_COST
     frontier = [base]
-    limited = False
+    reason: str | None = None
     level = 0
-    while frontier and not limited:
-        if time.monotonic() > until and any(u.tree for u in frontier):
-            limited = True
-            break
+    while frontier and reason is None:
         fresh: list[Unit] = []
         for unit in frontier:
             within = (unit.lo, unit.hi) if unit.derived else None
@@ -252,19 +251,24 @@ def unit_trees(command: str, table: Table, cli: Cli, everything: bool = False) -
             for new_src, lo, hi, label in found:
                 if new_src in seen:
                     continue
-                if level + 1 > MAX_DEPTH or len(units) + len(fresh) >= MAX_UNITS:
-                    limited = True
+                spent += len(new_src) + PARSE_COST
+                if level + 1 > MAX_DEPTH:
+                    reason = "depth"
+                elif len(units) + len(fresh) >= MAX_UNITS:
+                    reason = "units"
+                elif len(new_src) > MAX_UNIT_BYTES or spent > MAX_PARSE_BYTES:
+                    reason = "size"
+                if reason:
                     break
                 seen.add(new_src)
                 fresh.append(Unit(new_src, lo, hi, label))
-            if limited:
+            if reason:
                 break
         units.extend(fresh)
-        complete = parse_units(fresh, cli, [everything or mentions_wrapper(u.src, table) for u in fresh], until)
-        limited = limited or not complete
+        parse_units(fresh, cli, [everything or mentions_wrapper(u.src, table) for u in fresh])
         frontier = fresh
         level += 1
-    return units, limited
+    return units, reason
 
 
 def widen(rule: Any) -> Any:
@@ -290,32 +294,49 @@ def document(rule_id: str, rule: Any) -> str:
     return YAML_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
 
 
-def rule_text(live: dict[str, Rule]) -> tuple[str, dict[str, str]]:
-    """(ast-grep rules for every live rule plus its in-context twin, rule id per generated id)."""
-    docs, owners = [], {}
+def rule_files(live: dict[str, Rule]) -> tuple[dict[str, str], dict[str, str]]:
+    """(one rules file per live rule: the rule plus its in-context twin, rule id per file name)."""
+    files, owners = {}, {}
     for i, (rid, rule) in enumerate(live.items()):
-        docs.append(document(f"g{i}", rule))
-        docs.append(document(f"g{i}c", {"all": [rule, {"inside": CONTEXT}]}))
+        files[f"g{i}"] = document(f"g{i}", rule) + "\n---\n" + document(
+            f"g{i}c", {"all": [rule, {"inside": CONTEXT}]}) + "\n"
         owners[f"g{i}"] = rid
-    return "\n---\n".join(docs), owners
+    return files, owners
+
+
+def admissible(rules: dict[str, Rule]) -> tuple[dict[str, Rule], dict[str, str]]:
+    """The rules small enough to run, in order, and the reason for each one left out."""
+    ok: dict[str, Rule] = {}
+    errors: dict[str, str] = {}
+    total = 0
+    for rid, rule in rules.items():
+        size = len(json.dumps(rule))
+        if size > policy.MAX_AST_BYTES:
+            errors[rid] = f"match.ast is larger than {policy.MAX_AST_BYTES // 1024} KiB ({size} bytes)"
+        elif total + size > MAX_RULES_BYTES:
+            errors[rid] = f"the enabled match.ast rules together exceed {MAX_RULES_BYTES // 1024} KiB; this one is skipped"
+        else:
+            total += size
+            ok[rid] = rule
+    return ok, errors
 
 
 def prepare(rules: dict[str, Rule], cli: Cli) -> tuple[dict[str, Rule], dict[str, str]]:
-    """(rules ready to run, compile error per rule id)."""
-    if not rules:
-        return {}, {}
-    widened = {rid: widen(rule) for rid, rule in rules.items()}
+    """(rules ready to run, reason per rule that is not)."""
+    sized, errors = admissible(rules)
+    if not sized:
+        return {}, errors
+    widened = {rid: widen(rule) for rid, rule in sized.items()}
     try:
-        cli.check(rule_text(widened)[0])
-        return widened, {}
+        cli.check(rule_files(widened)[0])
+        return widened, errors
     except RuleError:
         pass
     ready: dict[str, Rule] = {}
-    errors: dict[str, str] = {}
-    for rid, rule in rules.items():
+    for rid, rule in sized.items():
         for candidate in (widened[rid], rule):
             try:
-                cli.check(document("g", candidate))
+                cli.check(rule_files({rid: candidate})[0])
             except RuleError as exc:
                 errors[rid] = str(exc)
                 continue
@@ -352,27 +373,45 @@ def verdicts_of(units: list[Unit], lexed: list[dict[str, Any]], hits: list[list[
     return verdicts
 
 
+def distinct_lexed(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str | None]:
+    """The lexer's units without repeats, cut at the unit and byte caps (with the reason when something was cut)."""
+    out: list[dict[str, Any]] = []
+    seen: set[tuple[str, bool]] = set()
+    spent = 0
+    for item in items:
+        key = (item["src"], bool(item.get("wrapped")))
+        if key in seen:
+            continue
+        spent += len(item["src"])
+        if len(item["src"]) > MAX_UNIT_BYTES or spent > MAX_SOURCE_BYTES:
+            return out, "size"
+        if len(out) >= MAX_UNITS:
+            return out, "units"
+        seen.add(key)
+        out.append({"src": item["src"], "wrapped": key[1]})
+    return out, None
+
+
 def evaluate(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
     rules: dict[str, Rule] = request.get("rules") or {}
     command = request["command"].replace("\x00", " ")
-    lexed: list[dict[str, Any]] = list(request.get("lexed") or ())
-    live: dict[str, Rule] = {rid: widen(rule) for rid, rule in rules.items()}
-    errors: dict[str, str] = {}
-    units, limited = unit_trees(command, request.get("wrappers") or {}, cli) if rules else ([], False)
+    lexed, cut = distinct_lexed(list(request.get("lexed") or ()))
+    sized, errors = admissible(rules)
+    live: dict[str, Rule] = {rid: widen(rule) for rid, rule in sized.items()}
+    units, reason = unit_trees(command, request.get("wrappers") or {}, cli) if live else ([], None)
     sources = [Src(u.src) for u in units] + [Src(item["src"]) for item in lexed]
-    hits: list[list[Any]] = []
+    hits: list[list[Any]] = [[] for _ in sources]
+    owners: dict[str, str] = {}
     while live:
-        text, owners = rule_text(live)
+        files, owners = rule_files(live)
         try:
-            hits = cli.scan(text, sources)
+            hits = cli.scan(files, sources)
             break
         except RuleError:
             live, errors = prepare(rules, cli)
-    else:
-        owners = {}
-        hits = [[] for _ in sources]
+    reason = reason or cut
     return {"ok": True, "verdicts": verdicts_of(units, lexed, hits, owners, live), "errors": errors,
-            "limited": limited, "version": cli.version}
+            "limited": reason is not None, "reason": reason, "version": cli.version}
 
 
 def with_depth(root: Node) -> list[tuple[Node, int]]:
@@ -409,12 +448,12 @@ def rows(ast: Node, cst: Node) -> list[list[Any]]:
 
 
 def tree(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
-    units, limited = unit_trees(request["command"].replace("\x00", " "), request.get("wrappers") or {}, cli, True)
+    units, reason = unit_trees(request["command"].replace("\x00", " "), request.get("wrappers") or {}, cli, True)
     sources = [Src(u.src) for u in units]
     complete = cli.dump(sources, "cst")
     shown = [{"label": u.label if u.derived else "", "src": u.src, "nodes": rows(u.tree or complete[i], complete[i]),
               "broken": broken(complete[i])} for i, u in enumerate(units)]
-    return {"ok": True, "units": shown, "limited": limited, "version": cli.version}
+    return {"ok": True, "units": shown, "limited": reason is not None, "reason": reason, "version": cli.version}
 
 
 def handle(request: dict[str, Any], cli: Cli) -> dict[str, Any]:

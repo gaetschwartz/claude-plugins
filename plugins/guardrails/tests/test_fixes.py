@@ -193,7 +193,7 @@ class HostileExecutables(Isolated):
                          "GUARDRAILS_AST_GREP", "CLAUDE_PLUGIN_ROOT"):
                 self.assertNotIn(name, text)
         used = set(re.findall(r'environ(?:\.get)?[\[(]"([A-Z_a-z]+)"', (LIB / "astbin.py").read_text()))
-        self.assertEqual(used, {"CLAUDE_PROJECT_DIR"})
+        self.assertEqual(used, set())
         evil = self.plant("ast-grep")
         hostile = {"GUARDRAILS_AST_GREP": str(evil), "CLAUDE_PLUGIN_ROOT": str(self.proj), "PATH": str(evil.parent),
                    "GUARDRAILS_PARITY": "ast", "GUARDRAILS_AST_INPROCESS": "1"}
@@ -202,7 +202,7 @@ class HostileExecutables(Isolated):
                 astbin.locate(str(self.data))
             self.assertFalse(matching.PARITY)
 
-    def test_an_npm_binary_planted_inside_the_project_is_rejected_and_reported(self) -> None:
+    def test_a_node_modules_planted_in_the_project_is_never_the_engine(self) -> None:
         plat = astbin.detect()
         planted = self.proj / "node_modules" / "@ast-grep" / f"cli-{plat.npm}" / "ast-grep"
         planted.parent.mkdir(parents=True)
@@ -210,11 +210,29 @@ class HostileExecutables(Isolated):
         planted.chmod(0o755)
         (planted.parent / "package.json").write_text(json.dumps({"name": f"@ast-grep/cli-{plat.npm}",
                                                                  "version": astbin.pin()}))
-        with mock.patch.object(astbin, "PLUGIN_ROOT", str(self.proj)), self.assertRaises(astbin.Missing) as ctx:
+        previous = os.getcwd()
+        os.chdir(self.proj)
+        self.addCleanup(os.chdir, previous)
+        with self.assertRaises(astbin.Missing) as ctx:
             astbin.locate(str(self.data))
-        self.assertIn("inside the project", str(ctx.exception))
-        self.assertTrue(any(str(planted) not in r and "inside the project" in r for r in astbin.take_rejected()))
+        self.assertIn("npm install missing", str(ctx.exception))
         self.assertFalse((self.tmp / "PWNED").exists())
+
+    def test_the_engine_is_found_from_any_working_directory_and_project(self) -> None:
+        plat = astbin.detect()
+        binary = self.plugin_root / "node_modules" / "@ast-grep" / f"cli-{plat.npm}" / "ast-grep"
+        binary.parent.mkdir(parents=True)
+        binary.write_text("#!/bin/sh\necho 'ast-grep " + astbin.pin() + "'\n")
+        binary.chmod(0o755)
+        (binary.parent / "package.json").write_text(json.dumps({"name": f"@ast-grep/cli-{plat.npm}",
+                                                                "version": astbin.pin()}))
+        previous = os.getcwd()
+        self.addCleanup(os.chdir, previous)
+        for cwd in ("/", os.path.expanduser("~"), str(self.plugin_root), str(self.tmp)):
+            for project in (str(self.proj), str(self.plugin_root), str(self.tmp), "/"):
+                with self.subTest(cwd=cwd, project=project), mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": project}):
+                    os.chdir(cwd)
+                    self.assertEqual(astbin.locate(str(self.data)).binary, str(binary))
 
     def test_untrusted_reasons(self) -> None:
         root = self.tmp / "tree"
@@ -238,8 +256,6 @@ class HostileExecutables(Isolated):
         self.assertIn("symlink", astbin.untrusted(str(link), str(root)) or "")
         self.assertIn("resolves outside", astbin.untrusted(str(exe), str(self.tmp / "elsewhere")) or "")
         with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(self.tmp)}):
-            self.assertIn("inside the project", astbin.untrusted(str(exe), str(root)) or "")
-        with mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(self.tmp), "HOME": str(self.tmp)}):
             self.assertIsNone(astbin.untrusted(str(exe), str(root)))
         real_lstat = os.lstat
 
@@ -375,7 +391,7 @@ class Limits(AstIsolated):
         out = self.hook("sudo true; " * 1000 + f"{K} x")
         self.assertLess(time.monotonic() - started, 6)
         self.assertTrue(is_denied(out))
-        self.assertIn("too deeply to analyse", json.dumps(out))
+        self.assertIn("too large once its wrappers", json.dumps(out))
 
     def test_a_clean_command_with_many_units_is_not_limited(self) -> None:
         out = self.hook("sudo true; " * 20 + "ls")

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from unittest import mock
 
-from helpers import LIB, ROOT, AstIsolated, Isolated
+from helpers import LIB, REAL_WANTED, ROOT, AstIsolated, Isolated
 
 import astbin
 import astcli
@@ -112,6 +112,8 @@ class World(Isolated):
 
     def setUp(self) -> None:
         super().setUp()
+        mock.patch.object(astbin, "wanted", REAL_WANTED).start()
+        self.addCleanup(mock.patch.stopall)
         self.plat = astbin.detect()
         self.stub = STUB.format(pin=astbin.pin()).encode()
         self.wheel = self.build_wheel(self.stub)
@@ -534,7 +536,8 @@ class RealEngine(AstIsolated):
         for call in seen:
             self.assertEqual(call["env"], {"PATH": "/usr/bin:/bin"})
             self.assertEqual(call["cwd"], os.sep)
-            self.assertIn(astcli.CONFIG, call["cmd"])
+            self.assertIn("-c", call["cmd"])
+            self.assertLess(sum(len(part) for part in call["cmd"]), 2048)
             self.assertLess(call["timeout"], astrun.DEADLINE + 0.1)
         self.assertEqual(Path(astcli.CONFIG).read_text().strip(), "ruleDirs: []")
 
@@ -560,7 +563,14 @@ class BrokenBinary(World):
     def test_garbage_failures_and_hangs_degrade_with_the_usual_note(self) -> None:
         for label, script in (("garbage", "#!/bin/sh\necho garbage\n"),
                               ("failure", "#!/bin/sh\necho 'Error: boom' >&2\nexit 7\n"),
-                              ("not json", "#!/bin/sh\necho '[{\"file\": 1}]'\n")):
+                              ("not json", "#!/bin/sh\necho '[{\"file\": 1}]'\n"),
+                              ("empty success", "#!/bin/sh\nexit 0\n"), ("object", "#!/bin/sh\necho '{}'\n"),
+                              ("list without the canary", "#!/bin/sh\necho '[]'\n"),
+                              ("truncated", "#!/bin/sh\nprintf '[{\"text\":'\n"),
+                              ("failure with a list", "#!/bin/sh\necho '[]'\nexit 1\n"),
+                              ("entry without a range", "#!/bin/sh\necho '[{\"file\":\"u0.sh\",\"ruleId\":\"canary\"}]'\n"),
+                              ("unknown rule id", "#!/bin/sh\necho '[{\"file\":\"u0.sh\",\"ruleId\":\"x\",\"range\":" +
+                               "{\"byteOffset\":{\"start\":0,\"end\":1}}}]'\n")):
             with self.subTest(case=label):
                 self.use(script)
                 out = self.hook("pkill x", session=label)
@@ -651,6 +661,32 @@ class EngineMissingNotice(Isolated):
                 mock.patch.object(astbin.os, "uname", return_value=uname("Linux", "aarch64")):
             self.assertIn("Reason: unsupported platform (Linux aarch64 with musl libc, not glibc)",
                           self.channels(self.hook("ls", session="u"))[0])
+
+    def test_an_unsupported_platform_gets_no_fix_that_cannot_work(self) -> None:
+        with mock.patch.object(astbin, "libc", return_value=("musl", "")), \
+                mock.patch.object(astbin.os, "uname", return_value=uname("Linux", "aarch64")):
+            user, agent = self.channels(self.hook("ls", session="musl"))
+            status = self.cli("engine", "status")[1]
+            problems = self.cli("status", "--problems")[1]
+        for text in (user, agent):
+            self.assertIn("cannot run on this platform", text)
+            self.assertIn("NOT being enforced", text)
+            self.assertIn("You MUST tell the user", text)
+            self.assertIn("remove or disable the match.ast rules", text)
+            self.assertNotIn("guardrails engine install", text)
+            self.assertNotIn("npm ci", text)
+        for text in (status, problems):
+            self.assertNotIn("guardrails engine install", text)
+            self.assertNotIn("npm ci", text)
+        self.assertIn("no fix here", status)
+
+    def test_a_wheel_that_cannot_run_leaves_only_the_npm_fix(self) -> None:
+        with mock.patch.object(astbin, "libc", return_value=("glibc", "2.17")), \
+                mock.patch.object(astbin.os, "uname", return_value=uname("Linux", "x86_64")):
+            user, _ = self.channels(self.hook("ls", session="old"))
+        self.assertIn("npm ci --ignore-scripts", user)
+        self.assertNotIn("guardrails engine install", user)
+        self.assertIn("older than the 2.28", user)
 
     def test_no_rules_or_no_ast_rules_means_no_notice(self) -> None:
         self.put(self.gpath, {"rules": {"s": {"match": {"program": "strings"}, "message": "No."}}})

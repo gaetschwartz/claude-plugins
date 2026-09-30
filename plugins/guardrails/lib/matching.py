@@ -14,6 +14,9 @@ COMPILED = "#compiled"
 DEGRADED_KEY = "ast-unavailable"
 LIMITED_KEY = "ast-limited"
 OVERSIZE_KEY = "command-oversize"
+LIMIT_TEXT = {"depth": "nests wrappers or shells too deeply to analyse completely",
+              "units": "expands into too many distinct variants to analyse completely",
+              "size": "is too large once its wrappers and shell strings are unwrapped to analyse completely"}
 MAX_PARSE = 16384
 
 
@@ -22,10 +25,13 @@ class Evaluation:
         self.kinds: dict[str, str | None] = {}
         self.degraded = degraded
         self.missing = False
+        self.unsupported = False
+        self.wheel_ok = True
         self.invalid: dict[str, str] = {}
         self.approx: dict[str, list[str]] = {}
         self.approx_reason = ""
         self.limited = False
+        self.limit_reason: str | None = None
         self.oversize = oversize
         self.rejected: list[str] = []
 
@@ -37,15 +43,14 @@ class Evaluation:
         if self.degraded and self.missing:
             import astbin
 
-            out.append((DEGRADED_KEY, astbin.notice(self.degraded)))
+            out.append((DEGRADED_KEY, astbin.notice(self.degraded, self.unsupported, self.wheel_ok)))
         elif self.degraded:
             text = (f"guardrails: the AST matcher is unavailable ({self.degraded}). Rules with match.ast are applied "
                     "only when the command mentions one of their command names; every other rule is unaffected.")
             out.append((DEGRADED_KEY, text))
         if self.limited:
-            text = ("guardrails: a command nests wrappers or shells too deeply to analyse completely (or expands into "
-                    "too many variants), so rules with match.ast are applied only when it mentions their command "
-                    "names.")
+            text = (f"guardrails: a command {LIMIT_TEXT.get(self.limit_reason or '', LIMIT_TEXT['depth'])}, so rules "
+                    "with match.ast are applied only when it mentions their command names.")
             out.append((LIMITED_KEY, text))
         if self.oversize:
             text = (f"guardrails: a command larger than {MAX_PARSE // 1024} KiB is not parsed, so rules are applied "
@@ -62,11 +67,11 @@ def lex(command: str, table: wrapper_table.Table | None = None) -> list[SimpleCo
 
 
 def synthesized(cmds: list[SimpleCommand] | None) -> list[dict[str, Any]]:
-    """The lexer's commands as clean sources, so ast rules also see what the lexer sees."""
+    """The lexer's distinct commands as clean sources, so ast rules also see what the lexer sees."""
     import shlex
 
-    return [{"src": " ".join([*c.assigns, shlex.join([c.name, *c.args])]), "wrapped": c.wrapped}
-            for c in cmds or ()]
+    found = {(" ".join([*c.assigns, shlex.join([c.name, *c.args])]), c.wrapped) for c in cmds or ()}
+    return [{"src": src, "wrapped": wrapped} for src, wrapped in sorted(found)]
 
 
 def best(a: str | None, b: str | None) -> str | None:
@@ -159,6 +164,8 @@ def _evaluate(command: str, rules: dict[str, policy.Rule], table: wrapper_table.
     except astrun.Unavailable as exc:
         ev.degraded = str(exc)
         ev.missing = isinstance(exc, astrun.Missing)
+        ev.unsupported = isinstance(exc, astrun.Missing) and exc.unsupported
+        ev.wheel_ok = not isinstance(exc, astrun.Missing) or exc.wheel
         ev.rejected = astrun.take_rejected()
         apply_mentions(ev, command, rules, ast_rids, f"the AST matcher is unavailable: {exc}")
         return ev
@@ -175,7 +182,9 @@ def _evaluate(command: str, rules: dict[str, policy.Rule], table: wrapper_table.
         ev.invalid[rid.removesuffix(COMPILED)] = clean_error(str(why))
     if response.get("limited"):
         ev.limited = True
-        apply_mentions(ev, command, rules, ast_rids, "the command nests wrappers or shells too deeply to analyse")
+        ev.limit_reason = response.get("reason")
+        apply_mentions(ev, command, rules, ast_rids,
+                       f"the command {LIMIT_TEXT.get(ev.limit_reason or '', LIMIT_TEXT['depth'])}")
     return ev
 
 

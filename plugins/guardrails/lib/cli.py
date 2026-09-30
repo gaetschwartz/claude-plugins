@@ -446,7 +446,10 @@ def engine_fix(exc: Exception) -> str:
     """How to get the engine, when that is what is missing."""
     if not isinstance(exc, astrun.Missing):
         return ""
-    return f". Fix: run `{astbin.FIX_INSTALL}` or `{astbin.npm_fix()}`; `guardrails engine status` shows the state"
+    if exc.unsupported:
+        return ". ast-grep cannot run on this platform, so there is nothing to install; remove or disable the match.ast rules"
+    fixes = f"`{astbin.FIX_INSTALL}` or `{astbin.npm_fix()}`" if exc.wheel else f"`{astbin.npm_fix()}`"
+    return f". Fix: run {fixes}; `guardrails engine status` shows the state"
 
 
 def check_ast_rule(rule: policy.Rule) -> str:
@@ -698,10 +701,10 @@ def verdict(rule: policy.Rule, command: str) -> str | None:
     return matching.evaluate(command, {"rule": rule}, table, state_dir()).kinds["rule"]
 
 
-def ast_notes(rule: policy.Rule, degraded: str | None, missing: bool = False) -> list[str]:
+def ast_notes(rule: policy.Rule, degraded: str | None, missing: astrun.Missing | None = None) -> list[str]:
     notes = []
     if degraded:
-        fix = f". GUARDRAILS ENGINE MISSING: run `{astbin.FIX_INSTALL}` or `{astbin.npm_fix()}`" if missing else ""
+        fix = f". GUARDRAILS ENGINE MISSING{engine_fix(missing)}" if missing else ""
         notes.append(f"the AST matcher could not run ({degraded}), so match.ast was applied only by command name "
                      "(a command that mentions one of its names counts as a match, anything else passes); the hook "
                      f"does the same and warns the session once{fix}")
@@ -759,8 +762,9 @@ def cmd_rule_test(args: Args) -> int:
     broken = {rid_: why for ev in evaluations for rid_, why in ev.invalid.items()}
     if broken:
         raise Invalid(f"match.ast does not compile: {broken[rid]}")
+    gone = next((ev for ev in evaluations if ev.missing), None)
     notes += ast_notes(rule, next((ev.degraded for ev in evaluations if ev.degraded), None),
-                       any(ev.missing for ev in evaluations))
+                       astrun.Missing(gone.degraded or "", gone.unsupported, gone.wheel_ok) if gone else None)
     results = [render.Result(cmd, source, ev.kinds[rid], expect)
                for (cmd, source, expect), ev in zip(examples, evaluations)]
     if args.render:
@@ -841,9 +845,13 @@ def cmd_engine_status(args: Args) -> int:
             print(f"last download failure: {render.clean(fail['reason'])} (retry after "
                   f"{astbin.retry_clock(state_dir())}; `guardrails engine install` ignores the wait)")
     print(f"active: {info['active'] or 'none'}" + (f" ({info['binary']})" if info["binary"] else ""))
-    if not info["binary"]:
+    if not info["binary"] and "unsupported" in info:
+        print("ast-grep cannot run on this platform, so match.ast rules are applied only by command name; there is no fix "
+              "here: remove or disable those rules, or use a supported system")
+    elif not info["binary"]:
         print("the syntax-tree engine is missing, so match.ast rules are applied only by command name. To fix, run one of:")
-        print(f"  {astbin.FIX_INSTALL}")
+        if not info["wheel"]["why"]:
+            print(f"  {astbin.FIX_INSTALL}")
         print(f"  {astbin.npm_fix()}")
     return 0
 

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import re
 from collections.abc import Sequence
 from typing import Any, Callable
@@ -15,6 +16,7 @@ Mode = dict[str, Any]
 
 ACTIONS = ("deny", "warn")
 RETRIES = ("none", "same-command")
+MAX_AST_BYTES = 16384
 MATCH_KEYS = ("program", "args", "builtin", "regex", "ast", "mentions")
 AST_KEYS = ("pattern", "kind", "regex", "inside", "has", "follows", "precedes", "not", "any", "all", "stopBy", "field")
 AST_RELATIONS = ("inside", "has", "follows", "precedes")
@@ -173,6 +175,10 @@ def mentioned(command: str, names: list[str], normal: str | None = None) -> bool
                for n in names for text in texts)
 
 
+def ast_size(ast: object) -> int:
+    return len(json.dumps(ast))
+
+
 def ast_of(rule: Rule) -> dict[str, Any] | None:
     ast = view(rule, "match").get("ast")
     return ast if isinstance(ast, dict) else None
@@ -215,6 +221,9 @@ def validate_rule(rule: object) -> None:
         raise Invalid(f"unknown builtin '{builtin}' (known: {', '.join(sorted(BUILTINS))})")
     if "ast" in match:
         validate_ast(match["ast"])
+        size = ast_size(match["ast"])
+        if size > MAX_AST_BYTES:
+            raise Invalid(f"'match.ast' is {size} bytes, over the {MAX_AST_BYTES // 1024} KiB limit; split it into rules")
     if "mentions" in match and not (isinstance(match["mentions"], list) and match["mentions"] and all(
             isinstance(x, str) and NAME_WORD.fullmatch(x) for x in match["mentions"])):
         raise Invalid("'match.mentions' must be a non-empty list of command names")

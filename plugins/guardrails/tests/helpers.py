@@ -10,6 +10,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import urllib.request
 from pathlib import Path
 from typing import Any
 from unittest import mock
@@ -27,6 +28,12 @@ DEV_DATA = Path.home() / ".cache" / "guardrails-engine-dev"
 SKIP_AST = ("ast-grep is not installed: run `just engine` (or allow network access so the tests can install the "
             "pinned wheel)")
 _SHARED: list[str] = []
+REAL_WANTED = astbin.wanted
+REAL_URLOPEN = urllib.request.urlopen
+
+
+def no_network(*args: Any, **kwargs: Any) -> Any:
+    raise AssertionError(f"a test reached the network: {args[:1]}")
 
 
 def shared_engine() -> str | None:
@@ -43,7 +50,8 @@ def shared_engine() -> str | None:
                 _SHARED[0] = astbin.engine_root(data)
                 break
             if data == folder:
-                with contextlib.suppress(astbin.InstallError, OSError):
+                with contextlib.suppress(astbin.InstallError, OSError), \
+                        mock.patch.object(urllib.request, "urlopen", REAL_URLOPEN):
                     astbin.install(data)
                     if astbin.wheel_probe(plat, data).path:
                         _SHARED[0] = astbin.engine_root(data)
@@ -81,6 +89,10 @@ class Isolated(unittest.TestCase):
         patch_root.start()
         self.addCleanup(patch_root.stop)
         astbin.take_rejected()
+        for guard in (mock.patch.object(astbin, "wanted", lambda state_dir: False),
+                      mock.patch.object(urllib.request, "urlopen", no_network)):
+            guard.start()
+            self.addCleanup(guard.stop)
 
     @property
     def gpath(self) -> Path:

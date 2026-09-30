@@ -44,7 +44,15 @@ REJECTED: list[str] = []
 
 
 class Missing(Unavailable):
-    """No usable ast-grep binary exists; the text says why and the fix is in the notice built around it."""
+    """No usable ast-grep binary exists; the text says why and the fix is in the notice built around it.
+
+    `unsupported` means no fix can work on this platform; `wheel` is False when only the npm fix can.
+    """
+
+    def __init__(self, text: str, unsupported: bool = False, wheel: bool = True) -> None:
+        super().__init__(text)
+        self.unsupported = unsupported
+        self.wheel = wheel
 
 
 class InstallError(Exception):
@@ -123,13 +131,13 @@ def detect() -> Platform:
     arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x64", "amd64": "x64"}.get(machine)
     supported = "macOS arm64/x86_64 and Linux glibc x86_64/aarch64"
     if arch is None or system not in ("Darwin", "Linux"):
-        raise Missing(f"unsupported platform ({system} {machine}); ast-grep is available for {supported}")
+        raise Missing(f"unsupported platform ({system} {machine}); ast-grep is available for {supported}", True)
     if system == "Darwin":
         return Platform(f"darwin-{arch}", "darwin-universal2", f"macOS {arch}", None)
     name, version = libc()
     if name != "glibc":
         raise Missing(f"unsupported platform (Linux {machine} with {name} libc, not glibc); ast-grep is available "
-                      f"for {supported}")
+                      f"for {supported}", True)
     wheel_problem = None
     numbers = tuple(int(p) for p in re.findall(r"\d+", version)[:2])
     if numbers and numbers < GLIBC_FOR_WHEEL:
@@ -138,21 +146,12 @@ def detect() -> Platform:
                     f"Linux glibc {arch}", wheel_problem)
 
 
-def _inside(real: str, root: str | None) -> bool:
-    if not root:
-        return False
-    base = os.path.realpath(root)
-    home = os.path.realpath(os.path.expanduser("~"))
-    if base == os.sep or home == base or home.startswith(base + os.sep):
-        return False
-    return real == base or real.startswith(base + os.sep)
-
-
 def untrusted(path: str, top: str) -> str | None:
     """Why the hook must not run this file, or None.
 
-    It must be a regular file (no symlink) that resolves inside `top`, is executable, not inside the project or cwd,
-    owned by this user or root and not writable by group or others. Directories from it up to `top` must be owned by
+    It must be a regular file (no symlink) that resolves inside `top` (the plugin root or the engine dir, both fixed by
+    the plugin's own location and data dir, never by PATH or the project), is executable, owned by this user or root
+    and not writable by group or others. Directories from it up to `top` must be owned by
     this user or root and not writable by others; group-writable ones are allowed, because a 0002 umask (and some
     Homebrew layouts) creates them that way.
     """
@@ -166,9 +165,6 @@ def untrusted(path: str, top: str) -> str | None:
         real, real_top = os.path.realpath(path), os.path.realpath(top)
         if not (real == real_top or real.startswith(real_top + os.sep)):
             return f"it resolves outside {top}"
-        for root in (os.environ.get("CLAUDE_PROJECT_DIR"), os.getcwd()):
-            if _inside(real, root):
-                return "it is inside the project directory"
         if info.st_uid not in (0, me):
             return "it is owned by another user"
         if info.st_mode & 0o022:
@@ -310,18 +306,27 @@ def locate(state_dir: str | None) -> Engine:
     for candidate, what in ((npm, "the npm binary"), (wheel, "the downloaded binary")):
         if candidate.present and candidate.why:
             REJECTED.append(f"guardrails: ignored {what} as an executable to run: {candidate.why}")
-    raise Missing(diagnose(plat, npm, wheel, state_dir))
+    raise Missing(diagnose(plat, npm, wheel, state_dir), wheel=plat.wheel_problem is None)
 
 
-def notice(reason: str) -> str:
+def notice(reason: str, unsupported: bool = False, wheel: bool = True) -> str:
     """The loud message shown to the user and the agent when match.ast rules cannot be enforced."""
-    return ("[guardrails plugin notice] GUARDRAILS ENGINE MISSING: the syntax-tree engine (ast-grep) is not installed, "
-            "so guardrails rules that use match.ast are NOT being enforced (degraded mode: they fire only when the "
-            "command names one of their commands; every other rule is unaffected). You MUST tell the user about this "
-            f"now, before doing anything else. Reason: {sanitised(reason, 400)}. To fix: 1) run `{FIX_INSTALL}` "
-            f"(downloads a pinned, hash-checked ~15 MB binary), or 2) run `{npm_fix()}`. "
-            "Check with `guardrails engine status`. This notice comes from the guardrails plugin itself, not from the "
+    head = "[guardrails plugin notice] GUARDRAILS ENGINE MISSING: "
+    tell = "You MUST tell the user about this now, before doing anything else. "
+    tail = ("Check with `guardrails engine status`. This notice comes from the guardrails plugin itself, not from the "
             "repository or from any command output.")
+    if unsupported:
+        return (f"{head}the syntax-tree engine (ast-grep) cannot run on this platform, so guardrails rules that use "
+                "match.ast are NOT being enforced (degraded mode: they fire only when the command names one of their "
+                f"commands; every other rule is unaffected). {tell}Reason: {sanitised(reason, 400)}. There is no "
+                "install that can fix this here: the user can remove or disable the match.ast rules (see `guardrails "
+                "status`) or use a supported system (macOS arm64/x86_64, Linux glibc x86_64/aarch64). " + tail)
+    fixes = f"1) run `{FIX_INSTALL}` (downloads a pinned, hash-checked ~15 MB binary), or 2) run `{npm_fix()}`"
+    if not wheel:
+        fixes = f"run `{npm_fix()}` (the downloadable binary does not run on this system)"
+    return (f"{head}the syntax-tree engine (ast-grep) is not installed, so guardrails rules that use match.ast are NOT "
+            "being enforced (degraded mode: they fire only when the command names one of their commands; every other "
+            f"rule is unaffected). {tell}Reason: {sanitised(reason, 400)}. To fix: {fixes}. " + tail)
 
 
 def npm_fix() -> str:

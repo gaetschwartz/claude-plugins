@@ -12,9 +12,10 @@ from collections.abc import Iterator
 from typing import Any, ClassVar
 from unittest import mock
 
-from helpers import AstIsolated, Isolated
+from helpers import REAL_WANTED, AstIsolated, Isolated
 
 import astbin
+import astcli
 import astrun
 import engine
 import matching
@@ -170,6 +171,7 @@ class Kinds(AstIsolated):
 
 
 PK = "pk" + "ill"
+astcli_scan = astcli.Cli.scan
 
 
 class Worker(AstIsolated):
@@ -180,17 +182,17 @@ class Worker(AstIsolated):
         return self.call({"op": "eval", "command": command, "rules": rules, "wrappers": wrappers.effective(),
                           **request})["verdicts"]["r"]
 
-    def test_single_source_stdin_and_many_source_directory_scans_agree(self) -> None:
+    def test_one_unit_alone_and_the_same_unit_in_a_batch_give_the_same_hits(self) -> None:
         import astbin
+        import astworker
         from astcli import Cli, Src
 
         engine = astbin.locate(str(self.data))
         cli = Cli(engine.binary, time.monotonic() + 30)
-        rules = '{"id":"g0","language":"bash","rule":{"pattern":"echo $$$"}}'
+        files = astworker.rule_files({"r": {"pattern": "echo $$$"}})[0]
         texts = ["echo a", "ls", "echo 'é' && echo \U0001F600 b", "sudo echo x | cat"]
-        alone = [cli.scan(rules, [Src(t)])[0] for t in texts]
-        batched = cli.scan(rules, [Src(t) for t in texts])
-        self.assertEqual(alone, batched)
+        alone = [cli.scan(files, [Src(t)])[0] for t in texts]
+        self.assertEqual(alone, cli.scan(files, [Src(t) for t in texts]))
         self.assertTrue(any(alone))
 
     def test_ignore_files_around_the_temp_directory_cannot_hide_a_unit(self) -> None:
@@ -218,22 +220,55 @@ class Worker(AstIsolated):
         self.assertEqual(self.verdict(f"echo a\x00b; {KILL} x"), "direct")
         self.assertEqual(self.verdict(f"echo \ud800; sudo {KILL} x"), "wrapped")
 
-    def test_the_expansion_time_budget_marks_the_command_limited(self) -> None:
-        import astworker
-
-        request = {"op": "eval", "command": f"sudo env nice {KILL} x", "rules": {"r": BY_NAME},
-                   "wrappers": wrappers.effective()}
-        self.assertFalse(self.call(request)["limited"])
-        with mock.patch.object(astworker, "EXPANSION_BUDGET", -1.0):
-            self.assertTrue(self.call(request)["limited"])
-
-    def test_the_unit_cap_and_the_budget_bound_the_worst_case(self) -> None:
-        started = time.monotonic()
-        response = self.call({"op": "eval", "command": "sudo true; " * 600 + "pk" + "ill x", "rules": {"r": BY_NAME},
+    def limit(self, command: str) -> tuple[bool, str | None]:
+        response = self.call({"op": "eval", "command": command, "rules": {"r": BY_NAME},
                               "wrappers": wrappers.effective()})
-        self.assertLess(time.monotonic() - started, 1.5)
-        self.assertTrue(response["limited"])
-        self.assertEqual(response["verdicts"], {"r": "direct"})
+        return response["limited"], response["reason"]
+
+    def test_limits_name_their_real_cause(self) -> None:
+        self.assertEqual(self.limit("sudo " * 40 + PK + " x"), (True, "depth"))
+        self.assertEqual(self.limit("sudo $(env " * 10 + PK + " x" + ")" * 10), (True, "units"))
+        self.assertEqual(self.limit("sudo true; " * 600 + PK + " x"), (True, "size"))
+        self.assertEqual(self.limit("sudo env nice timeout 5 xargs " + PK + " x"), (False, None))
+
+    def test_the_same_input_gives_the_same_answer_however_slow_the_machine_is(self) -> None:
+        from astcli import Cli
+
+        commands = ["sudo env nice timeout 5 xargs " + PK + " x", "sudo true; " * 300 + PK + " x",
+                    "sudo $(env " * 6 + PK + " x" + ")" * 6]
+        request = {"op": "eval", "rules": {"r": BY_NAME}, "wrappers": wrappers.effective()}
+        fast = [self.call({**request, "command": c}) for c in commands]
+        real_dump = Cli.dump
+
+        def slow(self_: Cli, *args: Any, **kwargs: Any) -> Any:
+            time.sleep(0.2)
+            return real_dump(self_, *args, **kwargs)
+
+        with mock.patch.object(Cli, "dump", slow), mock.patch.object(astrun, "DEADLINE", 60.0):
+            laggy = [self.call({**request, "command": c}) for c in commands]
+        self.assertEqual(fast, laggy)
+
+    def test_expansion_is_proportional_to_the_distinct_input(self) -> None:
+        self.put(self.gpath, {"rules": {"by-name": {"match": {"ast": BY_NAME}, "message": "No."},
+                                        "prog": {"match": {"program": PK}, "message": "No."}}})
+        shapes = {"500 deep": "$(" * 500 + PK + " x" + ")" * 500, "15 KB deep": "$(" * 5000 + PK + " x" + ")" * 5000,
+                  "wide list": "a;" * 3000 + PK + " x", "wide substitutions": "echo $(ls); " * 1200 + PK + " x",
+                  "wide wrappers": "sudo true; " * 1400 + PK + " x"}
+        for n, (name, command) in enumerate(shapes.items()):
+            started = time.monotonic()
+            out = self.hook(command, session=f"s{n}")
+            self.assertLess(time.monotonic() - started, 1.5, name)
+            assert out is not None
+            self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny", name)
+
+    def test_a_repeated_lexer_unit_is_scanned_once(self) -> None:
+        lexed = [{"src": f"{PK} x", "wrapped": True}] * 5000
+        spy = mock.Mock(wraps=astcli_scan)
+        with mock.patch.object(astcli.Cli, "scan", autospec=True, side_effect=lambda cli, files, sources: spy(cli, files, sources)):
+            response = self.call({"op": "eval", "command": "ls", "rules": {"r": BY_NAME}, "lexed": lexed})
+        self.assertEqual(response["verdicts"], {"r": "wrapped"})
+        self.assertFalse(response["limited"])
+        self.assertEqual(len(spy.call_args[0][2]), 2)
 
     def test_tree_nodes_keep_the_leaf_rules(self) -> None:
         nodes = self.call({"op": "tree", "command": "echo \"\" 'a b' x"})["units"][0]["nodes"]
@@ -241,6 +276,71 @@ class Worker(AstIsolated):
         self.assertIn(("string", None), shown)
         self.assertIn(("raw_string", "'a b'"), shown)
         self.assertIn(("command_name", "echo"), shown)
+
+
+class RuleSize(AstIsolated):
+    """No rule, however large or numerous, can push the others off the engine."""
+
+    HUGE: ClassVar[dict[str, Any]] = {"kind": "command", "regex": "x" * 600000}
+    DENY_SUBST: ClassVar[dict[str, Any]] = {"match": {"ast": {"kind": "command_substitution"}},
+                                            "message": "No substitutions."}
+
+    def test_one_oversized_project_rule_cannot_disable_the_others(self) -> None:
+        self.put(self.gpath, {"rules": {"subst": self.DENY_SUBST}})
+        self.put(self.ppath, {"rules": {"huge": {"match": {"ast": self.HUGE}, "message": "m", "action": "warn"}}})
+        first = self.hook("echo $(ls)", session="a")
+        assert first is not None
+        self.assertEqual(first["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("match.ast rule huge is larger than 16 KiB and is skipped", first["systemMessage"])
+        self.assertNotIn("Argument list too long", json.dumps(first))
+        again = self.hook("echo $(ls)", session="a")
+        assert again is not None
+        self.assertEqual(again["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertNotIn("systemMessage", again)
+
+    def test_the_cli_refuses_an_oversized_rule_with_exit_2(self) -> None:
+        rule = json.dumps({"match": {"ast": self.HUGE}, "message": "m"})
+        for argv in (("rule", "add", "r", "--json", rule), ("rule", "test", "--json", rule, "x")):
+            code, _, err = self.cli(*argv)
+            self.assertEqual(code, 2, argv)
+            self.assertIn("over the 16 KiB limit", err)
+        self.assertFalse(self.gpath.exists())
+        self.put(self.ppath, {"rules": {"huge": {"match": {"ast": self.HUGE}, "message": "m"}}})
+        self.assertIn("rule huge: 'match.ast' is", self.cli("status", "--problems")[1])
+
+    def test_the_worker_skips_an_oversized_rule_by_name_and_runs_the_rest(self) -> None:
+        response = self.call({"op": "eval", "command": "echo $(ls)", "rules": {"a": self.HUGE, "b": {"kind": "command_substitution"}}})
+        self.assertEqual(response["verdicts"], {"b": "direct"})
+        self.assertEqual(list(response["errors"]), ["a"])
+        self.assertIn("larger than 16 KiB", response["errors"]["a"])
+
+    def test_many_rules_are_capped_in_order_and_never_put_on_the_command_line(self) -> None:
+        rules = {f"r{i:04d}": {"pattern": f"tool{i} --flag-{'y' * 100} $$$"} for i in range(2500)}
+        rules["r9999"] = {"kind": "command_substitution"}
+        seen: list[list[str]] = []
+        real = astcli.subprocess.run
+
+        def spy(cmd: list[str], **kwargs: Any) -> Any:
+            seen.append(cmd)
+            return real(cmd, **kwargs)
+
+        with mock.patch.object(astcli.subprocess, "run", spy):
+            response = self.call({"op": "eval", "command": "tool1 --flag-" + "y" * 100 + " a", "rules": rules})
+        self.assertEqual(response["verdicts"]["r0001"], "direct")
+        skipped = sorted(response["errors"])
+        self.assertTrue(skipped and skipped[-1] == "r9999")
+        self.assertEqual(skipped, sorted(set(skipped)))
+        self.assertIn("together exceed 256 KiB", response["errors"]["r9999"])
+        self.assertTrue(seen)
+        self.assertTrue(all(sum(len(part) for part in cmd) < 2048 for cmd in seen))
+        again = self.call({"op": "eval", "command": "tool1 --flag-" + "y" * 100 + " a", "rules": rules})
+        self.assertEqual(sorted(again["errors"]), skipped)
+
+    def test_a_rule_that_does_not_compile_is_skipped_by_name_beside_good_ones(self) -> None:
+        response = self.call({"op": "eval", "command": "echo $(ls)",
+                              "rules": {"bad": {"kind": "no_such_kind"}, "good": {"kind": "command_substitution"}}})
+        self.assertEqual(response["verdicts"], {"good": "direct"})
+        self.assertEqual(list(response["errors"]), ["bad"])
 
 
 class Validation(Isolated):
@@ -726,6 +826,7 @@ class SessionStart(Isolated):
     def setUp(self) -> None:
         super().setUp()
         self.popen = mock.patch.object(astrun.subprocess, "Popen").start()
+        mock.patch.object(astbin, "wanted", REAL_WANTED).start()
         self.addCleanup(mock.patch.stopall)
 
     def warm_up(self) -> None:

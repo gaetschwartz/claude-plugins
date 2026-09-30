@@ -97,6 +97,12 @@ def candidates_of(rules: dict[str, policy.Rule], tool: str = "Bash") -> dict[str
     return out
 
 
+def oversized_of(rules: dict[str, policy.Rule], tool: str = "Bash") -> list[str]:
+    """Enabled rules for this tool whose match.ast is over the size limit (the hook skips them and says so)."""
+    return [rid for rid in sorted(rules) if rules[rid].get("enabled") is True and applies(rules[rid], tool)
+            and (ast := policy.ast_of(rules[rid])) and policy.ast_size(ast) > policy.MAX_AST_BYTES]
+
+
 def approximate(rule: policy.Rule, names: list[str], reason: str) -> policy.Rule:
     """The rule with a note that it was applied by command name because the real matcher could not judge."""
     note = f" [guardrails: {reason}; this rule applied because the command mentions {', '.join(names)}.]"
@@ -123,6 +129,12 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     denies: list[tuple[str, policy.Rule]] = []
     warns: list[tuple[str, policy.Rule]] = []
 
+    for rid in oversized_of(rules, tool):
+        text = (f"guardrails: match.ast rule {rid} is larger than {policy.MAX_AST_BYTES // 1024} KiB and is skipped; "
+                "split it into several rules")
+        if remember(session, "reported", digest(text)):
+            changed = True
+            notices.append(text)
     candidates = candidates_of(rules, tool)
     evaluation = pre if pre is not None and all(rid in pre.kinds for rid in candidates) \
         else matching.evaluate(command, candidates, table, state_dir)

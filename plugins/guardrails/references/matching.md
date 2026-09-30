@@ -196,8 +196,8 @@ Platforms: macOS arm64 and x86_64, Linux glibc x86_64 and aarch64 (the wheel nee
 unsupported and get the notice below with the reason.
 
 Trust model: the binary must be a regular file inside the plugin root (npm) or the plugin data dir (wheel), executable, owned
-by you or root, not writable by group or others, in directories not writable by others, and not inside the project or the
-hook's cwd; an npm binary's package version must equal the pin and a wheel binary must match its marker (pin, hashes, size,
+by you or root, not writable by group or others, in directories not writable by others (its location comes from the plugin's
+own place and data dir, never from PATH, the project or the cwd); an npm binary's package version must equal the pin and a wheel binary must match its marker (pin, hashes, size,
 mtime, inode). It runs with `PATH=/usr/bin:/bin` as its only environment variable, from `/`, with an explicit empty config so
 a repository's `sgconfig.yml` is never read. No environment variable selects the binary, the URL or the root. The README has
 the details.
@@ -206,7 +206,7 @@ Troubleshooting: `guardrails engine status` says which source is active, why ano
 and its retry time, and prints the fix commands (`guardrails engine install`, or `cd <plugin root> && npm ci
 --ignore-scripts`); `guardrails engine verify` re-hashes the active binary against the committed manifest.
 
-Degraded mode (no engine, deadline, bad worker reply, nesting over 16, more than 512 units or 0.5 s of expansion, a command over
+Degraded mode (no engine, deadline, bad worker reply, nesting over 16, more than 512 distinct units or 1 MiB of unwrapped text, a command over
 16 KiB, or an unexpected error): every non-AST rule runs as usual and each `match.ast` rule is applied when the command
 mentions one of its command names as a word. The names are derived from the literal words in its patterns and from its
 regexes, or given by `match.mentions`. A deny rule denies with its message plus a note that the AST matcher was

@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import bisect
 import collections
+import contextlib
 import json
 import os
 import re
 import subprocess
 import time
-from typing import Any, NamedTuple
+from typing import NamedTuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "engine-sgconfig.yml")
@@ -19,6 +20,46 @@ PARALLEL = 8
 NODE_LINE = re.compile(r"^( *)(?:([a-z_]+): )?(MISSING )?(\S+) \((\d+),(\d+)\)-\((\d+),(\d+)\)$", re.MULTILINE)
 CAUSE = re.compile(r"^\s*╰▻ ?(.*)$")
 GENERIC_CAUSE = re.compile(r"^(Fail to parse yaml|`rule` is not configured|Rule contains invalid)")
+
+
+CANARY = '{"id":"canary","language":"bash","rule":{"kind":"program"}}\n'
+NO_IGNORE = ("--no-ignore", "hidden", "--no-ignore", "dot", "--no-ignore", "exclude", "--no-ignore", "global",
+             "--no-ignore", "parent", "--no-ignore", "vcs")
+
+
+def private_dir() -> str:
+    """A fresh directory only this user can enter."""
+    base = os.environ.get("TMPDIR")
+    if not base or not os.path.isdir(base):
+        base = "/tmp"
+    for _ in range(100):
+        path = os.path.join(base, "guardrails-" + os.urandom(8).hex())
+        try:
+            os.mkdir(path, 0o700)
+        except FileExistsError:
+            continue
+        except OSError as exc:
+            raise Unavailable(f"cannot create a temporary directory in {base}: {exc.strerror or exc}") from exc
+        return path
+    raise Unavailable("cannot create a private temporary directory")
+
+
+def write_private(path: str, data: bytes) -> None:
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_NOFOLLOW, 0o600)
+    with os.fdopen(fd, "wb") as fh:
+        fh.write(data)
+
+
+def remove_tree(folder: str) -> None:
+    for root, dirs, files in os.walk(folder, topdown=False):
+        for name in files:
+            with contextlib.suppress(OSError):
+                os.unlink(os.path.join(root, name))
+        for name in dirs:
+            with contextlib.suppress(OSError):
+                os.rmdir(os.path.join(root, name))
+    with contextlib.suppress(OSError):
+        os.rmdir(folder)
 
 
 class Unavailable(Exception):
@@ -175,63 +216,79 @@ class Cli:
             raise Unavailable(f"cannot run ast-grep: {exc.strerror or exc}") from exc
         return proc.returncode, proc.stdout.decode("utf-8", "replace"), proc.stderr.decode("utf-8", "replace")
 
-    def _scan_args(self, rules: str) -> list[str]:
-        return ["scan", "-c", CONFIG, "--inline-rules", rules, "--json=compact"]
-
     def _failure(self, code: int, err: str) -> Exception:
         if "Cannot parse rule" in err:
             return RuleError(rule_reason(err))
         return Unavailable(f"ast-grep failed (exit {code}): {summary(err)}")
 
-    def check(self, rules: str) -> None:
+    def check(self, rule_files: dict[str, str]) -> None:
         """Raise RuleError when ast-grep does not accept these rules."""
-        code, _, err = self._run([*self._scan_args(rules), "--stdin"], b"true\n")
-        if code != 0:
-            raise self._failure(code, err)
+        self.scan(rule_files, [Src("true")])
 
-    def scan(self, rules: str, sources: list[Src]) -> list[list[Hit]]:
-        """Per source, every match of any rule (by rule id and character range)."""
+    def scan(self, rule_files: dict[str, str], sources: list[Src]) -> list[list[Hit]]:
+        """Per source, every match of any rule (by rule id and character range).
+
+        Rules and sources travel as files in a private temporary directory, so no size of either can overflow the
+        argument list. The reply must be exactly ast-grep's JSON list and must contain its canary match for every
+        non-empty source, or the engine counts as malfunctioning.
+        """
         if not sources:
             return []
-        hits: list[list[Hit]] = [[] for _ in sources]
-        if len(sources) == 1:
-            code, out, err = self._run([*self._scan_args(rules), "--stdin"], sources[0].data)
-            names = {"STDIN": 0}
-        else:
-            import shutil
-            import tempfile
-
-            folder = tempfile.mkdtemp(prefix="guardrails-")
-            try:
-                paths = []
-                for i, src in enumerate(sources):
-                    path = os.path.join(folder, f"u{i}.sh")
-                    with open(path, "wb") as fh:
-                        fh.write(src.data)
-                    paths.append(path)
-                code, out, err = self._run([*self._scan_args(rules), *paths])
-            finally:
-                shutil.rmtree(folder, ignore_errors=True)
-            names = {os.path.basename(p): i for i, p in enumerate(paths)}
+        folder = private_dir()
+        try:
+            os.mkdir(os.path.join(folder, "rules"), 0o700)
+            os.mkdir(os.path.join(folder, "units"), 0o700)
+            write_private(os.path.join(folder, "sgconfig.yml"), b"ruleDirs:\n  - rules\n")
+            write_private(os.path.join(folder, "rules", "canary.yml"), CANARY.encode())
+            for name, text in rule_files.items():
+                write_private(os.path.join(folder, "rules", f"{name}.yml"), text.encode())
+            for i, src in enumerate(sources):
+                write_private(os.path.join(folder, "units", f"u{i}.sh"), src.data)
+            code, out, err = self._run(["scan", "-c", os.path.join(folder, "sgconfig.yml"), "--json=compact",
+                                        *NO_IGNORE, os.path.join(folder, "units")])
+        finally:
+            remove_tree(folder)
         if code != 0:
             raise self._failure(code, err)
+        allowed = {"canary", *rule_files, *(f"{name}c" for name in rule_files)}
+        return self._hits(out, sources, allowed)
+
+    def _hits(self, out: str, sources: list[Src], allowed: set[str]) -> list[list[Hit]]:
         try:
-            found: list[dict[str, Any]] = json.loads(out) if out.strip() else []
+            found = json.loads(out)
+            if not isinstance(found, list):
+                raise TypeError("not a list")
+            hits: list[list[Hit]] = [[] for _ in sources]
+            canary = [False] * len(sources)
             for item in found:
-                at = names[os.path.basename(item["file"])]
+                name = item["file"]
+                named = re.fullmatch(r"u(\d+)\.sh", os.path.basename(name))
+                if named is None:
+                    raise ValueError("unknown file")
+                at = int(named.group(1))
+                rule = item["ruleId"]
                 span = item["range"]["byteOffset"]
-                hits[at].append(Hit(item["ruleId"], sources[at].char(span["start"]), sources[at].char(span["end"])))
-        except (ValueError, KeyError, TypeError) as exc:
+                lo, hi = span["start"], span["end"]
+                if rule not in allowed or not (isinstance(lo, int) and isinstance(hi, int) and 0 <= lo <= hi
+                                               <= len(sources[at].data)):
+                    raise ValueError("unexpected entry")
+                if rule == "canary":
+                    canary[at] = True
+                else:
+                    hits[at].append(Hit(rule, sources[at].char(lo), sources[at].char(hi)))
+        except (ValueError, KeyError, TypeError, IndexError, AttributeError) as exc:
             raise Unavailable(f"ast-grep printed unreadable output: {type(exc).__name__}") from exc
+        if any(src.data and not seen for src, seen in zip(sources, canary)):
+            raise Unavailable("ast-grep did not report its built-in check match, so it is not working")
         return hits
 
     def _dump_args(self, src: Src, fmt: str) -> list[str]:
         return ["run", "-c", CONFIG, "--lang", "bash", f"--pattern={src.text}", f"--debug-query={fmt}", "--stdin"]
 
-    def dump(self, sources: list[Src], fmt: str = "ast", until: float | None = None) -> list[Node]:
+    def dump(self, sources: list[Src], fmt: str = "ast") -> list[Node]:
         """The parse tree of each source, with up to PARALLEL ast-grep processes at once.
 
-        Past `until` no further process is started, so the result may be shorter than `sources`.
+        ast-grep prints a tree only for `--pattern` text, so the text of one unit (at most MAX_UNIT_BYTES) is an argument.
         """
         trees: list[Node] = []
         running: collections.deque[tuple[Src, subprocess.Popen[bytes]]] = collections.deque()
@@ -248,8 +305,6 @@ class Cli:
 
         try:
             for src in sources:
-                if until is not None and time.monotonic() > until:
-                    break
                 if len(running) >= PARALLEL:
                     finish()
                 self._left()
