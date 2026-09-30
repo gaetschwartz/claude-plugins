@@ -35,7 +35,7 @@
       "name": "gdt",
       "category": "development",
       "source": "./plugins/gdt",
-      "description": "Gaëtan's dev tooling — personal development-workflow skills. sdd: autonomous spec-driven development (worktree → specs → plan → adversarial review → execution). memory-optimization: fan-out audit that fact-checks a Claude Code memory store against the live system, consolidates it, and rebuilds MEMORY.md."
+      "description": "Gaëtan's dev tooling — personal development-workflow skills. sdd: autonomous spec-driven development (worktree → specs → plan → adversarial review → execution). memory-optimization: fan-out audit that fact-checks a Claude Code memory store against the live system, consolidates it, and rebuilds MEMORY.md. worktree-sweep: fans a diagnostics backlog (clippy lints, compiler warnings) out to one worktree agent per rule family, lands the fixes linearly, verifies, and cleans up."
     },
     {
       "name": "guardrails",

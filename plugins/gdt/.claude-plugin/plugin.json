@@ -1,10 +1,10 @@
 {
   "name": "gdt",
-  "version": "0.3.0",
+  "version": "0.4.0",
   "author": {
     "name": "Gaëtan Schwartz"
   },
-  "description": "Gaëtan's dev tooling — a growing collection of personal development-workflow skills. sdd: an autonomous spec-driven-development pipeline (worktree → specs → plan → adversarial review → subagent-driven execution). memory-optimization: a subagent fan-out that fact-checks a Claude Code memory store against the live system, then consolidates it and rebuilds MEMORY.md.",
+  "description": "Gaëtan's dev tooling — a growing collection of personal development-workflow skills. sdd: an autonomous spec-driven-development pipeline (worktree → specs → plan → adversarial review → subagent-driven execution). memory-optimization: a subagent fan-out that fact-checks a Claude Code memory store against the live system, then consolidates it and rebuilds MEMORY.md. worktree-sweep: fans a diagnostics backlog (clippy lints, compiler warnings) out to one worktree-isolated agent per rule family, lands the fixes as a linear stack, verifies, and cleans up.",
   "keywords": [
     "autonomous",
     "claude-memory",
@@ -19,6 +19,10 @@
     "spec-driven-development",
     "superpowers",
     "tooling",
+    "worktree",
+    "worktree-sweep",
+    "clippy",
+    "lint",
     "workflow"
   ]
 }
