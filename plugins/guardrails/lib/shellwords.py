@@ -11,6 +11,7 @@ from __future__ import annotations
 import re
 import shlex
 from dataclasses import dataclass, field
+from typing import Any
 
 PUNCT = "();|&\n<>"
 KEYWORDS = {"if", "then", "else", "elif", "fi", "while", "until", "for",
@@ -101,10 +102,17 @@ def _tokens(text: str) -> list[str]:
     return list(lexer)
 
 
-def simple_commands(text: str, depth: int = 0) -> list[SimpleCommand]:
-    """Raise ValueError on unbalanced quotes, like shlex."""
+def simple_commands(text: str, depth: int = 0, table: dict[str, dict[str, Any]] | None = None) -> list[SimpleCommand]:
+    """Raise ValueError on unbalanced quotes, like shlex. table adds user wrappers to the built-in ones."""
     if depth > 3:
         return []
+    wrappers = set(WRAPPERS)
+    opts_with_arg = {name: set(flags) for name, flags in WRAPPER_OPTS_WITH_ARG.items()}
+    for name, entry in (table or {}).items():
+        if name in RECURSE or entry.get("shellString"):
+            continue
+        wrappers.add(name)
+        opts_with_arg.setdefault(name, set()).update(entry.get("flagsWithValue", ()))
 
     text = ANSI_C_QUOTED.sub("''", strip_heredocs(text))
     cmds: list[SimpleCommand] = []
@@ -149,25 +157,25 @@ def simple_commands(text: str, depth: int = 0) -> list[SimpleCommand]:
         if current is not None:
             current.args.append(token)
             continue
-        if ASSIGN.match(token):
+        if ASSIGN.match(token) and not (inline_script and any(c.isspace() for c in token)):
             assigns.append(token)
             continue
         if token.startswith("-"):
             if wrapper == "command" and token in ("-v", "-V"):
                 current = sink
-            elif wrapper and token in WRAPPER_OPTS_WITH_ARG.get(wrapper, ()):
+            elif wrapper and token in opts_with_arg.get(wrapper, ()):
                 skip_next = True
             continue
         if token in KEYWORDS or DURATION.match(token) or PLACEHOLDER.match(token):
             continue
         if inline_script:
-            cmds.extend(simple_commands(token, depth + 1))
+            cmds.extend(simple_commands(token, depth + 1, table))
             inline_script = False
             current = sink
             continue
 
         base = token.rsplit("/", 1)[-1]
-        if base in WRAPPERS:
+        if base in wrappers:
             wrapper = base
             continue
         if base in RECURSE:
@@ -184,6 +192,6 @@ def simple_commands(text: str, depth: int = 0) -> list[SimpleCommand]:
     for groups in SUBST.findall(mask_single_quoted(text)):
         for inner in groups:
             if inner:
-                cmds.extend(simple_commands(inner, depth + 1))
+                cmds.extend(simple_commands(inner, depth + 1, table))
 
     return cmds

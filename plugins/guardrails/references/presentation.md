@@ -64,13 +64,14 @@ The layout contract, all of it computed by the CLI:
   that define an installed rule (`global+project`). A draft has no id yet: `--id-name`, else the rule's own `id`
   field, else `new-rule`. For a draft in a managed file that is not the platform default, a `**File**` line follows
   the title.
-- `**Intent**` (only with `--intent`), `**Match**` (`program`, `args`, `regex`, `builtin`, whichever the rule has),
-  `**Message**` (with `{which:a|b}` resolved).
+- `**Intent**` (only with `--intent`), `**Match**` (`program`, `args`, `regex`, `builtin`, `ast`, whichever the rule
+  has; `ast = <the rule as compact one-line JSON>`), `**Message**` (with `{which:a|b}` resolved).
 - Groups, each omitted when empty: `**Block**` (the matcher catches it, action deny), `**Warn**` (catches it, action
   warn), `**Allow**` (it does not). Rows: `- ✗ <span> <source>` or `- ✓ …`, then ` · wrapped` when only a look-through
   (wrapper such as sudo, xargs or timeout; a `bash -c` string; `$(…)` or backticks; a pipeline member) made the
   program/args/builtin matcher reach the command; that includes a substitution glued to a word or assignment
-  (`foo$(…)`, `x=$(…)`) and `<(…)`. A `regex` match reads the raw text and is never `wrapped`. A command reached inside
+  (`foo$(…)`, `x=$(…)`) and `<(…)`. An `ast` match is `wrapped` by the same definition: found through a wrapper or shell
+  string, or with the matched node inside a pipeline or a substitution. A `regex` match reads the raw text and is never `wrapped`. A command reached inside
   a list (`;`, `&&`, `||`, a newline), a subshell `( … )` or a `{ …; }` group is not a wrapper, so it is not `wrapped`.
 - Spans: every command is an inline-code span right-padded inside the backticks to one width W, the display width of
   the longest command across all groups, capped at 40 (East Asian wide characters and most emoji count two columns, combining marks zero). A command
@@ -81,7 +82,9 @@ The layout contract, all of it computed by the CLI:
   commands and the mismatches. With any mismatch, do not present the card as done: fix the rule or ask the user.
 - `**Note**` (only when there is one): what `rule test` also reports about the real effect: the rule is disabled, a
   required binary is missing, a mode suspends it, the hook or project rules are off. Relay it as printed.
-- `**Raw**` (only when the matcher has a `regex` or `args`): that pattern alone in one span, newlines shown as `⏎`.
+- `**Raw**` (only when the matcher has a `regex`, an `ast` pattern or `args`): that pattern alone in one span, newlines
+  shown as `⏎`. A `regex` wins; with no regex, the `pattern` strings of the `ast` rule in document order joined by
+  ` | `; with neither, the `args` regex.
 - Untrusted text: every field (commands, ids, reasons, messages, problems) is made single-line and safe. A newline
   becomes `⏎`, a tab `⇥`, ESC `␛`, and other control, bidi and zero-width characters `\u{hex}`, so text can never start
   a new line or section; widths are computed on that shown form.
@@ -89,6 +92,14 @@ The layout contract, all of it computed by the CLI:
   plain diagnostics go to stderr.
 - `rule test` checks only the matcher. It does not know modes, retry acknowledgements or the hook being off, which is why
   `Verified` says "matcher checked" and the group heading carries the action.
+
+## Parse tree: `guardrails rule ast '<command>'`
+
+Plain text, not a card: for authors, not for pasting. It prints the command, the number of units, then one tree per
+unit: `tree: command as written`, then `tree: through <wrapper>, source: <rewritten command>` for each wrapper or shell
+string. Each line is a named node, indented by depth, with the text in `«…»` for leaves; text is sanitised like every
+other renderer (newline `⏎`, ESC `␛`). Use it to learn node kinds before writing `inside` / `has` rules. It needs the
+AST matcher and exits 2 with a message when that is unavailable.
 
 ## Status: `guardrails status --render`
 

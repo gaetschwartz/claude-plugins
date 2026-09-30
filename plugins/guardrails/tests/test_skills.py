@@ -58,7 +58,7 @@ class SkillFiles(unittest.TestCase):
         fields, body = frontmatter(SKILLS / "explain" / "SKILL.md")
         patterns = re.findall(r"[A-Za-z]+\([^)]*\)", fields["allowed-tools"])
         self.assertEqual(patterns, ["Bash(guardrails status *)", "Bash(guardrails rule test *)",
-                                    "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"])
+                                    "Bash(guardrails rule ast *)", "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"])
         self.assertEqual(set(fields["disallowed-tools"].split()), {"Edit", "Write", "NotebookEdit"})
         for forbidden in (r"guardrails rule (add|set|rm)", r"guardrails (enable|disable)", r"preset install",
                           r"guardrails mode (on|off|declare|undeclare)", r"sudo (guardrails|python)"):
@@ -89,11 +89,12 @@ class SkillFiles(unittest.TestCase):
                 self.assertNotIn("Write", fields["allowed-tools"])
 
     def test_allowed_tools_are_pinned_and_never_preapprove_changes(self) -> None:
-        pinned = {"new": ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "Bash(guardrails preset list *)",
-                          "AskUserQuestion"],
-                  "edit": ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "AskUserQuestion"],
+        pinned = {"new": ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "Bash(guardrails rule ast *)",
+                          "Bash(guardrails preset list *)", "AskUserQuestion"],
+                  "edit": ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "Bash(guardrails rule ast *)",
+                           "AskUserQuestion"],
                   "explain": ["Bash(guardrails status *)", "Bash(guardrails rule test *)",
-                              "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"],
+                              "Bash(guardrails rule ast *)", "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"],
                   "status": ["Bash(guardrails status *)"]}
         for name, tools in pinned.items():
             with self.subTest(skill=name):
@@ -117,6 +118,13 @@ class SkillFiles(unittest.TestCase):
         for needle in ("\"examples\"", '"expect"', "you chose", "--id-name"):
             self.assertIn(needle, text)
         self.assertIn("status --render --rule", text)
+
+    def test_skills_teach_the_matcher_ladder_and_the_tree_command(self) -> None:
+        for name in ("new", "edit"):
+            text = (SKILLS / name / "SKILL.md").read_text()
+            with self.subTest(skill=name):
+                self.assertIn("guardrails rule ast", text)
+                self.assertRegex(text, r"(?s)`program`.{0,80}`program` \+ `args`.{0,80}`builtin`.{0,80}`ast`.{0,200}`regex`")
 
     def test_presentation_reference_states_the_paste_rule(self) -> None:
         text = (ROOT / "references" / "presentation.md").read_text()

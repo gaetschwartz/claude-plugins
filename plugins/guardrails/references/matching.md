@@ -1,7 +1,12 @@
 # How guardrails matches a command
 
-Everything here is what `lib/engine.py`, `lib/policy.py` and `lib/shellwords.py` do. Check a claim with
-`guardrails rule test` before stating it, but know what it checks.
+Everything here is what `lib/matching.py` (the one evaluation path the hook and every CLI command share),
+`lib/policy.py`, `lib/shellwords.py` (the plain lexer) and `lib/astworker.py` (the syntax-tree matcher) do. Check a
+claim with `guardrails rule test` before stating it, but know what it checks.
+
+Matcher ladder, narrowest first: `program`, then `program` + `args`, then `builtin`, then an `ast` rule (a `pattern`,
+plus `inside` / `has` when context matters), then `regex`. Before writing an `ast` rule with relations, run
+`guardrails rule ast '<command>'` to see the node kinds.
 
 ## What `rule test` does and does not check
 
@@ -17,7 +22,7 @@ substitution, a pipeline member), as opposed to being the command the rule names
 it is never tagged `wrapped`, and a regex hit wins over a look-through hit on the same command. Paste the card; do not
 retell it.
 
-## What the matchers see
+## What the plain matchers see (`program`, `args`, `builtin`)
 
 The command line is split into simple commands at `;` `&&` `||` `|` `&` and newlines. Each simple command is a
 program name plus its own arguments. A rule is checked against every one of them, and the rule fires if any one matches.
@@ -54,8 +59,137 @@ matching, so it also has the false positives described below.
   `program` and `args`.
 - `match.regex`: a regex (`re.search`) over the raw, whole command text, quotes, heredocs and pipelines included. It is
   an alternative: the rule fires when the program/args/builtin part matches OR the regex matches.
+- `match.ast`: an ast-grep rule object over the parsed syntax tree; see the next sections. Like `regex` it is an
+  alternative: the rule fires when the program/args/builtin part matches OR `regex` matches OR `ast` matches.
 - A command with unbalanced quotes cannot be split. The fallback then scans the raw text for the program name (and
   `args` against the raw text); `builtin` never matches there; `regex` works as usual.
+
+## `match.ast`: the syntax tree matcher
+
+`match.ast` is a rule in ast-grep's vocabulary, evaluated on the tree-sitter Bash parse of the command. It sees
+structure that `program`/`args` cannot (nesting in a substitution, a pipeline, a loop, an `if`) and ignores text that
+`regex` cannot tell apart from code (heredoc bodies, single-quoted strings).
+
+**How it combines.** The matchers are alternatives: the rule fires when the `program`/`args`/`builtin` part matches, or
+`regex` matches, or `ast` matches. Inside `ast`, the keys of one object are ANDed, as in ast-grep. A rule whose `match`
+has only `ast` is valid. `args` without `program`/`builtin` still has no effect.
+
+**Supported keys** (anything else is rejected when the rule is added or tested, exit 2):
+
+- `pattern`: a code snippet with metavariables, `$A` for one node and `$$$` for any number; or
+  `{"context": "...", "selector": "command"}` to select a node kind inside a larger snippet.
+- `kind`: a node kind such as `command` or `pipeline` (table below). `regex`: a Rust regex over the node's source text.
+- Relations, each an object that is itself a rule: `inside` (an ancestor matches), `has` (a descendant matches),
+  `follows` and `precedes` (a sibling before or after). They accept `stopBy`: `"neighbor"` (the default: only the
+  nearest level), `"end"` (all the way to the root or the leaf), or a rule to stop at; and `field`, to restrict to a
+  named child field.
+- Composition: `not` (a rule), `any` and `all` (lists of rules).
+
+A rule is compiled when it is added, tested, listed by `status` and run by the hook. The CLI rejects one that does not
+compile (exit 2); the hook skips it and warns once per session.
+
+**Units.** The rule runs on the command as written and on every unit exposed by looking through wrappers (next
+section); a hit anywhere counts. `rule test --render` tags a hit `wrapped` when it was found in such a unit, or when the
+matched node sits inside a pipeline or a substitution (`$(...)`, backticks, `<(...)`): the same meaning as for
+`program`. A command in a list (`;` `&&` `||`), a loop, an `if`, a subshell or a `{ ...; }` group is not `wrapped`. A
+direct hit beats a wrapped one on the same rule.
+
+**Names are normalised first.** `FOO=1 pkill x`, `/usr/bin/pkill x`, `"pkill" x` and `\pkill x` are matched as
+`pkill x` (and count as direct). A pattern that ends in ` $$$` also selects the command with no arguments (in
+tree-sitter-bash a trailing `$$$` hole alone never matches zero arguments, so the engine widens it). A hole INSIDE a
+substitution, such as `kill $($$$)`, never matches anything: express that with `inside` / `has`.
+
+### Tree-sitter Bash node kinds that matter
+
+Verified with `guardrails rule ast '<command>'`:
+
+| kind | what it is |
+|---|---|
+| `program` | the root |
+| `command` | one simple command; children: `variable_assignment` prefixes, `command_name`, then the arguments |
+| `command_name` | the name word; select by name with `{"kind": "command", "has": {"field": "name", "regex": "(^\|/)pkill$"}}` |
+| `word`, `number` | an unquoted argument or flag (`-0` is a `number`) |
+| `string` (child `string_content`) | a double-quoted argument; `$(...)` inside it runs |
+| `raw_string` | a single-quoted argument: data, except as the `-c` string of a shell |
+| `ansi_c_string`, `concatenation` | `$'...'`; adjacent pieces such as `a"b"$c` |
+| `command_substitution` | `$(...)` and backticks; the body is code |
+| `process_substitution` | `<(...)` and `>(...)` |
+| `simple_expansion`, `expansion`, `arithmetic_expansion` | `$x`, `${x}`, `$((1+2))` |
+| `pipeline` | `a \| b` and `a \|& b`; the members are direct children |
+| `list` | `a && b`, `a \|\| b` (left-nested); `;` and newlines only make sibling nodes under `program` |
+| `redirected_statement` | a command or compound with redirects (`file_redirect`, `heredoc_redirect`); a `<<<` is a `herestring_redirect` child of the command |
+| `heredoc_body` (with `heredoc_start`, `heredoc_end`) | heredoc text: data, never a command |
+| `subshell`, `compound_statement` | `( ... )` and `{ ...; }` |
+| `if_statement` (`elif_clause`, `else_clause`) | the condition and the body are both direct children |
+| `while_statement` (also `until`), `for_statement` (also `select`), `c_style_for_statement`, `do_group` | loops; `do_group` is the body |
+| `case_statement`, `case_item`, `function_definition`, `negated_command`, `test_command`, `variable_assignment` | the rest |
+| `ERROR` | the parser could not make sense of part of the text |
+
+### Wrappers: what is looked through
+
+tree-sitter sees `sudo pkill -f vite` as a `command` named `sudo` whose arguments are plain words, and
+`bash -c 'pkill x'` as a command with a `raw_string` argument. So for every command whose name is a known wrapper the
+engine rewrites the source and parses the result as another unit. For a wrapper it drops the wrapper's own words (its
+flags, the values of flags that take one, a `timeout` duration, `env` assignments) and keeps everything around it, so
+relations such as `inside` still see the real surroundings. For a shell (`bash|sh|zsh|dash|ksh -c '...'`, `eval`,
+`watch`, `script -c`) it replaces the command by the string's content, parsed as code. Units nest up to 6 levels and 64
+in all; beyond that the plain lexer is consulted too.
+
+Built in: `sudo doas env timeout nice ionice nohup time command exec builtin stdbuf setsid xargs watch script eval bash
+sh zsh dash ksh`. Each entry is data:
+
+| key | meaning |
+|---|---|
+| `flagsWithValue` | flags that consume the next word (`-u` for `sudo`); `--flag=value` and glued forms are one word anyway |
+| `shellString` | `-c`: the word after that flag (also inside a cluster such as `-lc`) is a shell script; `rest`: all remaining words joined are the script (`eval`, `watch`) |
+| `skip` | positional words to skip after the flags (`timeout` has 1: the duration) |
+| `assignments` | skip leading `NAME=value` words (`env`, `sudo`) |
+| `noCommandFlags` | flags after which nothing is executed (`command -v`) |
+
+Add your own with `guardrails wrapper add <name> --json '{"flagsWithValue": ["-x"]}'` (`--scope global|project|managed`
+and `--path`, like `rule`), `wrapper rm <name>`, `wrapper list`. Layers only add look-through: the effective entry for a
+name is the union of the built-in, managed, global and project entries. Flag lists are unioned; a scalar (`shellString`,
+`skip`) that an earlier one set is kept, so a lower layer can neither remove nor alter a higher layer's entry or a
+built-in. Invalid entries are skipped and reported. The plain lexer (the fallback path) honours the flags of user
+wrappers too.
+
+**False-negative risk.** The first word after the wrapper's known flags is taken as the wrapped command. A wrapper the
+table does not know (`mywrap pkill x`) is an ordinary command, so the `pkill x` inside is not seen, and an unknown flag
+of a known wrapper that takes a value (`sudo --some-flag VALUE pkill x`) makes `VALUE` the command. Declare such
+wrappers and flags. Still not looked through: `ssh host pkill x`, `find . -exec pkill {} ;`, script files, `python -c`,
+`bash <<EOF ... EOF`.
+
+### Data versus code
+
+Code (matched): a command; the body of `$(...)` or backticks, also inside double quotes and in an unquoted heredoc;
+`<(...)`; the `-c` string of a shell and the arguments of `eval`. Data (never matched): a quoted-delimiter heredoc body,
+single-quoted text, the arguments of other commands (`echo pkill`), redirect targets. `regex`, by contrast, reads the raw
+text, so it also fires inside heredocs and quoted strings.
+
+### When to use `regex` instead
+
+Dataflow across commands (`ps | xargs kill` where the PIDs come from the other command, `curl x | sh`) is text spanning
+nodes. A relation often expresses it (`xargs kill` inside a `pipeline`); a regex expresses the rest. A regex also fires
+on text that only mentions the command, including heredocs.
+
+### Idioms
+
+- A command by name, with or without arguments: `{"pattern": "pkill $$$"}`, or the explicit
+  `{"kind": "command", "has": {"field": "name", "regex": "^pkill$"}}`.
+- Only in a context: `{"pattern": "pgrep $$$", "inside": {"any": [{"kind": "command_substitution"}, {"kind": "pipeline"}], "stopBy": "end"}}`.
+- Not at top level: `inside` with `stopBy: "end"` and the container kinds you care about.
+
+### Requirements and fallback
+
+The matcher needs `uv` and the PyPI wheel `ast-grep-py` (pinned; it bundles the Bash grammar). One `uv run --with`
+process serves a whole hook call, and only when an enabled rule with `match.ast` could apply: a call without such rules
+never starts `uv`. The hook uses `uv`'s offline cache first; when that misses it tries one download within a short
+deadline and remembers a failure for ten minutes. A SessionStart hook fills the cache in the background when an enabled
+rule uses `match.ast`. If `uv` is missing, the download fails or the run exceeds its deadline, the hook does not allow
+silently: every other rule is evaluated by the plain lexer and regex as usual, the `match.ast` rules are skipped for that
+call, and the session gets one `systemMessage` warning. `rule test` prints the same degradation as a note and exits 0.
+When the parse tree has `ERROR` or missing nodes (unbalanced quotes, an unterminated heredoc), the commands found by the
+plain lexer are matched against `match.ast` rules too.
 
 ## Pipelines: `args` does not see them
 
@@ -111,10 +245,12 @@ Check these in order when a command the matcher selects still runs:
 5. A listed mode is active (switched on persistently, or for this session), so the rule is suspended.
 6. `retry: same-command` and the identical command was already blocked once this session.
 7. `action: warn`: the command runs, the agent only gets the message.
-8. The rule is invalid (bad regex, unknown builtin): a global or project rule is skipped and only `status` reports it;
-   an invalid managed rule is skipped with a warning.
+8. The rule is invalid (bad regex, unknown builtin, an `ast` rule that does not compile): a global or project rule is
+   skipped and only `status` reports it (a non-compiling `ast` rule also warns once per session); an invalid managed
+   rule is skipped with a warning.
 9. The command has unbalanced quotes, so the raw-text fallback applies: `builtin` never matches there.
 10. The rule's `tool` is not `Bash`.
+    (A rule with `match.ast` is also skipped while the AST matcher is unavailable; the session got a warning.)
 11. A lower layer cannot loosen a higher one: a global or project entry with `enabled: false` or `action: warn` over a
     managed or global rule has no effect, so a rule that "should have been turned off" may still be enforced.
 

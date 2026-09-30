@@ -11,15 +11,17 @@ import sys
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+import astrun
+import matching
 import policy
 import render
 import store
+import wrappers as wrapper_table
 from policy import Invalid, view
-from shellwords import simple_commands
 
 PRESETS_DIR = os.path.join(os.path.dirname(store.HERE), "presets")
 SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description",
-            "program", "args", "builtin", "regex", "requires")
+            "program", "args", "builtin", "regex", "ast", "requires")
 SCOPES = ("global", "project", "managed")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
@@ -183,6 +185,8 @@ def describe_match(rule: policy.Rule) -> str:
     for key in ("args", "builtin", "regex"):
         if match.get(key):
             bits.append(f"{key}={match[key]}")
+    if match.get("ast"):
+        bits.append("ast=" + render.compact(match["ast"]))
     if isinstance(rule.get("requires"), list):
         bits.append("requires=" + "|".join(str(r) for r in rule["requires"]))
     return " ".join(bits) or "(no matcher)"
@@ -255,6 +259,17 @@ def snapshot(args: Args) -> Snapshot:
             if m not in modes:
                 report(f"rule {rid}: mode '{m}' is not declared (the rule stays enforced)",
                        *rule_origins.get(rid, []))
+    asts = {rid: ast for rid, rule in rules.items() if rule.get("enabled") is True and (ast := policy.ast_of(rule))
+            and not any(p.startswith(f"rule {rid}:") for p in problems)}
+    if asts:
+        where = sorted({layer for rid in asts for layer in rule_origins.get(rid, [])})
+        try:
+            for rid, why in matching.check(asts, state_dir()).items():
+                report(f"rule {rid}: match.ast does not compile ({why}) (skipped by the hook)",
+                       *rule_origins.get(rid, []))
+        except astrun.Unavailable as exc:
+            report(f"match.ast rules ({', '.join(sorted(asts))}) cannot be evaluated: {exc}; the hook skips them and "
+                   "warns once per session", *where)
     return Snapshot(extra, sources, mstate, gstate, pstate, gpath, ppath, gstate.get("enabled", True) is not False,
                     rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers)
 
@@ -424,11 +439,27 @@ def cmd_status(args: Args) -> int:
     return 0
 
 
+def check_ast_rule(rule: policy.Rule) -> str:
+    """Raise Invalid when match.ast does not compile; a note when it could not be checked."""
+    ast = policy.ast_of(rule)
+    if not ast:
+        return ""
+    try:
+        errors = matching.check({"rule": ast}, state_dir())
+    except astrun.Unavailable as exc:
+        return (f"note: match.ast was not compile-checked ({exc}); the hook skips a rule that does not compile and "
+                "warns once per session")
+    if errors:
+        raise Invalid(f"match.ast does not compile: {errors['rule']}")
+    return ""
+
+
 def cmd_rule_add(args: Args) -> int:
     require_user(args, "rule add")
     check_name("rule", args.id)
     rule, _ = split_envelope(load_json(args.json, "--json"))
     policy.validate_rule(rule)
+    unchecked = check_ast_rule(rule)
     rule["setBy"] = stamp(args.reason)
     scope = resolve_scope(args)
     path = scope_path(scope, args)
@@ -441,6 +472,8 @@ def cmd_rule_add(args: Args) -> int:
 
     existed = change_state(scope, path, change)
     print(f"{'replaced' if existed else 'added'} rule {args.id} in {path}")
+    if unchecked:
+        print(unchecked)
     if scope != "managed" and args.id in managed_rule_ids(args):
         print(f"note: {args.id} is also a managed rule; this entry can only tighten it, not reword it")
     note = always_enforced(scope, args.id, rule)
@@ -466,6 +499,8 @@ def apply_assignment(rule: dict[str, Any], key: str, value: str) -> None:
         match = dict(view(rule, "match"))
         if not value:
             match.pop(key, None)
+        elif key == "ast":
+            match[key] = load_json(value, "ast")
         elif key == "program":
             names = [x.strip() for x in value.split(",") if x.strip()]
             match["program"] = names[0] if len(names) == 1 else names
@@ -505,6 +540,8 @@ def json_assignments(fields: object) -> list[tuple[str, str]]:
             text = ",".join(value)
         elif isinstance(value, str):
             text = value
+        elif isinstance(value, dict) and key == "ast":
+            text = json.dumps(value)
         else:
             raise Invalid(f"--json key {key!r} must be a string, a list of strings or (for enabled) a boolean")
         pairs.append((key, text))
@@ -531,6 +568,8 @@ def cmd_rule_set(args: Args) -> int:
     base = policy.effective_rules({}, store.load(store.global_state_path()), {}).get(args.id) \
         if scope == "project" else None
 
+    unchecked: list[str] = []
+
     def change(state: store.State) -> policy.Rule:
         rules = table(state, "rules")
         if not isinstance(rules.get(args.id), dict):
@@ -541,11 +580,14 @@ def cmd_rule_set(args: Args) -> int:
         for key, value in pairs:
             apply_assignment(rule, key, value)
         policy.validate_rule(policy.merge_rule(base, rule) if base is not None else rule)
+        unchecked.append(check_ast_rule(rule))
         rule["setBy"] = stamp(args.reason)
         return rule
 
     rule = change_state(scope, path, change)
     print(f"updated rule {args.id} in {path}")
+    if unchecked and unchecked[-1]:
+        print(unchecked[-1])
     if base is not None:
         notes = ineffective(pairs, base)
         if notes:
@@ -630,12 +672,27 @@ def example_list(data: Any) -> list[Example]:
     return out
 
 
+def state_dir() -> str:
+    return os.path.dirname(store.global_state_path())
+
+
+def wrapper_table_for(mstate: store.State, gstate: store.State, pstate: store.State) -> wrapper_table.Table:
+    return policy.effective_wrappers(mstate, gstate, pstate)
+
+
 def verdict(rule: policy.Rule, command: str) -> str | None:
-    try:
-        cmds = simple_commands(command)
-    except ValueError:
-        cmds = None
-    return policy.match_kind(rule, command, cmds)
+    table = wrapper_table_for(store.load_managed()[0], store.load(store.global_state_path()),
+                              store.load(store.project_state_path()))
+    return matching.evaluate(command, {"rule": rule}, table, state_dir()).kinds["rule"]
+
+
+def ast_notes(rule: policy.Rule, degraded: str | None) -> list[str]:
+    notes = []
+    if degraded:
+        notes.append(f"the AST matcher could not run ({degraded}), so match.ast was NOT evaluated and these verdicts "
+                     "cover only program/args/builtin/regex; the hook skips match.ast the same way and warns once "
+                     "per session")
+    return notes
 
 
 def cmd_rule_test(args: Args) -> int:
@@ -684,7 +741,14 @@ def cmd_rule_test(args: Args) -> int:
     notes = effect_notes(args, rule, layers, mstate, gstate, pstate)
     if file and not store.hook_enforces(file):
         notes.append(f"the hook enforces {file} only if {store.MANAGED_ENV} points at it")
-    results = [render.Result(cmd, source, verdict(rule, cmd), expect) for cmd, source, expect in examples]
+    table = wrapper_table_for(mstate, gstate, pstate)
+    evaluations = [matching.evaluate(cmd, {rid: rule}, table, state_dir()) for cmd, _, _ in examples]
+    broken = {rid_: why for ev in evaluations for rid_, why in ev.invalid.items()}
+    if broken:
+        raise Invalid(f"match.ast does not compile: {broken[rid]}")
+    notes += ast_notes(rule, next((ev.degraded for ev in evaluations if ev.degraded), None))
+    results = [render.Result(cmd, source, ev.kinds[rid], expect)
+               for (cmd, source, expect), ev in zip(examples, evaluations)]
     if args.render:
         print(render.rule_card(rid, rule, policy.programs_of(rule), policy.render(rule["message"]), scope,
                                args.intent or "", results, notes, file))
@@ -702,6 +766,113 @@ def cmd_rule_test(args: Args) -> int:
     for result in results:
         print(f"  {'match' if result.matched else '-':<7}{render.clean(result.cmd, chr(92) + 'n')}")
     print(render.clean(f"message: {policy.render(rule['message'])}", chr(92) + "n"))
+    return 0
+
+
+def cmd_rule_ast(args: Args) -> int:
+    if not args.command.strip():
+        raise Invalid("the command must not be blank")
+    mstate, gstate, pstate = (managed_state(args), store.load(store.global_state_path()),
+                              store.load(store.project_state_path()))
+    try:
+        response = matching.tree(args.command, wrapper_table_for(mstate, gstate, pstate), state_dir())
+    except astrun.Unavailable as exc:
+        raise Invalid(f"the AST engine is unavailable: {exc}") from exc
+    units = response["units"]
+    print(render.clean(f"command: {args.command}"))
+    print(f"units: {len(units)} (1 as written, {len(units) - 1} through wrappers or shell strings)")
+    if response.get("limited"):
+        print("note: the wrapper nesting limit was reached; deeper units are not shown or matched")
+    for unit in units:
+        print()
+        if unit["label"]:
+            print(render.clean(f"tree: through {unit['label']}, source: {unit['src']}"))
+        else:
+            print("tree: command as written")
+        for depth, kind, text in unit["nodes"]:
+            leaf = f" \u00ab{render.clean(text)}\u00bb" if text is not None else ""
+            print(f"{'  ' * (depth + 1)}{render.clean(kind)}{leaf}")
+        if unit["broken"]:
+            print("note: the parser reported errors here (ERROR or MISSING nodes); the hook also checks with the "
+                  "plain lexer")
+    return 0
+
+
+def wrapper_entry(args: Args) -> dict[str, Any]:
+    entry = load_json(args.json, "--json")
+    try:
+        wrapper_table.validate(args.name, entry)
+    except ValueError as exc:
+        raise Invalid(str(exc)) from exc
+    return entry
+
+
+def cmd_wrapper_add(args: Args) -> int:
+    require_user(args, "wrapper add")
+    entry = wrapper_entry(args)
+    scope = resolve_scope(args)
+    path = scope_path(scope, args)
+    entry["setBy"] = stamp(args.reason)
+
+    def change(state: store.State) -> bool:
+        wrappers = table(state, "wrappers")
+        existed = args.name in wrappers
+        wrappers[args.name] = entry
+        return existed
+
+    existed = change_state(scope, path, change)
+    print(f"{'replaced' if existed else 'added'} wrapper {args.name} in {path}")
+    if args.name in wrapper_table.DEFAULTS:
+        print(f"note: {args.name} is built in; this entry only adds to it")
+    return 0
+
+
+def cmd_wrapper_rm(args: Args) -> int:
+    require_user(args, "wrapper rm")
+    scope = resolve_scope(args)
+    path = scope_path(scope, args)
+
+    def change(state: store.State) -> None:
+        wrappers = table(state, "wrappers")
+        if args.name not in wrappers:
+            built = " (built-in wrappers cannot be removed)" if args.name in wrapper_table.DEFAULTS else ""
+            raise Invalid(f"no wrapper '{args.name}' in {path}{built}")
+        del wrappers[args.name]
+
+    change_state(scope, path, change)
+    print(f"removed wrapper {args.name} from {path}")
+    return 0
+
+
+def describe_wrapper(entry: dict[str, Any]) -> str:
+    bits = []
+    if entry.get("flagsWithValue"):
+        bits.append("flags-with-value " + ",".join(entry["flagsWithValue"]))
+    if entry.get("shellString"):
+        bits.append(f"shell-string {entry['shellString']}")
+    if entry.get("skip"):
+        bits.append(f"skip {entry['skip']}")
+    if entry.get("assignments"):
+        bits.append("assignments")
+    if entry.get("noCommandFlags"):
+        bits.append("no-command-flags " + ",".join(entry["noCommandFlags"]))
+    return "; ".join(bits) or "no options"
+
+
+def cmd_wrapper_list(args: Args) -> int:
+    mstate = managed_state(args)
+    gstate, pstate = store.load(store.global_state_path()), store.load(store.project_state_path())
+    effective = policy.effective_wrappers(mstate, gstate, pstate)
+    origins = policy.origins("wrappers", mstate, gstate, pstate)
+    shown = False
+    for name in sorted(effective):
+        layers = (["builtin"] if name in wrapper_table.DEFAULTS else []) + origins.get(name, [])
+        if args.scope and args.scope not in layers:
+            continue
+        shown = True
+        print(render.clean(f"{name} [{'+'.join(layers)}]: {describe_wrapper(effective[name])}"))
+    if not shown:
+        print(f"no wrappers with a {args.scope} entry")
     return 0
 
 
@@ -939,6 +1110,20 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("--intent", help="with --render: the rule's intent line")
     test.add_argument("--id-name", help="with --render and --json: the id shown in the title")
     test.add_argument("--scope", choices=SCOPES, help="with --json: the scope shown in the title (default: global)")
+    ast = rule.add_parser("ast", parents=[common, pathed], help="print the parse tree of a command, with the units "
+                          "its wrappers and shell strings expose")
+    ast.add_argument("command", metavar="CMD")
+
+    wrapper = verbs.add_parser("wrapper", help="commands the matcher looks through (sudo, env, bash -c, ...)"
+                               ).add_subparsers(dest="op", required=True)
+    wadd = wrapper.add_parser("add", parents=[common, scoped], help="add or extend a wrapper")
+    wadd.add_argument("name")
+    wadd.add_argument("--json", required=True, help='{"flagsWithValue": [...], "shellString": "-c", "skip": N, '
+                      '"assignments": true, "noCommandFlags": [...]} as JSON, @<file> or - for stdin')
+    wrm = wrapper.add_parser("rm", parents=[common, scoped], help="remove a wrapper entry from a scope")
+    wrm.add_argument("name")
+    wlist = wrapper.add_parser("list", parents=[common, pathed], help="list the effective wrappers")
+    wlist.add_argument("--scope", choices=SCOPES, help="list only wrappers with an entry in this layer")
 
     mode = verbs.add_parser("mode", help="declare modes and switch them on or off").add_subparsers(dest="op",
                                                                                                 required=True)
@@ -972,6 +1157,10 @@ HANDLERS: dict[tuple[str, str | None], Callable[[Args], int]] = {
     ("rule", "set"): cmd_rule_set,
     ("rule", "rm"): cmd_rule_rm,
     ("rule", "test"): cmd_rule_test,
+    ("rule", "ast"): cmd_rule_ast,
+    ("wrapper", "add"): cmd_wrapper_add,
+    ("wrapper", "rm"): cmd_wrapper_rm,
+    ("wrapper", "list"): cmd_wrapper_list,
     ("mode", "declare"): cmd_mode_declare,
     ("mode", "undeclare"): cmd_mode_undeclare,
     ("mode", "on"): cmd_mode_on,

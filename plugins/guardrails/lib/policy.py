@@ -7,6 +7,7 @@ import shutil
 from collections.abc import Sequence
 from typing import Any, Callable
 
+import wrappers as wrapper_table
 from shellwords import SimpleCommand
 
 Rule = dict[str, Any]
@@ -14,7 +15,11 @@ Mode = dict[str, Any]
 
 ACTIONS = ("deny", "warn")
 RETRIES = ("none", "same-command")
-MATCH_KEYS = ("program", "args", "builtin", "regex")
+MATCH_KEYS = ("program", "args", "builtin", "regex", "ast")
+AST_KEYS = ("pattern", "kind", "regex", "inside", "has", "follows", "precedes", "not", "any", "all", "stopBy", "field")
+AST_RELATIONS = ("inside", "has", "follows", "precedes")
+AST_PATTERN_KEYS = ("context", "selector", "strictness")
+AST_MAX_DEPTH = 12
 PLACEHOLDER = re.compile(r"\{which:([^{}]+)\}")
 
 GREPS = {"grep", "egrep", "fgrep"}
@@ -76,6 +81,65 @@ def _str_list(value: object) -> bool:
     return isinstance(value, list) and all(isinstance(x, str) and x for x in value)
 
 
+def validate_ast(node: object, path: str = "match.ast", depth: int = 0) -> None:
+    """Structural check of an ast-grep rule object (supported keys only); compiling it needs ast-grep itself."""
+    if depth > AST_MAX_DEPTH:
+        raise Invalid(f"'{path}' is nested too deeply")
+    if not isinstance(node, dict) or not node:
+        raise Invalid(f"'{path}' must be a non-empty object")
+    unknown = set(node) - set(AST_KEYS)
+    if unknown:
+        raise Invalid(f"'{path}' has unsupported keys: {', '.join(sorted(unknown))} (supported: {', '.join(AST_KEYS)})")
+    pattern = node.get("pattern")
+    if "pattern" in node:
+        if isinstance(pattern, dict):
+            if not isinstance(pattern.get("context"), str) or set(pattern) - set(AST_PATTERN_KEYS) \
+                    or not all(isinstance(v, str) for v in pattern.values()):
+                raise Invalid(f"'{path}.pattern' object needs a string 'context' and only "
+                              f"{', '.join(AST_PATTERN_KEYS)}")
+        elif not isinstance(pattern, str) or not pattern.strip():
+            raise Invalid(f"'{path}.pattern' must be a non-empty string or a {{context, selector}} object")
+    for key in ("kind", "regex", "field"):
+        if key in node and not (isinstance(node[key], str) and node[key]):
+            raise Invalid(f"'{path}.{key}' must be a non-empty string")
+    for key in AST_RELATIONS + ("not",):
+        if key in node:
+            validate_ast(node[key], f"{path}.{key}", depth + 1)
+    for key in ("any", "all"):
+        if key in node:
+            items = node[key]
+            if not isinstance(items, list) or not items:
+                raise Invalid(f"'{path}.{key}' must be a non-empty list of rules")
+            for i, item in enumerate(items):
+                validate_ast(item, f"{path}.{key}[{i}]", depth + 1)
+    if "stopBy" in node:
+        stop = node["stopBy"]
+        if isinstance(stop, dict):
+            validate_ast(stop, f"{path}.stopBy", depth + 1)
+        elif stop not in ("neighbor", "end"):
+            raise Invalid(f"'{path}.stopBy' must be \"neighbor\", \"end\" or a rule")
+
+
+def ast_of(rule: Rule) -> dict[str, Any] | None:
+    ast = view(rule, "match").get("ast")
+    return ast if isinstance(ast, dict) else None
+
+
+def ast_patterns(node: object) -> list[str]:
+    """Every pattern string in an ast rule, in document order."""
+    out: list[str] = []
+    if isinstance(node, dict):
+        for key, value in node.items():
+            if key == "pattern":
+                out.append(value if isinstance(value, str) else str(view(value, "context")))
+            else:
+                out += ast_patterns(value)
+    elif isinstance(node, list):
+        for item in node:
+            out += ast_patterns(item)
+    return out
+
+
 def validate_rule(rule: object) -> None:
     if not isinstance(rule, dict):
         raise Invalid("a rule must be a JSON object")
@@ -85,8 +149,8 @@ def validate_rule(rule: object) -> None:
     if "messageShort" in rule and not isinstance(rule["messageShort"], str):
         raise Invalid("'messageShort' must be a string")
     match = rule.get("match")
-    if not isinstance(match, dict) or not any(match.get(k) for k in ("program", "builtin", "regex")):
-        raise Invalid("'match' needs at least one of 'program', 'builtin', 'regex'")
+    if not isinstance(match, dict) or not any(match.get(k) for k in ("program", "builtin", "regex", "ast")):
+        raise Invalid("'match' needs at least one of 'program', 'builtin', 'regex', 'ast'")
     unknown = set(match) - set(MATCH_KEYS)
     if unknown:
         raise Invalid(f"unknown match keys: {', '.join(sorted(unknown))}")
@@ -96,6 +160,8 @@ def validate_rule(rule: object) -> None:
     builtin = match.get("builtin")
     if builtin is not None and builtin not in BUILTINS:
         raise Invalid(f"unknown builtin '{builtin}' (known: {', '.join(sorted(BUILTINS))})")
+    if "ast" in match:
+        validate_ast(match["ast"])
     for key in ("args", "regex"):
         if key in match:
             if not isinstance(match[key], str):
@@ -189,6 +255,14 @@ def effective_rules(managed: object, global_state: object, project_state: object
     return rules
 
 
+def effective_wrappers(managed: object, global_state: object, project_state: object) -> wrapper_table.Table:
+    """Built-in wrappers plus every layer's additions; a layer can only add look-through, never remove it."""
+    layers = [managed, global_state]
+    if not isinstance(project_state, dict) or project_state.get("enabled", True) is not False:
+        layers.append(project_state)
+    return wrapper_table.effective(*layers)
+
+
 def _mode(m: dict[str, Any]) -> Mode:
     return {"description": str(m.get("description", "")), "agentMayEnable": m.get("agentMayEnable") is True,
             "active": m.get("active") is True}
@@ -234,8 +308,16 @@ def managed_layer(sources: Sequence[tuple[str, object]]) -> tuple[dict[str, Any]
     problems: list[str] = []
     rules: dict[str, Rule] = {}
     modes: dict[str, Mode] = {}
+    extra: dict[str, dict[str, Any]] = {}
     for path, state in sources:
         problems += _shape_problems(path, state)
+        problems += wrapper_table.problems(f"managed state {path}", state)
+        for name, entry in _entries(state, "wrappers").items():
+            try:
+                wrapper_table.validate(name, entry)
+            except ValueError:
+                continue
+            extra[name] = wrapper_table.merge(extra.get(name, {}), entry)
         for name, m in _entries(state, "modes").items():
             modes[name] = merge_mode(modes[name], m, False) if name in modes else _mode(m)
         for rid, r in _entries(state, "rules").items():
@@ -251,7 +333,10 @@ def managed_layer(sources: Sequence[tuple[str, object]]) -> tuple[dict[str, Any]
                          "suspend the rule" for m in modes_of(rule) if m not in modes]
             rule["modes"] = [m for m in modes_of(rule) if m in modes]
             rules[rid] = rule
-    return {"rules": rules, "modes": modes}, problems
+    layer: dict[str, Any] = {"rules": rules, "modes": modes}
+    if extra:
+        layer["wrappers"] = extra
+    return layer, problems
 
 
 def active_modes(modes: dict[str, Mode], session: object) -> dict[str, dict[str, Any]]:

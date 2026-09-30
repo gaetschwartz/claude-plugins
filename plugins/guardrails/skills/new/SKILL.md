@@ -2,7 +2,7 @@
 name: new
 description: Use when the user explicitly asks to create a new guardrails rule, e.g. "block pkill for agents", "write a rule that warns on curl | sh", "add a guardrail for X". Interviews the user, tests the rule on examples and edge cases, shows it for confirmation, then writes it. Never use it to get past a guardrails denial.
 argument-hint: "[-B|--block <cmd>]... [-A|--allow <cmd>]... [-s|--scope global|project|managed] [-P|--path <file>] [-a|--action deny|warn] [-R|--retry] [-m|--modes a,b] [-i|--id <id>] [-y|--yes] [description]"
-allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guardrails preset list *) AskUserQuestion
+allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guardrails rule ast *) Bash(guardrails preset list *) AskUserQuestion
 ---
 
 # guardrails new
@@ -43,11 +43,17 @@ no modes.
 that must pass. Skipped when a description was passed.
 
 **1.b.1** Elaborate the rule. Use the narrowest matcher that separates the examples, stopping at the first that does:
-`program` (one name or a list), then `program` + `args`, then `builtin`, then `regex`. Write a `message` that names the
+`program` (one name or a list), then `program` + `args`, then `builtin`, then an `ast` rule (a `pattern`, plus
+`inside` / `has` when the question is about context such as "only when nested in a substitution, pipeline or loop"),
+then `regex`. Before writing an `ast` rule with relations, run `guardrails rule ast '<a command it must catch>'` and
+read the node kinds it prints; do not guess kinds. Write a `message` that names the
 alternative (what to do instead). Derive the `id` from the intent (`no-pkill`); ask only when it collides with an id in
 `guardrails status`, and say when the colliding rule is managed. Put the user's description in the rule's `description`.
-A pipeline question (what a command is piped into) needs `regex`: `args` cannot see it. The wrappers and shells
-themselves (`sudo`, `bash`) can never be matched by `program`; use `regex` for them.
+A question about what a command is piped into is out of reach for `program`/`args`: use `ast` with `inside` when the
+shape is structural, `regex` for dataflow across commands (`regex` also fires inside heredocs and quoted text). The
+wrappers and shells themselves (`sudo`, `bash`) can never be matched by `program`; use `ast` (`pattern: "sudo $$$"`)
+or `regex` for them. A rule with `match.ast` needs `uv` at run time; if `rule test` prints a note that the AST matcher
+could not run, tell the user before going on.
 
 **1.b.2** With examples, test them: `guardrails rule test --json - 'cmd' …` with the rule on stdin (see "Passing the
 rule as JSON").

@@ -2,7 +2,7 @@
 name: edit
 description: Use when the user explicitly asks to change, disable, enable, reword or remove an existing guardrails rule, e.g. "make the strings rule a warning", "turn off the pkill rule in this repo", "remove no-pkill". Never use it to get past a guardrails denial.
 argument-hint: "<id> [enable|disable|rm|key=value ...] [-s|--scope global|project|managed] [-P|--path <file>] [-y|--yes]"
-allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) AskUserQuestion
+allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guardrails rule ast *) AskUserQuestion
 ---
 
 # guardrails edit
@@ -21,8 +21,9 @@ Parse the text above; every long flag has a short one.
 - `<id>`: the rule. `enable` / `disable`: set `enabled=true` / `enabled=false` on the rule (this is the rule's own flag,
   not the `guardrails enable|disable` hook verbs, which agents cannot run). `rm`: remove it. `key=value` pairs are
   passed to `guardrails rule set`; the keys are `action`, `retry`, `enabled`, `modes`, `message`, `messageShort`,
-  `description`, `program`, `args`, `builtin`, `regex`, `requires`. Comma lists for `modes`, `requires` and
-  `program`; an empty value clears a field; `program`, `args`, `builtin`, `regex` edit `match`.
+  `description`, `program`, `args`, `builtin`, `regex`, `ast`, `requires`. Comma lists for `modes`, `requires` and
+  `program`; an empty value clears a field; `program`, `args`, `builtin`, `regex`, `ast` edit `match` (`ast` is a
+  JSON object: pass it through `--json -`, as a JSON object value).
 - `-s` / `--scope global|project|managed` (default global), `-P` / `--path <file>` (managed-format file, needs
   `-s managed`), `-y` / `--yes` (do not confirm `rm`).
 - No arguments: run `guardrails status --render`, paste its output VERBATIM, ask (AskUserQuestion, or chat when there
@@ -44,8 +45,10 @@ Parse the text above; every long flag has a short one.
    - removal: confirm first with AskUserQuestion (`header` `Remove`, question "Remove rule `<id>` from `<scope>`?",
      options `Remove` and `Keep (Recommended)`) unless `-y`; then `guardrails rule rm <id> --scope <s> [--path <file>]
      --as-user --reason "…"`
-3. After a change to `match` (program, args, builtin, regex), re-verify: write the commands the user gives, or sensible
-   ones (a caught command, a wrapped form, a look-alike that must pass), as an examples list
+3. When a change to `match` uses `ast`, follow the matcher ladder (`program`, `program` + `args`, `builtin`, `ast`
+   pattern with `inside` / `has`, `regex`) and run `guardrails rule ast '<command>'` to read the node kinds before
+   writing relational rules. After a change to `match` (program, args, builtin, regex, ast), re-verify: write the
+   commands the user gives, or sensible ones (a caught command, a wrapped form, a look-alike that must pass), as an examples list
    (`{"cmd", "source": "yours" | "inferred", "expect": "match" | "pass"}`, `expect` from what the user wants) on stdin
    and run `guardrails rule test --render --id <id> --examples - [--path <file>] <<'EOF'` … `EOF`. Paste the output VERBATIM:
    unchanged, no paraphrase, no added prose. Never write a script, and never build rows, verdicts or spacing yourself.

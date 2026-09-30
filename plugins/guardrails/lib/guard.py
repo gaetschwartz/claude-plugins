@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""guardrails entry point: no arguments → PreToolUse hook reading stdin; arguments → CLI (see --help)."""
+"""guardrails entry point: no arguments → PreToolUse hook reading stdin; `warm` → SessionStart cache warm-up; other arguments → CLI (see --help)."""
 
 from __future__ import annotations
 
@@ -17,6 +17,12 @@ def main(argv: list[str] | None = None) -> int:
     if not args:
         try:
             engine.run_hook(sys.stdin, sys.stdout)
+        except Exception:  # noqa: BLE001, S110
+            pass
+        return 0
+    if args == ["warm"]:
+        try:
+            engine.run_warm(sys.stdin)
         except Exception:  # noqa: BLE001, S110
             pass
         return 0

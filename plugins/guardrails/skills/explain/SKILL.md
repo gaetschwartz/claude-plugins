@@ -5,14 +5,14 @@ argument-hint: "[<id>] [-c|--command '<cmd>'] [-s|--scope global|project|managed
 context: fork
 model: sonnet
 background: false
-allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)
+allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guardrails rule ast *) Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)
 disallowed-tools: Edit Write NotebookEdit
 ---
 
 # guardrails explain
 
 Explain what a guardrails rule covers and why a command was or was not caught. Read-only: run only
-`guardrails status` and `guardrails rule test`. Never run a command that adds, sets, removes, enables or disables
+`guardrails status`, `guardrails rule test` and `guardrails rule ast`. Never run a command that adds, sets, removes, enables or disables
 anything, and never suggest editing a rule because a command was blocked.
 
 Arguments: $ARGUMENTS
@@ -57,13 +57,17 @@ plain chat what to explain instead.)
    command spans or verdicts of your own. State the cause when the matching reference explains it; do not hedge and do
    not say "possibly". The reference covers the usual causes:
    - a wrapper or `bash -c` was looked through, or was not (ssh, `find -exec`, scripts are invisible)
-   - `args` only sees that one command's own arguments, so a pipe to `sh` is invisible to it and needs `match.regex`
+   - `args` only sees that one command's own arguments, so a pipe to `sh` is invisible to it and needs `match.ast`
+     (an `inside` relation) or `match.regex`
+   - for a rule with `match.ast`: run `guardrails rule ast '<cmd>'` to show the tree and the wrapper units; the
+     matcher may have been unavailable (a note says so), a wrapper or flag may be unknown to the wrapper table, or the
+     text was data (a heredoc body, single quotes)
    - the rule was suspended by an active mode, disabled, or skipped because `requires` is not installed, or the hook
      or project rules are switched off (the "Why a rule may not fire" list)
    - `program` never matches a wrapper or shell itself (`sudo`, `bash`); `bash script.sh` is program `script.sh`
    - a retry acknowledged the identical command earlier in the session
    - a project or global entry cannot loosen what a higher layer defines; a managed rule without modes is always
      enforced
-6. When the fix for a pipeline case is a rule change, name `match.regex` as the fix and leave the change to the user
+6. When the fix for a pipeline case is a rule change, name `match.ast` (or `match.regex`) as the fix and leave the change to the user
    (`guardrails:edit`). The card's `Verified` line and `Note` come from `rule test`, which checks only the matcher:
    take mode, retry and warn-versus-deny behaviour from `status` and the reference.

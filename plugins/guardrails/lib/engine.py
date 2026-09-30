@@ -8,9 +8,11 @@ import os
 import sys
 from typing import IO, Any
 
+import astrun
+import matching
 import policy
 import store
-from shellwords import SimpleCommand, simple_commands
+import wrappers as wrapper_table
 
 Session = dict[str, Any]
 Output = dict[str, Any]
@@ -71,13 +73,26 @@ def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode],
     return "\n\n".join(paragraphs), changed
 
 
+def candidates_of(rules: dict[str, policy.Rule]) -> dict[str, policy.Rule]:
+    """The rules that could act on a Bash command here: enabled, for Bash, valid, and with their binaries installed."""
+    out: dict[str, policy.Rule] = {}
+    for rid in sorted(rules):
+        rule = rules[rid]
+        if rule.get("enabled") is not True or rule.get("tool") != "Bash":
+            continue
+        try:
+            policy.validate_rule(rule)
+        except policy.Invalid:
+            continue
+        if policy.requirements_met(rule):
+            out[rid] = rule
+    return out
+
+
 def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, policy.Mode],
              session: Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
-             warnings: tuple[str, ...] = ()) -> tuple[Output | None, bool]:
-    try:
-        cmds: list[SimpleCommand] | None = simple_commands(command)
-    except ValueError:
-        cmds = None
+             warnings: tuple[str, ...] = (), table: wrapper_table.Table | None = None,
+             state_dir: str | None = None, pre: matching.Evaluation | None = None) -> tuple[Output | None, bool]:
     active = policy.active_modes(modes, session)
     shown = session.get("shown")
     shown_before = {x for x in shown if isinstance(x, str)} if isinstance(shown, list) else set()
@@ -90,15 +105,18 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     denies: list[tuple[str, policy.Rule]] = []
     warns: list[tuple[str, policy.Rule]] = []
 
-    for rid in sorted(rules):
-        rule = rules[rid]
-        if rule.get("enabled") is not True or rule.get("tool") != "Bash":
-            continue
-        try:
-            policy.validate_rule(rule)
-        except policy.Invalid:
-            continue
-        if not policy.requirements_met(rule) or not policy.rule_matches(rule, command, cmds):
+    candidates = candidates_of(rules)
+    evaluation = pre if pre is not None and all(rid in pre.kinds for rid in candidates) \
+        else matching.evaluate(command, candidates, table, state_dir)
+    for key, warning in evaluation.warnings():
+        if remember(session, "reported", key):
+            changed = True
+            notices.append(warning)
+            if key == matching.DEGRADED_KEY:
+                astrun.warm()
+
+    for rid, rule in candidates.items():
+        if evaluation.kinds.get(rid) is None:
             continue
         suspending = [name for name in policy.modes_of(rule) if name in active]
         if suspending:
@@ -168,11 +186,17 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         args = (managed, {}, {}) if killed else (managed, g, pstate)
         return policy.effective_rules(*args), policy.effective_modes(*args)
 
+    def wrapper_layers(g: store.State) -> wrapper_table.Table:
+        killed = not gstate_ok or g.get("enabled", True) is False
+        return policy.effective_wrappers(*((managed, {}, {}) if killed else (managed, g, pstate)))
+
     if not layers(gstate)[0] and not warnings:
         return
+    state_dir = os.path.dirname(gpath)
 
     sid = str(payload.get("session_id") or "nosession")
     output: Output | None = None
+    pre = matching.evaluate(command, candidates_of(layers(gstate)[0]), wrapper_layers(gstate), state_dir)
     stateless = not gstate_ok
     if gstate_ok:
         try:
@@ -183,7 +207,8 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
                 session_raw = sessions.get(sid)
                 session = session_raw if isinstance(session_raw, dict) else {}
                 rules, modes = layers(gstate)
-                output, changed = evaluate(command, rules, modes, session, sid, managed_ids, warnings)
+                output, changed = evaluate(command, rules, modes, session, sid, managed_ids, warnings,
+                                           wrapper_layers(gstate), state_dir, pre)
                 if changed:
                     session["seenAt"] = store.now()
                     sessions[sid] = session
@@ -193,6 +218,24 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
             stateless = True
     if stateless:
         rules, modes = layers(gstate)
-        output, _ = evaluate(command, rules, modes, {}, sid, managed_ids, warnings)
+        output, _ = evaluate(command, rules, modes, {}, sid, managed_ids, warnings, wrapper_layers(gstate), state_dir,
+                             pre)
     if output:
         json.dump(output, stdout)
+
+
+def run_warm(stdin: IO[str]) -> None:
+    """SessionStart: fill the uv cache in the background, but only when some enabled rule needs the AST matcher."""
+    try:
+        payload = json.load(stdin)
+    except ValueError:
+        payload = {}
+    cwd = payload.get("cwd") if isinstance(payload, dict) else None
+    try:
+        managed, _ = store.load_managed()
+        pstate = store.load(store.project_state_path(cwd if isinstance(cwd, str) else None))
+        rules = policy.effective_rules(managed, store.load(store.global_state_path()), pstate)
+    except store.StateError:
+        return
+    if any(policy.ast_of(rule) and rule.get("enabled") is True for rule in rules.values()):
+        astrun.warm()

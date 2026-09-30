@@ -2,9 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
+
+import policy
 
 MAX_WIDTH = 40
 SOURCES = ("yours", "inferred", "you chose")
@@ -112,6 +115,10 @@ def words(values: list[str]) -> str:
     return ", ".join(span(one_line(v)) for v in values)
 
 
+def compact(value: object) -> str:
+    return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
+
+
 def describe_match(match: dict[str, object], programs: list[str]) -> str:
     parts = []
     if programs:
@@ -120,15 +127,20 @@ def describe_match(match: dict[str, object], programs: list[str]) -> str:
         value = match.get(key)
         if isinstance(value, str) and value:
             parts.append(f"{key} = {span(one_line(value))}")
+    if isinstance(match.get("ast"), dict) and match["ast"]:
+        parts.append(f"ast = {span(one_line(compact(match['ast'])))}")
     return "; ".join(parts) or "(no matcher)"
 
 
 def raw_matcher(match: dict[str, object]) -> str:
-    for key in ("regex", "args"):
-        value = match.get(key)
-        if isinstance(value, str) and value:
-            return value
-    return ""
+    value = match.get("regex")
+    if isinstance(value, str) and value:
+        return value
+    patterns = policy.ast_patterns(match.get("ast"))
+    if patterns:
+        return " | ".join(patterns)
+    value = match.get("args")
+    return value if isinstance(value, str) else ""
 
 
 def plural(n: int, word: str) -> str:

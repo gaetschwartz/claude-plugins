@@ -2,13 +2,14 @@
 
 A PreToolUse hook for the Bash tool whose rules are data. Each command is tokenised with a real shell lexer
 (wrappers like `sudo`/`xargs`/`timeout` are looked through, `bash -c` strings and `$(…)` are descended into, heredoc
-bodies and redirect targets are ignored), then checked against the rules in state.
+bodies and redirect targets are ignored), then checked against the rules in state. Rules that need structure can use a
+real syntax-tree matcher (`match.ast`, below).
 
 **Nothing is active after install.** Run the `guardrails:setup` skill to pick presets.
 
 ## Rules
 
-A rule matches a command (`program`, `args`, `builtin`, raw `regex`) and says what happens:
+A rule matches a command (`program`, `args`, `builtin`, a syntax-tree rule `ast`, raw `regex`) and says what happens:
 
 - `action`: `deny` (the agent gets the message and the call is blocked) or `warn` (the agent gets the message as
   context, once per session).
@@ -18,6 +19,68 @@ A rule matches a command (`program`, `args`, `builtin`, raw `regex`) and says wh
   modes is never suspended.
 - `requires`: only active when one of these binaries is installed.
 - `messageShort`: shown instead of `message` once the full message has been seen in the session.
+
+## The syntax-tree matcher: `match.ast`
+
+`program` and `args` see one flat command at a time; `regex` sees raw text, heredocs and quoted strings included.
+`match.ast` is a rule in [ast-grep](https://ast-grep.github.io/)'s vocabulary (`pattern`, `kind`, `regex`, `inside`,
+`has`, `follows`, `precedes`, `not`, `any`, `all`, `stopBy`, `field`) run on the tree-sitter Bash parse, so a rule can
+say "`pgrep`, but only nested in a substitution, pipeline, list or loop" and never fires on text inside a heredoc or
+single quotes. It is an alternative like `regex`: the rule fires when `program`/`args`/`builtin`, or `regex`, or `ast`
+matches. `references/matching.md` has the vocabulary, the node kinds (verified), what is code versus data and the
+idioms; `guardrails rule ast '<command>'` prints the tree of any command, including the units its wrappers expose.
+
+**Wrappers.** ast-grep does not look through `sudo pkill x`, so the engine does: for every command whose name is in the
+wrapper table it drops the wrapper's own flags and arguments (or, for `bash -c '…'`, `eval`, `watch`, `script -c`,
+parses the string as code) and matches the inner command too, recursively, keeping the surrounding context. Built in:
+`sudo doas env timeout nice ionice nohup time command exec builtin stdbuf setsid xargs watch script eval bash sh zsh dash
+ksh`. Add more with `guardrails wrapper add <name> --json '{"flagsWithValue": ["-x"], "shellString": "-c"}'`
+(`--scope global|project|managed`, `--path`, `--as-user` for agents, like `rule`); `wrapper rm` and `wrapper list` do
+the rest. Layers only add look-through, so a project can never remove what a managed or global file, or the built-in
+table, looks through. An unknown wrapper, or an unknown flag that takes a value, is a false-negative risk: the first
+non-flag word after the known flags is taken as the command.
+
+**Requirements and fallback.** `match.ast` runs through `uv run --with ast-grep-py==0.45.3` (the wheel bundles the
+Bash grammar): `uv` must be installed, and the first run needs network once to fill uv's cache (a SessionStart hook does
+that in the background when an enabled rule uses `match.ast`). One `uv` process serves a whole hook call, about 100 ms
+warm, and a call with no applicable `match.ast` rule never starts it. If `uv` is missing, the run fails or takes too
+long, the hook does not fail open silently: every other rule is evaluated by the stdlib lexer and regex as before, the
+`match.ast` rules are skipped for that call, and the session gets one visible warning. `rule test` reports the same
+degradation as a note. When the parse tree contains errors (unbalanced quotes, an unterminated heredoc) the stdlib
+lexer's commands are checked against `match.ast` rules as well.
+
+### Worked example: one bundled policy, three AST rules
+
+A policy that says "do not kill by name, do not use `pgrep` inside a substitution, pipeline or loop, do not pipe PIDs
+into `xargs kill`" is three rules with their own message. Each rule below was run with `guardrails rule test` against
+`pkill node`, `sudo killall Finder`, `bash -c 'pkill x'`, `kill $(pgrep -f vite)`, `pgrep -xl node`,
+`pgrep node | head -1`, `if pgrep -q x; then echo up; fi`, `ps aux | xargs kill -9`, `xargs kill < pids`,
+`echo "pkill is banned"`, a heredoc that mentions `pkill`, and `kill 4242`; each selects exactly the commands its
+name says and nothing else (a heredoc or a quoted mention is data).
+
+```json
+{"match": {"ast": {"any": [{"pattern": "pkill $$$"}, {"pattern": "killall $$$"}]}}, "message": "Do not kill by name: it can hit your own shell or an innocent process. Look the PID up with `pgrep -xl <name>` as its own command, then `kill <pid>`."}
+```
+
+```json
+{"match": {"ast": {"pattern": "pgrep $$$", "inside": {"any": [{"kind": "command_substitution"}, {"kind": "pipeline"}, {"kind": "list"}, {"kind": "while_statement"}, {"kind": "if_statement"}, {"kind": "for_statement"}], "stopBy": "end"}}}, "message": "Run `pgrep -xl <name>` as its own command and read the PID; do not nest it in a substitution, pipeline, list or loop."}
+```
+
+```json
+{"match": {"ast": {"pattern": "xargs kill $$$", "inside": {"kind": "pipeline"}}}, "message": "Do not pipe PIDs into `xargs kill`; read them first, then `kill <pid>`."}
+```
+
+Add each with `guardrails rule add <id> --json - <<'EOF' … EOF`. A `regex` for the first two would also match
+`echo "pkill x"` and heredocs, and would need a pattern per wrapper form; `regex` stays the tool for dataflow the tree
+cannot express.
+
+**Matcher parity.** `program`, `args` and `builtin` stay on the stdlib lexer. `lib/parity.py` compiles them into
+`ast` rules and `tests/parity_study.py` (`GUARDRAILS_PARITY=ast` switches the engine itself) runs the whole corpus plus
+a fuzz over command shapes through both: on the corpus the only difference is the unbalanced-quote fallback, and on
+the fuzz the tree is right where the lexer loses commands in nested substitutions (`echo "$(nm $(z))"`) or misses a
+pipeline marker; an `args` regex anchored on the joined arguments cannot be expressed as an ast rule, so the two
+engines are not interchangeable. Environment knobs for tests: `GUARDRAILS_UV` (path of `uv`, empty or missing means
+unavailable) and `GUARDRAILS_AST_INPROCESS=1` (use an importable `ast_grep_py`, no `uv`).
 
 ## Modes
 
@@ -133,8 +196,8 @@ Claude Code settings; guardrails does not manage these, they are shown here for 
 
 An agent runs the CLI as `guardrails <verb>` (the plugin's `bin/` is on the Bash tool's PATH); from your own terminal
 use `python3 <plugin dir>/lib/guard.py <verb>` (`--help` for the full
-list: `status`, `rule add|set|rm|test`, `mode declare|undeclare|on|off`, `preset list|show|install`,
-`enable|disable`; changes take `--scope global|project|managed`, with `--path <file>` to pick a managed-format file). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
+list: `status`, `rule add|set|rm|test|ast`, `wrapper add|rm|list`, `mode declare|undeclare|on|off`,
+`preset list|show|install`, `enable|disable`; changes take `--scope global|project|managed`, with `--path <file>` to pick a managed-format file). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
 `enable`/`disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample
 commands without changing anything. It checks the matcher only (`match` or `-`); it prints `note:` lines when the hook
 would not act on a match: rule disabled, `requires` binary missing, a listed mode that suspends it (and whether it is
@@ -215,14 +278,17 @@ when a skill needs it.
 - `edit`, `mode` and `setup` change configuration only when you ask, always with `--as-user` and your own words in
   `--reason`. They never run `sudo`: a not-writable file prints the `sudo …` command for you to run.
 
-`just test` runs the suite, `just check` lints and type-checks, `just validate` runs `claude plugin validate`.
+`just test` runs the suite under `uv run --with ast-grep-py==0.45.3`, so the AST tests run; plain
+`python3 -m unittest discover -s tests` works too, the tests that need `ast-grep-py` then use `uv` (network once) or
+skip with a message saying how to get it, and the fallback tests simulate a missing `uv` with `GUARDRAILS_UV`.
+`just check` lints and type-checks, `just validate` runs `claude plugin validate`.
 
 ## Layout
 
 | path | role |
 |---|---|
-| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `policy.py`, `store.py`, `cli.py`, `shellwords.py` |
-| `hooks/` | `hooks.json` and the `guardrails.sh` wrapper Claude Code runs on every Bash call |
+| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `matching.py` (the one evaluation path), `policy.py`, `store.py`, `cli.py`, `shellwords.py` (plain lexer), `wrappers.py` (wrapper table), `astrun.py` + `astworker.py` (the `uv` launcher and the ast-grep worker), `parity.py` |
+| `hooks/` | `hooks.json` (PreToolUse, and SessionStart to warm the `uv` cache) and the `guardrails.sh` wrapper Claude Code runs |
 | `references/` | text the skills read on demand: matching semantics, presentation conventions, config-change rules |
 | `bin/guardrails` | the CLI wrapper on the Bash tool's PATH |
 | `presets/`, `skills/`, `tests/` | preset rule sets, the six skills, shared skill references, the unittest suite |
