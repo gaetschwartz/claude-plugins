@@ -204,11 +204,20 @@ class Snapshot:
     rule_origins: dict[str, list[str]]
     mode_origins: dict[str, list[str]]
     problems: list[str]
+    problem_layers: list[frozenset[str]]
+
+    def problems_in(self, scope: str | None) -> list[str]:
+        return [p for p, layers in zip(self.problems, self.problem_layers) if scope is None or scope in layers]
 
 
 def snapshot(args: Args) -> Snapshot:
     extra = extra_path(args)
     mstate, problems = store.load_managed(extra)
+    layers: list[frozenset[str]] = [frozenset({"managed"})] * len(problems)
+
+    def report(text: str, *where: str) -> None:
+        problems.append(text)
+        layers.append(frozenset(where))
 
     def safe_load(path: str | None, what: str) -> store.State:
         try:
@@ -219,17 +228,18 @@ def snapshot(args: Args) -> Snapshot:
                                if view(mstate, "rules") else "the hook fails open")
             else:
                 consequence = "project rules are not enforced"
-            problems.append(f"unreadable {what} state file ({consequence}) until it is fixed: {exc}")
+            report(f"unreadable {what} state file ({consequence}) until it is fixed: {exc}", what)
             return {}
 
     gpath, ppath = store.global_state_path(), store.project_state_path()
     gstate, pstate = safe_load(gpath, "global"), safe_load(ppath, "project")
     sources = store.managed_paths(extra)
     for path in sources:
-        problems.extend(store.trust_problems(path))
+        for text in store.trust_problems(path):
+            report(text, "managed")
     for name, m in view(pstate, "modes").items():
         if name in view(mstate, "modes") and isinstance(m, dict) and m.get("active") is True:
-            problems.append(f"project state switches on mode '{name}', which the managed file declares (ignored)")
+            report(f"project state switches on mode '{name}', which the managed file declares (ignored)", "project")
     rules, modes = policy.effective_rules(mstate, gstate, pstate), policy.effective_modes(mstate, gstate, pstate)
     sid = args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
     session = view(view(gstate, "sessions"), sid) if sid else {}
@@ -240,12 +250,13 @@ def snapshot(args: Args) -> Snapshot:
             policy.validate_rule(rules[rid])
         except Invalid as exc:
             if "managed" not in rule_origins.get(rid, []):
-                problems.append(f"rule {rid}: {exc} (ignored by the hook)")
+                report(f"rule {rid}: {exc} (ignored by the hook)", *rule_origins.get(rid, []))
         for m in policy.modes_of(rules[rid]):
             if m not in modes:
-                problems.append(f"rule {rid}: mode '{m}' is not declared (the rule stays enforced)")
+                report(f"rule {rid}: mode '{m}' is not declared (the rule stays enforced)",
+                       *rule_origins.get(rid, []))
     return Snapshot(extra, sources, mstate, gstate, pstate, gpath, ppath, gstate.get("enabled", True) is not False,
-                    rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems)
+                    rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers)
 
 
 def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, dict[str, Any]]) -> str:
@@ -307,7 +318,8 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
         kept = "; managed rules stay enforced" if view(snap.mstate, "rules") else ""
         notes.append(f"the global hook is disabled{reason}{kept}")
     status = render.Status(managed_line(snap), snap.hook_on, snap.ppath is not None
-                           and snap.pstate.get("enabled", True) is False, rules, modes, snap.problems, notes=notes)
+                           and snap.pstate.get("enabled", True) is False, rules, modes, snap.problems_in(scope),
+                           notes=notes)
     if scope:
         status.no_rules = f"No rules with a {scope} entry."
     return status
@@ -315,7 +327,7 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
 
 def print_status_render(args: Args, snap: Snapshot) -> None:
     if args.problems:
-        print(render.problems_listing(snap.problems))
+        print(render.problems_listing(snap.problems_in(args.scope)))
         return
     status = status_view(snap, args.scope)
     if args.rule:
@@ -329,9 +341,10 @@ def print_status_render(args: Args, snap: Snapshot) -> None:
 
 def print_status_plain(args: Args, snap: Snapshot) -> None:
     if args.problems:
-        print("problems:" if snap.problems else "no problems")
-        for problem in snap.problems:
-            print(f"  - {problem}")
+        problems = snap.problems_in(args.scope)
+        print("problems:" if problems else "no problems")
+        for problem in problems:
+            print(f"  - {render.clean(problem)}")
         return
     extra, mstate, gstate, pstate, rule_origins = snap.extra, snap.mstate, snap.gstate, snap.pstate, snap.rule_origins
     disabled = f" ({gstate['disabledReason']})" if gstate.get("disabledReason") else ""
@@ -374,9 +387,9 @@ def print_status_plain(args: Args, snap: Snapshot) -> None:
             flags.append("SUSPENDED by " + ",".join(suspended))
         if "managed" in rule_origins.get(rid, []) and not policy.modes_of(rule):
             flags.append("ALWAYS ENFORCED")
-        print(f"  {rid} [{source}] {' '.join(flags)}: {describe_match(rule)}")
+        print(render.clean(f"  {rid} [{source}] {' '.join(flags)}: {describe_match(rule)}"))
         if policy.modes_of(rule):
-            print(f"      suspended by modes: {', '.join(policy.modes_of(rule))}")
+            print(render.clean(f"      suspended by modes: {', '.join(policy.modes_of(rule))}"))
 
     print("\nmodes:")
     names = [n for n in sorted(snap.modes) if scope is None or scope in snap.mode_origins.get(n, [])]
@@ -390,13 +403,14 @@ def print_status_plain(args: Args, snap: Snapshot) -> None:
             state = f"ACTIVE (by {record.get('by', 'user')}{why})"
         else:
             state = "inactive"
-        print(f"  {name} [{'+'.join(snap.mode_origins.get(name, []))}]: {state}; "
-              f"agent may enable: {'yes' if mode['agentMayEnable'] else 'no'}; {mode['description']}")
+        print(render.clean(f"  {name} [{'+'.join(snap.mode_origins.get(name, []))}]: {state}; "
+                           f"agent may enable: {'yes' if mode['agentMayEnable'] else 'no'}; {mode['description']}"))
 
-    if snap.problems:
+    problems = snap.problems_in(scope)
+    if problems:
         print("\nproblems:")
-        for problem in snap.problems:
-            print(f"  - {problem}")
+        for problem in problems:
+            print(f"  - {render.clean(problem)}")
 
 
 def cmd_status(args: Args) -> int:
@@ -413,7 +427,7 @@ def cmd_status(args: Args) -> int:
 def cmd_rule_add(args: Args) -> int:
     require_user(args, "rule add")
     check_name("rule", args.id)
-    rule = load_json(args.json, "--json")
+    rule, _ = split_envelope(load_json(args.json, "--json"))
     policy.validate_rule(rule)
     rule["setBy"] = stamp(args.reason)
     scope = resolve_scope(args)
@@ -506,6 +520,8 @@ def cmd_rule_set(args: Args) -> int:
         pairs = json_assignments(load_json(args.json, "--json"))
     if not args.assignments and args.json is None:
         raise Invalid("give key=value assignments or --json")
+    if args.assignments and args.json is not None:
+        raise Invalid("give key=value assignments or --json, not both")
     for item in args.assignments:
         key, sep, value = item.partition("=")
         if not sep or key not in SETTABLE:
@@ -582,15 +598,25 @@ def effect_notes(args: Args, rule: policy.Rule, layers: list[str], mstate: store
 Example = tuple[str, str, Optional[str]]
 
 
+def split_envelope(document: Any) -> tuple[Any, Any]:
+    """A {"rule": {...}, "examples": [...]} document carries both inputs through one stdin."""
+    if isinstance(document, dict) and isinstance(document.get("rule"), dict):
+        return document["rule"], document.get("examples")
+    return document, None
+
+
 def parse_examples(value: str) -> list[Example]:
-    data = load_json(value, "--examples")
+    return example_list(load_json(value, "--examples"))
+
+
+def example_list(data: Any) -> list[Example]:
     if not isinstance(data, list):
         raise Invalid('--examples must be a JSON list of {"cmd": "...", "source": "..."} objects')
     out: list[Example] = []
     for i, item in enumerate(data):
         if isinstance(item, str):
             item = {"cmd": item}
-        if not isinstance(item, dict) or not isinstance(item.get("cmd"), str) or not item["cmd"]:
+        if not isinstance(item, dict) or not isinstance(item.get("cmd"), str) or not item["cmd"].strip():
             raise Invalid(f"--examples[{i}] needs a non-empty string 'cmd'")
         unknown = set(item) - {"cmd", "source", "expect"}
         if unknown:
@@ -614,20 +640,24 @@ def verdict(rule: policy.Rule, command: str) -> str | None:
 
 def cmd_rule_test(args: Args) -> int:
     check_stdin((args.json, "--json"), (args.examples, "--examples"))
-    if not args.render and (args.intent or args.id_name):
-        raise Invalid("--intent and --id-name need --render")
+    if not args.render and (args.intent or args.id_name or args.scope):
+        raise Invalid("--intent, --id-name and --scope need --render")
+    if args.id_name:
+        check_name("rule", args.id_name)
+    if any(not c.strip() for c in args.commands):
+        raise Invalid("a command must not be blank")
     if args.json is None and (args.scope or args.id_name):
         raise Invalid("--scope and --id-name label a draft given with --json; --id reads them from the rule")
     examples: list[Example] = [(c, args.source, None) for c in args.commands]
     if args.examples is not None:
         examples += parse_examples(args.examples)
-    if not examples:
-        raise Invalid("give at least one command or --examples")
     mstate, gstate, pstate = (managed_state(args), store.load(store.global_state_path()),
                               store.load(store.project_state_path()))
     file = ""
     if args.json is not None:
-        draft = load_json(args.json, "--json")
+        draft, carried = split_envelope(load_json(args.json, "--json"))
+        if carried is not None:
+            examples += example_list(carried)
         policy.validate_rule(draft)
         rule = policy.with_defaults(draft)
         label = "(draft)"
@@ -649,7 +679,11 @@ def cmd_rule_test(args: Args) -> int:
         label = f"{args.id} [{'+'.join(layers)}]"
         rid, scope = args.id, "+".join(layers)
 
+    if not examples:
+        raise Invalid("give at least one command or --examples")
     notes = effect_notes(args, rule, layers, mstate, gstate, pstate)
+    if file and not store.hook_enforces(file):
+        notes.append(f"the hook enforces {file} only if {store.MANAGED_ENV} points at it")
     results = [render.Result(cmd, source, verdict(rule, cmd), expect) for cmd, source, expect in examples]
     if args.render:
         print(render.rule_card(rid, rule, policy.programs_of(rule), policy.render(rule["message"]), scope,
@@ -660,14 +694,14 @@ def cmd_rule_test(args: Args) -> int:
         flags.append("retry")
     if policy.modes_of(rule):
         flags.append("modes=" + ",".join(policy.modes_of(rule)))
-    print(f"rule {label}: {' '.join(flags)}")
+    print(render.clean(f"rule {label}: {' '.join(flags)}"))
     if notes:
         print("note: match only means the matcher selects the command; the hook would not act on it as follows")
     for note in notes:
-        print(f"note: {note}")
+        print(render.clean(f"note: {note}"))
     for result in results:
-        print(f"  {'match' if result.matched else '-':<7}{result.cmd.replace(chr(10), chr(92) + 'n')}")
-    print(f"message: {policy.render(rule['message'])}")
+        print(f"  {'match' if result.matched else '-':<7}{render.clean(result.cmd, chr(92) + 'n')}")
+    print(render.clean(f"message: {policy.render(rule['message'])}", chr(92) + "n"))
     return 0
 
 
@@ -971,7 +1005,7 @@ def main(argv: list[str]) -> int:
         code = HANDLERS[(args.verb, getattr(args, "op", None))](args)
         note = unenforced_note(args) if code == 0 else ""
         if note:
-            print(note)
+            print(note, file=sys.stderr if getattr(args, "render", False) else sys.stdout)
         return code
     except Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)

@@ -66,12 +66,36 @@ def display_width(text: str) -> int:
     return sum(char_width(c) for c in text)
 
 
+ESCAPES = {"\t": "⇥", "\x1b": "␛", "\x7f": "␡"}
+HIDDEN = re.compile("[\u2028\u2029\u202a-\u202e\u2066-\u2069\u200b-\u200f\u2060-\u2064\ufeff\U000e0000-\U000e007f]")
+
+
+def clean(text: str, newline: str = NEWLINE) -> str:
+    """Replace everything that could start a new line, move the cursor or hide text with a visible form."""
+    out = []
+    for ch in re.sub(r"\r\n|\r|\n", "\n", text):
+        if ch == "\n":
+            out.append(newline)
+        elif ch in ESCAPES:
+            out.append(ESCAPES[ch])
+        elif unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") or HIDDEN.match(ch):
+            out.append(f"\\u{{{ord(ch):x}}}")
+        else:
+            out.append(ch)
+    return "".join(out)
+
+
 def one_line(text: str) -> str:
-    return re.sub(r"\r\n|\r|\n", NEWLINE, text)
+    return clean(text)
+
+
+def prose(text: str) -> str:
+    return clean(" ".join(text.split()))
 
 
 def span(text: str, width: int = 0) -> str:
     """Inline code padded to width display columns; the delimiter spaces of a longer fence are not counted."""
+    text = clean(text)
     pad = " " * max(0, width - display_width(text))
     longest = max((len(run) for run in re.findall(r"`+", text)), default=0)
     if longest or text.startswith(" "):
@@ -114,7 +138,7 @@ def plural(n: int, word: str) -> str:
 def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: str, scope: str, intent: str,
               results: list[Result], notes: list[str], file: str = "") -> str:
     action = str(rule.get("action"))
-    head = [f"### {rid}", action]
+    head = [f"### {clean(rid)}", clean(action)]
     if rule.get("retry") == "same-command":
         head.append("retry same-command")
     head.append(scope)
@@ -123,11 +147,11 @@ def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: s
         lines.append(f"**File** {span(file)}")
     lines.append("")
     if intent:
-        lines.append(f"**Intent** {' '.join(intent.split())}")
+        lines.append(f"**Intent** {prose(intent)}")
     match = rule.get("match")
     match = match if isinstance(match, dict) else {}
     lines.append(f"**Match** {describe_match(match, programs)}")
-    lines.append(f"**Message** {' '.join(message.split())}")
+    lines.append(f"**Message** {prose(message)}")
 
     shown = [one_line(r.cmd) for r in results]
     width = common_width(shown)
@@ -147,7 +171,7 @@ def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: s
     count = f"{plural(len(results), 'command')}, {plural(bad, 'mismatch')}"
     lines += ["", f"**Verified** matcher checked with `rule test`, {count}"]
     if notes:
-        lines.append(f"**Note** {'; '.join(notes)}")
+        lines.append(f"**Note** {prose('; '.join(notes))}")
     raw = raw_matcher(match)
     if raw:
         lines.append(f"**Raw** {span(one_line(raw))}")
@@ -166,29 +190,29 @@ def status_listing(status: Status) -> str:
     if status.project_off:
         head += " · project rules off"
     lines.append(head)
-    lines += [f"**Note** {note}" for note in status.notes]
+    lines += [f"**Note** {prose(note)}" for note in status.notes]
     lines += ["", "**Rules**"]
     if status.rules:
         for row, cell in zip(status.rules, padded_rows([r.id for r in status.rules])):
-            lines.append(f"- {cell} {row.action} · {'+'.join(row.layers)} · {row.state}")
+            lines.append(f"- {cell} {clean(row.action)} · {'+'.join(row.layers)} · {clean(row.state)}")
     else:
         lines.append(status.no_rules)
     if status.modes:
         lines += ["", "**Modes**"]
         for row, cell in zip(status.modes, padded_rows([m.name for m in status.modes])):
-            lines.append(f"- {cell} {row.on} · agent may enable: {'yes' if row.agent_may_enable else 'no'} · "
+            lines.append(f"- {cell} {clean(row.on)} · agent may enable: {'yes' if row.agent_may_enable else 'no'} · "
                          f"{'+'.join(row.layers)}")
     if status.problems:
         lines += ["", "**Problems**"]
-        lines += [f"- {one_line(p)}" for p in status.problems]
+        lines += [f"- {prose(p)}" for p in status.problems]
     return "\n".join(lines)
 
 
 def problems_listing(problems: list[str]) -> str:
     if not problems:
         return "No problems."
-    return "\n".join(["**Problems**", *(f"- {one_line(p)}" for p in problems)])
+    return "\n".join(["**Problems**", *(f"- {prose(p)}" for p in problems)])
 
 
 def rule_row(row: RuleRow) -> str:
-    return f"- {span(row.id)} {row.action} · {'+'.join(row.layers)} · {row.state}"
+    return f"- {span(row.id)} {clean(row.action)} · {'+'.join(row.layers)} · {clean(row.state)}"

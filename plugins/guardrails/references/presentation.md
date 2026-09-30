@@ -69,9 +69,11 @@ The layout contract, all of it computed by the CLI:
 - Groups, each omitted when empty: `**Block**` (the matcher catches it, action deny), `**Warn**` (catches it, action
   warn), `**Allow**` (it does not). Rows: `- ✗ <span> <source>` or `- ✓ …`, then ` · wrapped` when only a look-through
   (wrapper such as sudo, xargs or timeout; a `bash -c` string; `$(…)` or backticks; a pipeline member) made the
-  program/args/builtin matcher reach the command. A `regex` match reads the raw text and is never `wrapped`.
+  program/args/builtin matcher reach the command; that includes a substitution glued to a word or assignment
+  (`foo$(…)`, `x=$(…)`) and `<(…)`. A `regex` match reads the raw text and is never `wrapped`. A command reached inside
+  a list (`;`, `&&`, `||`, a newline), a subshell `( … )` or a `{ …; }` group is not a wrapper, so it is not `wrapped`.
 - Spans: every command is an inline-code span right-padded inside the backticks to one width W, the display width of
-  the longest command across all groups, capped at 40 (CJK and emoji count two columns, combining marks zero). A command
+  the longest command across all groups, capped at 40 (East Asian wide characters and most emoji count two columns, combining marks zero). A command
   wider than W is not padded, sits at the end of its group, and its source tag follows one space as usual. A command
   containing a backtick uses a longer fence (two backticks or more) with one delimiter space each side, which markdown
   strips. A newline is shown as `⏎`.
@@ -79,7 +81,12 @@ The layout contract, all of it computed by the CLI:
   commands and the mismatches. With any mismatch, do not present the card as done: fix the rule or ask the user.
 - `**Note**` (only when there is one): what `rule test` also reports about the real effect: the rule is disabled, a
   required binary is missing, a mode suspends it, the hook or project rules are off. Relay it as printed.
-- `**Raw**` (only when the matcher has a `regex` or `args`): that pattern alone in one span.
+- `**Raw**` (only when the matcher has a `regex` or `args`): that pattern alone in one span, newlines shown as `⏎`.
+- Untrusted text: every field (commands, ids, reasons, messages, problems) is made single-line and safe. A newline
+  becomes `⏎`, a tab `⇥`, ESC `␛`, and other control, bidi and zero-width characters `\u{hex}`, so text can never start
+  a new line or section; widths are computed on that shown form.
+- stdout of a `--render` command is only the block. Anything that matters to the user is a `**Note**` line inside it;
+  plain diagnostics go to stderr.
 - `rule test` checks only the matcher. It does not know modes, retry acknowledgements or the hook being off, which is why
   `Verified` says "matcher checked" and the group heading carries the action.
 
@@ -110,7 +117,7 @@ Output:
   `--path` file, present or absent, and, when the platform file is absent, where managed rules come from.
 - Rule state is one of `always enforced`, `suspended by <modes>` (only modes that are on now), `disabled`, `enabled`.
   Ids are padded to the longest id (capped at 40), modes to the longest mode name.
-- `--scope` keeps only rules and modes with an entry in that layer. `--problems` prints only the `**Problems**` group,
+- `--scope` keeps only rules, modes and problems that belong to that layer. `--problems` prints only the `**Problems**` group,
   or `No problems.`. `--rule <id>` prints just that rule's row (used after a write). A `**Note**` line follows the
   header when the hook is off.
 

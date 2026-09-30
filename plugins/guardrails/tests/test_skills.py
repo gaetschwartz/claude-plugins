@@ -78,13 +78,27 @@ class SkillFiles(unittest.TestCase):
                 self.assertEqual(injected, files)
                 self.assertEqual("Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)" in fields["allowed-tools"], bool(files))
 
-    def test_rules_are_passed_from_files_not_quoted_inline(self) -> None:
+    def test_rules_are_passed_on_stdin_without_the_write_tool(self) -> None:
         for name in ("new", "edit"):
             with self.subTest(skill=name):
-                text = (SKILLS / name / "SKILL.md").read_text()
-                self.assertIn("--json @", text)
-                self.assertNotIn("'\\''", text)
-        self.assertIn("--json -", (SKILLS / "new" / "SKILL.md").read_text())
+                fields, body = frontmatter(SKILLS / name / "SKILL.md")
+                self.assertIn("--json -", body)
+                self.assertIn("<<'EOF'", body)
+                self.assertNotIn("'\\''", body)
+                self.assertNotIn("Write tool", body)
+                self.assertNotIn("Write", fields["allowed-tools"])
+
+    def test_allowed_tools_are_pinned_and_never_preapprove_changes(self) -> None:
+        pinned = {"new": ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "Bash(guardrails preset list *)",
+                          "AskUserQuestion"],
+                  "edit": ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "AskUserQuestion"],
+                  "explain": ["Bash(guardrails status *)", "Bash(guardrails rule test *)",
+                              "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"],
+                  "status": ["Bash(guardrails status *)"]}
+        for name, tools in pinned.items():
+            with self.subTest(skill=name):
+                declared = frontmatter(SKILLS / name / "SKILL.md")[0]["allowed-tools"]
+                self.assertEqual(re.findall(r"Bash\([^)]*\)|AskUserQuestion", declared), tools)
 
     def test_display_skills_render_with_the_cli_and_paste_verbatim(self) -> None:
         for name in ("new", "edit", "explain", "status"):
@@ -100,7 +114,7 @@ class SkillFiles(unittest.TestCase):
 
     def test_new_builds_examples_with_sources_and_expectations(self) -> None:
         text = (SKILLS / "new" / "SKILL.md").read_text()
-        for needle in ("--examples", '"expect"', "you chose", "--id-name"):
+        for needle in ("\"examples\"", '"expect"', "you chose", "--id-name"):
             self.assertIn(needle, text)
         self.assertIn("status --render --rule", text)
 

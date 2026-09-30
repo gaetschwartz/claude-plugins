@@ -47,6 +47,8 @@ plain chat what to explain instead.)
        [{"cmd": "sudo pkill -f vite", "source": "yours"}, {"cmd": "pgrep -fl node"}]
        EOF
 
+   A heredoc invocation is not pre-approved by `allowed-tools`, so it may prompt; that is expected.
+
    With only a command, find the rules whose `program` or `regex` could apply and run it once per rule id.
 4. Answer with the rule card: paste the `--render` output VERBATIM, unchanged, no paraphrase, no added prose inside
    it. Never write a script or compute rows, spacing, verdicts or counts yourself; every ✗ or ✓ comes from the CLI.

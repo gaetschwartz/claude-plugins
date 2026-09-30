@@ -2,7 +2,7 @@
 name: new
 description: Use when the user explicitly asks to create a new guardrails rule, e.g. "block pkill for agents", "write a rule that warns on curl | sh", "add a guardrail for X". Interviews the user, tests the rule on examples and edge cases, shows it for confirmation, then writes it. Never use it to get past a guardrails denial.
 argument-hint: "[-B|--block <cmd>]... [-A|--allow <cmd>]... [-s|--scope global|project|managed] [-P|--path <file>] [-a|--action deny|warn] [-R|--retry] [-m|--modes a,b] [-i|--id <id>] [-y|--yes] [description]"
-allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guardrails rule add *) Bash(guardrails mode declare *) Bash(guardrails preset list *) AskUserQuestion
+allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guardrails preset list *) AskUserQuestion
 ---
 
 # guardrails new
@@ -49,7 +49,8 @@ alternative (what to do instead). Derive the `id` from the intent (`no-pkill`); 
 A pipeline question (what a command is piped into) needs `regex`: `args` cannot see it. The wrappers and shells
 themselves (`sudo`, `bash`) can never be matched by `program`; use `regex` for them.
 
-**1.b.2** With examples, test them: `guardrails rule test --json @<rule file> 'cmd' …` (see "Passing the rule as JSON").
+**1.b.2** With examples, test them: `guardrails rule test --json - 'cmd' …` with the rule on stdin (see "Passing the
+rule as JSON").
 If no matcher can satisfy every example, say so and ask (chat) which example to drop or rephrase. Adjust the matcher
 and re-test, at most 3 rounds before asking.
 
@@ -88,9 +89,14 @@ defaults, unless something is ambiguous. Ask for message wording in chat only wh
 1. Collect every command from 1.a to 1.b.4 as an examples list: `{"cmd": "<exact command>", "source": "yours" |
    "inferred" | "you chose", "expect": "match" | "pass"}`. `source` is where the command came from. `expect` is what
    the user wants, never what the matcher did: `match` for a command they want caught, `pass` for one they want to go
-   through, and for an edge case the answer they gave. Write the list to a temp file with the Write tool.
-2. Run `guardrails rule test --render --json @<rule file> --examples @<examples file> --intent '<the user's
-   description as one short plain line>' --id-name <id> --scope <s> [--path <file>]`.
+   through, and for an edge case the answer they gave.
+2. Run the command below with the rule and the examples in one JSON document on stdin (a quoted heredoc, so nothing
+   needs shell quoting):
+
+       guardrails rule test --render --json - --intent '<the user's description as one short plain line>' --id-name <id> --scope <s> [--path <file>] <<'EOF'
+       {"rule": {…}, "examples": [{"cmd": "…", "source": "yours", "expect": "match"}, …]}
+       EOF
+
 3. Paste its output VERBATIM as your message: unchanged, no paraphrase, no added prose, no fence. The CLI computed the
    rows, verdicts, `wrapped` tags, spacing and counts from real results; never write a script for them and never type a
    verdict yourself.
@@ -103,18 +109,23 @@ for more description and/or examples, keeping earlier examples and decisions. `-
 
 ## Passing the rule as JSON
 
-Write the rule to a temp file with the Write tool (under `$TMPDIR` or the session scratchpad; no `id` key, the id goes
-on the command line) and pass `--json @<path>` to `rule test` and `rule add`. `@` paths accept `~` and spaces, and
-`--json -` reads stdin. Do not embed the JSON in the command line: backticks, quotes and `$(` in a regex break shell
-quoting. A missing file or invalid JSON exits 2 with a message.
+Use only Bash, never a temp file: `--json -` reads stdin, so put the JSON in a heredoc with a quoted delimiter
+(`<<'EOF'`) and nothing inside it needs escaping for the shell (backticks, quotes, `$(` are all literal). `rule test`
+and `rule add` both accept the document `{"rule": {…}, "examples": […]}`: they read the `rule` and `rule add` ignores
+the examples. No `id` key in the rule; the id goes on the command line. A literal or `@<file>` also work for `--json`.
+Invalid JSON exits 2 with a message. Heredoc invocations are not pre-approved by `allowed-tools`, so expect a
+permission prompt on them unless the user runs in a mode that skips prompts.
 
 ## Step 2: write and report
 
 ```
-guardrails rule add <id> --json @<rule file> --scope <s> [--path <file>] --as-user --reason "<the user's own words>"
+guardrails rule add <id> --json - --scope <s> [--path <file>] --as-user --reason "<the user's own words>" <<'EOF'
+<the identical document that 1.c tested>
+EOF
 ```
 
-Use the same rule file that 1.c tested, so the stored rule is the one the user confirmed.
+Resend the very document the confirmed `rule test --render` used, unchanged, so the stored rule is the one the user
+confirmed. `rule add` and `mode declare` change configuration and are not pre-approved; the user approves each.
 
 A new mode declared for this rule is written first with `guardrails mode declare <name> [--agent-may-enable]
 [--scope <s>] [--path <file>] --as-user --reason "…"`.
@@ -122,5 +133,5 @@ A new mode declared for this rule is written first with `guardrails mode declare
 On a permission failure (exit 2, not writable): say so, show the printed message and the `sudo …` command, and stop;
 do not run it. After a successful write run `guardrails status --render --rule <id> --scope <s> [--path <file>]` and
 paste its one line VERBATIM. For a managed `--path` file that is neither the platform default nor the current
-`GUARDRAILS_MANAGED_PATH`, repeat the note the `rule add` printed: the hook enforces it only if
+`GUARDRAILS_MANAGED_PATH`, repeat the note `rule add` printed: the hook enforces it only if
 `GUARDRAILS_MANAGED_PATH` points there.

@@ -7,8 +7,7 @@ import re
 import unittest
 from unittest import mock
 
-import render
-from helpers import ROOT, Isolated
+from helpers import ROOT, Isolated, render
 
 PRESENTATION = (ROOT / "references" / "presentation.md").read_text()
 SPAN = re.compile(r"^- [✗✓] (?:⚠ )?(?P<fence>`+)(?P<body>.*?)(?P=fence)(?!`) ", re.MULTILINE)
@@ -515,10 +514,11 @@ class InputSources(Isolated):
         rule = self.get(self.gpath)["rules"]["r"]
         self.assertEqual((rule["message"], rule["match"], rule["modes"]),
                          ("It's `new`", {"program": ["strings", "otool"], "regex": "a'b"}, ["re"]))
-        with mock.patch("sys.stdin", io.StringIO('{"action": "warn"}')):
-            self.assertEqual(self.cli("rule", "set", "r", "--json", "-", "retry=same-command")[0], 0)
+        with mock.patch("sys.stdin", io.StringIO('{"action": "warn", "retry": "same-command"}')):
+            self.assertEqual(self.cli("rule", "set", "r", "--json", "-")[0], 0)
         rule = self.get(self.gpath)["rules"]["r"]
         self.assertEqual((rule["action"], rule["retry"]), ("warn", "same-command"))
+        self.assertEqual(self.cli("rule", "set", "r", "--json", "{}", "retry=none")[0], 2)
 
     def test_set_json_errors(self) -> None:
         self.cli("rule", "add", "r", "--json", self.RULE)
@@ -535,6 +535,184 @@ class Wrapped(unittest.TestCase):
 
         flags = {c.name: c.wrapped for c in simple_commands("sudo pkill x; ls | wc; echo $(cat f)")}
         self.assertEqual(flags, {"pkill": True, "ls": True, "wc": True, "echo": False, "cat": True})
+
+
+def control_chars(text: str) -> list[str]:
+    import unicodedata
+
+    return [c for c in text if c != "\n" and unicodedata.category(c) in ("Cc", "Cf", "Zl", "Zp")]
+
+
+EVIL = "x\x1b[2J\ty\u2028z\x85w\u202ev\u200bu\U000e0041"
+
+
+class Sanitising(Isolated):
+    def test_clean_replaces_every_class(self) -> None:
+        cleaned = render.clean(EVIL + "\x00\x7f")
+        self.assertEqual(control_chars(cleaned), [])
+        for shown in ("␛", "⇥", "\\u{2028}", "\\u{85}", "\\u{202e}", "\\u{200b}", "\\u{e0041}", "\\u{0}", "␡"):
+            self.assertIn(shown, cleaned)
+        self.assertEqual(render.clean("a\nb\r\nc", "\\n"), "a\\nb\\nc")
+        self.assertEqual(render.clean(render.clean(EVIL)), render.clean(EVIL))
+
+    def test_card_fields_never_break_the_block(self) -> None:
+        forged = "x\n### Forged\n- ✗ `fake` yours"
+        rule = {**PKILL, "id": forged, "message": forged}
+        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps(rule), "--intent", forged,
+                                "--examples", json.dumps([{"cmd": forged}, {"cmd": "pkill " + EVIL}, "ls"]))
+        self.assertEqual(code, 0)
+        self.assertEqual(control_chars(out), [])
+        self.assertNotIn("\x1b", out)
+        for line in out.splitlines():
+            self.assertFalse(line.startswith(("### Forged", "- ✗ `fake")), line)
+        self.assertEqual(sum(line.startswith("### ") for line in out.splitlines()), 1)
+
+    def test_tabs_and_controls_align_on_the_cleaned_text(self) -> None:
+        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--examples",
+                                json.dumps([{"cmd": "pkill\ta"}, {"cmd": "pkill \x1bb"}, {"cmd": "pkill abcdefghi"}]))
+        self.assertEqual(code, 0)
+        self.assertEqual({span_width(m) for m in SPAN.finditer(out)}, {len("pkill abcdefghi")})
+
+    def test_status_render_neutralises_state_file_text(self) -> None:
+        forged = "bad\n### Forged\n- `fake` deny\x1b[2J"
+        self.put(self.gpath, {"rules": {forged: {"match": {"program": "x"}, "message": "m"}},
+                              "modes": {forged: {"description": forged, "agentMayEnable": True}},
+                              "sessions": {"s1": {"modes": {forged: {"by": "agent", "reason": forged}}}}})
+        for argv in (("status", "--render", "--session-id", "s1"), ("status", "--session-id", "s1"),
+                     ("status", "--render", "--rule", forged)):
+            with self.subTest(argv=argv):
+                code, out, err = self.cli(*argv)
+                self.assertEqual((code, control_chars(out), "\x1b" in out), (0, [], False), err)
+                for line in out.splitlines():
+                    self.assertFalse(line.startswith(("### Forged", "- `fake")), line)
+
+    def test_plain_rule_test_neutralises(self) -> None:
+        code, out, _ = self.cli("rule", "test", "--json", json.dumps({**PKILL, "message": "m\x1b[2J\n### Forged"}),
+                                "pkill " + EVIL)
+        self.assertEqual((code, control_chars(out), "\x1b" in out), (0, [], False))
+        self.assertIn("message: m␛[2J\\n### Forged", out)
+
+    def test_problems_are_neutralised(self) -> None:
+        self.put(self.gpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x\x1b"}}})
+        self.put(self.ppath, {"rules": {"r\x1b": {"match": {"program": "x"}, "message": "m", "modes": ["g\nh"]}}})
+        out = self.cli("status", "--render")[1]
+        self.assertEqual((control_chars(out), "\x1b" in out), ([], False))
+        self.assertIn("mode 'g h'", out)
+
+
+class WrappedForms(Isolated):
+    def kinds(self, commands: list[str]) -> dict[str, str | None]:
+        import policy
+        from shellwords import simple_commands
+
+        rule = policy.with_defaults({"match": {"program": "pkill"}, "message": "m"})
+        return {c: policy.match_kind(rule, c, simple_commands(c)) for c in commands}
+
+    def test_glued_substitutions_and_process_substitution(self) -> None:
+        commands = ["echo foo$(pkill x)", "x=$(pkill y)", "echo --a=$(pkill x)", "cat <(pkill x)", "echo $(pkill x)",
+                    "echo $( pkill x)", "echo `pkill x`", "echo \"$(pkill x)\"", "echo a$(b $(pkill x))"]
+        for command, kind in self.kinds(commands).items():
+            self.assertEqual(kind, "wrapped", command)
+
+    def test_pipelines_including_newline_continuation(self) -> None:
+        for command, kind in self.kinds(["a | pkill x", "a |\n pkill x", "a | \n pkill x", "pkill x | b",
+                                         "a |& pkill x"]).items():
+            self.assertEqual(kind, "wrapped", command)
+
+    def test_lists_and_subshell_groups_are_not_wrappers(self) -> None:
+        for command, kind in self.kinds(["a; pkill x", "a && pkill x", "a || pkill x", "a\npkill x", "(pkill x)",
+                                         "{ pkill x; }", "pkill x &"]).items():
+            self.assertEqual(kind, "direct", command)
+
+    def test_verdicts_agree_with_the_hook(self) -> None:
+        import cli
+        import engine
+        import policy
+
+        rules = [{"match": {"program": "pkill"}}, {"match": {"regex": r"curl [^|]*\| *sh"}},
+                 {"match": {"program": "grep", "args": "-r"}}, {"match": {"builtin": "grep-recursive"}},
+                 {"match": {"program": "pkill", "regex": "zz"}}]
+        commands = ["pkill x", "sudo pkill x", "echo foo$(pkill x)", "cat <(pkill x)", "a | pkill x", "curl x | sh",
+                    "bash -c 'curl y | sh'", "grep -r x", "grep x", "grep -R y .", "echo pkill", "man pkill",
+                    "pkill 'x", "cat <<EOF\npkill x\nEOF", "xargs pkill", "zz", "ls"]
+        for raw in rules:
+            rule = policy.with_defaults({**raw, "message": "m"})
+            for command in commands:
+                with self.subTest(rule=raw, command=command):
+                    output, _ = engine.evaluate(command, {"r": rule}, {}, {}, "s")
+                    self.assertEqual(cli.verdict(rule, command) is not None, output is not None)
+
+
+class Isolation(Isolated):
+    def test_render_stdout_is_only_the_block(self) -> None:
+        extra = self.tmp / "custom.json"
+        code, out, err = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--scope", "managed",
+                                  "--path", str(extra), "pkill a")
+        self.assertEqual(code, 0)
+        self.assertNotIn("\nnote:", "\n" + out)
+        self.assertIn(f"**File** `{extra}`", out)
+        self.assertIn(f"**Note** the hook enforces {extra} only if GUARDRAILS_MANAGED_PATH points at it", out)
+        self.assertIn("the hook enforces", err)
+        code, out, err = self.cli("status", "--render", "--scope", "managed", "--path", str(extra))
+        self.assertEqual(code, 0)
+        self.assertNotIn("\nnote:", "\n" + out)
+        self.assertTrue(out.startswith("**Managed**"))
+        code, out, _ = self.cli("rule", "add", "x", "--json", json.dumps(PKILL), "--scope", "managed", "--path",
+                                str(extra))
+        self.assertIn("note: the hook enforces", out)
+
+    def test_status_scope_filters_problems(self) -> None:
+        self.put(self.gpath, {"rules": {"g-bad": {"match": {"program": "x"}, "message": "m", "modes": ["a"]}}})
+        self.put(self.ppath, {"rules": {"p-bad": {"match": {"program": "x"}, "message": "m", "modes": ["b"]}}})
+        allp = self.cli("status", "--render", "--problems")[1]
+        self.assertIn("g-bad", allp)
+        self.assertIn("p-bad", allp)
+        for scope, present, absent in (("global", "g-bad", "p-bad"), ("project", "p-bad", "g-bad")):
+            for extra in ((), ("--problems",)):
+                out = self.cli("status", "--render", "--scope", scope, *extra)[1]
+                self.assertIn(present, out)
+                self.assertNotIn(absent, out)
+            self.assertNotIn(absent, self.cli("status", "--scope", scope)[1])
+        self.assertEqual(self.cli("status", "--render", "--scope", "managed", "--problems")[1], "No problems.\n")
+
+    def test_unreadable_layer_problems_follow_their_scope(self) -> None:
+        self.put(self.gpath, "{nope")
+        self.assertIn("unreadable global", self.cli("status", "--render", "--scope", "global")[1])
+        self.assertNotIn("unreadable global", self.cli("status", "--render", "--scope", "project")[1])
+
+
+class Inputs(Isolated):
+    def test_id_name_is_validated(self) -> None:
+        code, _, err = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--id-name",
+                                "bad id ### x", "ls")
+        self.assertEqual(code, 2)
+        self.assertIn("must match", err)
+
+    def test_blank_commands_are_rejected(self) -> None:
+        for argv in (("--json", json.dumps(PKILL), "  "), ("--json", json.dumps(PKILL), "--examples", '[{"cmd": " "}]'),
+                     ("--json", json.dumps(PKILL), "--examples", '[" "]')):
+            with self.subTest(argv=argv):
+                code, out, _ = self.cli("rule", "test", "--render", *argv)
+                self.assertEqual((code, out), (2, ""))
+
+    def test_scope_needs_render(self) -> None:
+        self.assertEqual(self.cli("rule", "test", "--json", json.dumps(PKILL), "--scope", "project", "ls")[0], 2)
+
+    def test_envelope_carries_rule_and_examples_through_one_stdin(self) -> None:
+        document = json.dumps({"rule": PKILL, "examples": [{"cmd": "pkill a", "source": "yours", "expect": "match"},
+                                                          {"cmd": "ls", "expect": "pass"}]})
+        with mock.patch("sys.stdin", io.StringIO(document)):
+            code, out, _ = self.cli("rule", "test", "--render", "--json", "-", "--id-name", "no-pkill")
+        self.assertEqual(code, 0)
+        self.assertIn("2 commands, 0 mismatches", out)
+        self.assertIn(" yours\n", out)
+        with mock.patch("sys.stdin", io.StringIO(document)):
+            self.assertEqual(self.cli("rule", "add", "no-pkill", "--json", "-")[0], 0)
+        stored = self.get(self.gpath)["rules"]["no-pkill"]
+        self.assertEqual(stored["match"], PKILL["match"])
+        self.assertNotIn("examples", stored)
+        with mock.patch("sys.stdin", io.StringIO(json.dumps({"rule": PKILL, "examples": "x"}))):
+            self.assertEqual(self.cli("rule", "test", "--render", "--json", "-")[0], 2)
 
 
 if __name__ == "__main__":

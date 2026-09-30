@@ -143,7 +143,8 @@ active now), global hook or project rules disabled.
 ### Rules from a file or stdin
 
 Every `--json` (`rule add`, `rule test`, and `rule set`, which takes a JSON object of fields to change) accepts a
-literal, `@<file>` (`~` and spaces work) or `-` for stdin, so a regex full of backticks, quotes and `$(` never has to
+literal, `@<file>` (`~` and spaces work) or `-` for stdin (`rule add` and `rule test` also accept
+`{"rule": {…}, "examples": […]}`, so one heredoc carries both), so a regex full of backticks, quotes and `$(` never has to
 survive shell quoting. A missing file or invalid JSON exits 2 with a message. `--examples` takes the same three forms,
 and only one of `--json` and `--examples` can read stdin.
 
@@ -172,7 +173,7 @@ newlines show as `⏎`).
 `guardrails status --render` prints the state listing the same way: a first line about the managed files (platform file
 present or absent, overrides and `--path` files), one row per rule (`id`, action, origin layers, state: `always
 enforced`, `suspended by <modes>`, `disabled`, `enabled`), the modes and the problems. `status` (with or without
-`--render`) also takes `--scope global|project|managed` (only entries of that layer) and `--problems`; `--render
+`--render`) also takes `--scope global|project|managed` (only rules, modes and problems of that layer) and `--problems`; `--render
 --rule <id>` prints just that rule's row. `references/presentation.md` is the layout contract.
 
 ## Migrating from shell-guard
@@ -209,7 +210,8 @@ when a skill needs it.
   stay the first source.
 - `new` interviews, tests the rule on your examples and on edge cases it thinks of, asks only about genuinely
   ambiguous ones, shows the `rule test --render` card for confirmation, then writes the very rule file it tested. It
-  keeps the rule and the examples in temp files (`--json @file`) instead of quoting them inline.
+  passes the rule and the examples on stdin through a quoted heredoc (no temp files, no inline quoting). Heredoc
+  invocations are not pre-approved by `allowed-tools` (tested), and `new`/`edit` pre-approve no config-changing verb.
 - `edit`, `mode` and `setup` change configuration only when you ask, always with `--as-user` and your own words in
   `--reason`. They never run `sudo`: a not-writable file prints the `sudo …` command for you to run.
 

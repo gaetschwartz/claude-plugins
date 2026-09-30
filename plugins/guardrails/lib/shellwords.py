@@ -133,14 +133,16 @@ def simple_commands(text: str, depth: int = 0) -> list[SimpleCommand]:
                 inline_script = False
                 for offset, char in enumerate(token):
                     if char == "(":
-                        subst.append(offset == 0 and index > 0 and tokens[index - 1] == "$")
+                        glued = tokens[index - 1].endswith("$") if offset == 0 and index else token[offset - 1] in "<>$"
+                        subst.append(glued)
                     elif char == ")" and subst:
                         subst.pop()
-                if token in ("|", "|&"):
+                operator = token.strip("\n")
+                if operator in ("|", "|&"):
                     if last is not None:
                         last.wrapped = True
                     pipe_next = True
-                else:
+                elif operator:
                     pipe_next = False
                 last = None
             continue

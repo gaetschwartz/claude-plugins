@@ -19,6 +19,7 @@ HOOKS = ROOT / "hooks"
 LIB = ROOT / "lib"
 sys.path.insert(0, str(LIB))
 
+import render  # noqa: F401
 import store
 
 SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR",
