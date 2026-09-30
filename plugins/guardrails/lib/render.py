@@ -12,6 +12,7 @@ import policy
 MAX_WIDTH = 40
 SOURCES = ("yours", "inferred", "you chose")
 EXPECTATIONS = ("match", "pass")
+UNEVALUATED = "unevaluated"
 NEWLINE = "⏎"
 
 
@@ -24,11 +25,11 @@ class Result:
 
     @property
     def matched(self) -> bool:
-        return self.kind is not None
+        return self.kind in ("direct", "wrapped")
 
     @property
     def mismatch(self) -> bool:
-        return self.expect is not None and (self.expect == "match") != self.matched
+        return self.expect is not None and (self.kind == UNEVALUATED or (self.expect == "match") != self.matched)
 
 
 @dataclass
@@ -147,6 +148,10 @@ def plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}{'es' if word.endswith('ch') else 's'}"
 
 
+def kind_group(result: Result) -> str | None:
+    return "direct" if result.matched else result.kind if result.kind == UNEVALUATED else None
+
+
 def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: str, scope: str, intent: str,
               results: list[Result], notes: list[str], file: str = "") -> str:
     action = str(rule.get("action"))
@@ -168,8 +173,8 @@ def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: s
     shown = [one_line(r.cmd) for r in results]
     width = common_width(shown)
     hit = "Warn" if action == "warn" else "Block"
-    for heading, glyph, wanted in ((hit, "✗", True), ("Allow", "✓", False)):
-        group = [(text, r) for text, r in zip(shown, results) if r.matched is wanted]
+    for heading, glyph, wanted in ((hit, "✗", "direct"), ("Allow", "✓", None), ("Not evaluated", "?", UNEVALUATED)):
+        group = [(text, r) for text, r in zip(shown, results) if kind_group(r) == wanted]
         if not group:
             continue
         group.sort(key=lambda pair: display_width(pair[0]) > width)

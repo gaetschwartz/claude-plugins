@@ -4,10 +4,10 @@ import os
 import unittest
 from typing import Any, ClassVar
 
-from helpers import Isolated
+from helpers import AstIsolated, Isolated
 
+import matching
 import policy
-from shellwords import simple_commands
 
 
 def rule(**overrides: Any) -> dict[str, Any]:
@@ -17,11 +17,7 @@ def rule(**overrides: Any) -> dict[str, Any]:
 
 
 def matches(r: dict[str, Any], command: str) -> bool:
-    try:
-        cmds = simple_commands(command)
-    except ValueError:
-        cmds = None
-    return policy.rule_matches(policy.with_defaults(r), command, cmds)
+    return matching.evaluate(command, {"r": policy.with_defaults(r)}).kinds["r"] is not None
 
 
 class Validate(unittest.TestCase):
@@ -41,7 +37,8 @@ class Validate(unittest.TestCase):
             rule(match={"program": ["x", ""]}),
             rule(match={"builtin": "nope"}),
             rule(match={"regex": "("}),
-            rule(match={"program": "x", "args": "["}),
+            rule(match={"program": "x y"}),
+            rule(match={"program": "a/b"}),
             rule(action="block"),
             rule(retry="always"),
             rule(modes="reverse-engineering"),
@@ -333,14 +330,14 @@ class Modes(unittest.TestCase):
         self.assertEqual(policy.active_modes(modes, {"modes": "junk"}), {})
 
 
-class Matching(unittest.TestCase):
+class Matching(AstIsolated):
     def test_program(self) -> None:
         r = rule()
         for c in ["strings /bin/ls", "sudo strings x | head", "/usr/bin/strings a", "bash -c 'strings a'",
-                  "x=$(strings a)", "cd /tmp && strings a"]:
+                  "x=$(strings a)", "cd /tmp && strings a", "command -v strings"]:
             with self.subTest(command=c):
                 self.assertTrue(matches(r, c))
-        for c in ["grep strings file", "echo strings", "man strings", "command -v strings", "which strings",
+        for c in ["grep strings file", "echo strings", "man strings", "which strings",
                   "cat <<'EOF' > notes.md\nstrings are fun\nEOF", "rg strings"]:
             with self.subTest(command=c):
                 self.assertFalse(matches(r, c))
@@ -365,11 +362,14 @@ class Matching(unittest.TestCase):
             with self.subTest(command=c):
                 self.assertFalse(matches(r, c))
 
-    def test_unbalanced_quotes_fallback(self) -> None:
-        self.assertTrue(matches(rule(), "echo 'x; strings /bin/ls"))
-        self.assertFalse(matches(rule(match={"builtin": "grep-recursive"}), "echo 'x; grep -r foo ."))
-        self.assertTrue(matches(rule(match={"program": "kill", "args": "-9"}), "echo 'x; kill -9 1"))
-        self.assertFalse(matches(rule(match={"program": "kill", "args": "-9"}), "echo 'x; kill 1"))
+    def test_unbalanced_quotes_are_not_commands_but_a_complete_command_before_them_is(self) -> None:
+        self.assertFalse(matches(rule(), "echo 'x; strings /bin/ls"))
+        self.assertTrue(matches(rule(), "strings /bin/ls; echo 'x"))
+        self.assertTrue(matches(rule(match={"program": "kill", "args": "-9"}), "kill -9 1 \"x"))
+
+    def test_the_retired_mentions_key_is_accepted_and_ignored(self) -> None:
+        policy.validate_rule(rule(match={"program": "x", "mentions": ["a"]}))
+        self.assertFalse(matches(rule(match={"program": "x", "mentions": ["strings"]}), "strings a"))
 
 
 class Rendering(Isolated):

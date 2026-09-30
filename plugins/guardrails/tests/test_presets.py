@@ -3,13 +3,13 @@ from __future__ import annotations  # noqa: I001
 import json
 import os
 
-from helpers import Isolated
+from helpers import AstIsolated
 
 import cli
 import policy
 
 
-class Presets(Isolated):
+class Presets(AstIsolated):
     def test_all_presets_are_valid_and_self_contained(self) -> None:
         self.assertEqual(cli.preset_names(), ["docs-first", "modern-cli", "process-safety"])
         for name in cli.preset_names():

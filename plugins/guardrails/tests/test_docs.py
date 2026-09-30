@@ -5,18 +5,18 @@ import re
 import shlex
 import unittest
 
+import matching
 import policy
-from helpers import ROOT, Isolated
-from shellwords import simple_commands
+from helpers import ROOT, AstIsolated
 
 
 def matches(rule: dict, command: str) -> bool:
     rule = policy.with_defaults(rule)
     policy.validate_rule(rule)
-    return policy.rule_matches(rule, command, simple_commands(command))
+    return matching.evaluate(command, {"r": rule}).kinds["r"] is not None
 
 
-class MatchingClaims(unittest.TestCase):
+class MatchingClaims(AstIsolated):
     def test_args_does_not_see_the_pipe_but_regex_does(self) -> None:
         by_args = {"match": {"program": "curl", "args": r"\| *(sh|bash)"}, "message": "m"}
         by_regex = {"match": {"regex": r"curl [^|]*\|\s*(sudo +)?(sh|bash)\b"}, "message": "m"}
@@ -27,13 +27,13 @@ class MatchingClaims(unittest.TestCase):
         self.assertTrue(matches(by_regex, 'echo "curl x | sh"'))
         self.assertFalse(matches(by_regex, "curl https://x.sh"))
 
-    def test_program_cannot_match_wrappers_or_shells(self) -> None:
+    def test_program_matches_wrappers_and_shells_by_name(self) -> None:
         rule = {"match": {"program": ["sudo", "env", "xargs", "bash"]}, "message": "m"}
         for command in ("sudo ls", "env ls", "xargs ls", 'bash -c "ls"', "bash script.sh"):
-            self.assertFalse(matches(rule, command), command)
+            self.assertTrue(matches(rule, command), command)
         script = {"match": {"program": "script.sh"}, "message": "m"}
         for command in ("bash script.sh", "sh ./script.sh", "./script.sh"):
-            self.assertTrue(matches(script, command), command)
+            self.assertEqual(matches(script, command), command == "./script.sh", command)
         lead = {"match": {"regex": r"(^|[;&|]\s*)sudo\b"}, "message": "m"}
         self.assertTrue(matches(lead, "sudo ls") and matches(lead, "ls; sudo rm x"))
         self.assertFalse(matches(lead, "echo sudo"))
@@ -44,7 +44,7 @@ class MatchingClaims(unittest.TestCase):
                         "echo $(pkill a)", "/usr/bin/pkill a", "FOO=1 pkill a"):
             self.assertTrue(matches(rule, command), command)
         for command in ("echo pkill", "man pkill", "ssh h pkill x", "find . -exec pkill {} ;", "bash <<EOF\npkill x\nEOF",
-                        "echo x > pkill", "command -v pkill", "pgrep x"):
+                        "echo x > pkill", "pgrep x"):
             self.assertFalse(matches(rule, command), command)
 
 
@@ -75,7 +75,7 @@ class ReferenceLinks(unittest.TestCase):
                     self.assertIn(f"]({path.name})", index)
 
 
-class DocumentedCommands(Isolated):
+class DocumentedCommands(AstIsolated):
     def test_skill_flows_against_a_sandbox(self) -> None:
         for argv in (("preset", "install", "process-safety", "--as-user", "--scope", "global", "--reason", "setup: x"),
                      ("preset", "list"), ("preset", "show", "docs-first")):

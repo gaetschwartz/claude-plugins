@@ -2,17 +2,13 @@
 engine:
     -CLAUDE_PLUGIN_DATA="$HOME/.cache/guardrails-engine-dev" python3 lib/guard.py engine install
 
-# Run the test suite (the engine tests skip with a message when ast-grep cannot be installed)
+# Run the test suite (the tests that need ast-grep skip with a message when it cannot be installed)
 test: engine
     python3 -m unittest discover -s tests -v
 
 # Run the suite under macOS's /usr/bin/python3 (3.9), the oldest supported interpreter
 test-39: engine
     /usr/bin/python3 -m unittest discover -s tests
-
-# Compare the stdlib matcher with the ast-compiled one (see README, Matcher parity)
-parity: engine
-    python3 tests/parity_study.py
 
 # Rewrite lib/engine-manifest.json after bumping the pin in package.json and regenerating package-lock.json
 manifest:

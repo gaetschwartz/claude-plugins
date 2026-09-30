@@ -6,13 +6,13 @@ import shlex
 import stat
 from pathlib import Path
 
-from helpers import Isolated
+from helpers import AstIsolated
 
 RULE = ('{"match": {"program": "strings"}, "message": "Read the docs.", "retry": "same-command", '
         '"modes": ["reverse-engineering"]}')
 
 
-class RuleCommands(Isolated):
+class RuleCommands(AstIsolated):
     def test_add_set_rm_global(self) -> None:
         code, out, _ = self.cli("rule", "add", "no-strings", "--json", RULE, "--reason", "user asked")
         self.assertEqual(code, 0)
@@ -77,7 +77,7 @@ class RuleCommands(Isolated):
         self.assertEqual(self.gpath.read_text(), "{nope")
 
 
-class Gate(Isolated):
+class Gate(AstIsolated):
     def test_agent_needs_as_user_for_rule_changes(self) -> None:
         code, _, err = self.cli("rule", "add", "no-strings", "--json", RULE, agent=True)
         self.assertEqual(code, 3)
@@ -111,7 +111,7 @@ class Gate(Isolated):
         self.assertEqual(self.cli("preset", "list", agent=True)[0], 0)
 
 
-class ModeCommands(Isolated):
+class ModeCommands(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         os.environ["CLAUDE_CODE_SESSION_ID"] = "s1"
@@ -204,7 +204,7 @@ class ModeCommands(Isolated):
         self.assertIn("suspended by mode reverse-engineering", out["systemMessage"])
 
 
-class Status(Isolated):
+class Status(AstIsolated):
     def test_lists_rules_modes_and_problems(self) -> None:
         self.put(self.gpath, {"rules": {"no-strings": json.loads(RULE),
                                         "bad": {"match": {"regex": "("}, "message": "x"}},
@@ -242,7 +242,7 @@ def line(marker: str, cmd: str) -> str:
     return f"  {marker:<7}{cmd}"
 
 
-class RuleTest(Isolated):
+class RuleTest(AstIsolated):
     DRAFT = '{"match": {"program": "strings"}, "message": "docs"}'
 
     def test_draft_matches_and_misses(self) -> None:
@@ -304,7 +304,7 @@ class RuleTest(Isolated):
 MANAGED_RULE = '{"match": {"program": "pkill"}, "message": "No pkill."}'
 
 
-class ManagedScope(Isolated):
+class ManagedScope(AstIsolated):
     def managed(self, *argv: str, agent: bool = False) -> tuple[int, str, str]:
         return self.cli(*argv, "--scope", "managed", agent=agent)
 
@@ -600,7 +600,7 @@ class ManagedScope(Isolated):
         self.assertEqual(stat.S_IMODE(self.mpath.stat().st_mode), 0o644)
 
 
-class ManagedNotWritable(Isolated):
+class ManagedNotWritable(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         if os.geteuid() == 0:
@@ -651,7 +651,7 @@ class ManagedNotWritable(Isolated):
         self.assertEqual(self.cli("rule", "add", "x", "--json", RULE)[0], 0)
 
 
-class PathOption(Isolated):
+class PathOption(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         self.fpath = self.tmp / "custom" / "rules.json"
@@ -795,7 +795,7 @@ class PathOption(Isolated):
         self.assertEqual(self.with_path("rule", "add", "x", "--json", RULE, "--as-user", agent=True)[0], 0)
 
 
-class PathNotWritable(Isolated):
+class PathNotWritable(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         if os.geteuid() == 0:
@@ -826,7 +826,7 @@ class PathNotWritable(Isolated):
         self.assertIn(f"--scope managed --path {target}", err)
 
 
-class PathOptionEdges(Isolated):
+class PathOptionEdges(AstIsolated):
     def test_path_with_spaces_is_quoted_in_the_sudo_hint(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root ignores permissions")
@@ -903,7 +903,7 @@ class PathOptionEdges(Isolated):
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
 
 
-class RuleTestNotes(Isolated):
+class RuleTestNotes(AstIsolated):
     DRAFT = '{"match": {"program": "pkill"}, "message": "m"}'
 
     def notes(self, *argv: str) -> str:

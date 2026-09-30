@@ -47,6 +47,40 @@ A direct hit beats a wrapped one on the same rule.
 alternative looks for a `cd` anywhere in that sibling. `(cd repo); git status` passes: the `cd` ran in a subshell and
 is not a sibling. `git status && cd repo` passes: `follows` is directional. The message should name `git -C <dir>`.
 
+## Only when something did not come first
+
+```rule-example
+{
+  "id": "push-without-pull",
+  "title": "git push with no git pull before it",
+  "rule": {
+    "ast": {
+      "pattern": "git push $$$",
+      "not": {
+        "follows": {
+          "any": [{"pattern": "git pull $$$"}, {"kind": "list", "has": {"pattern": "git pull $$$", "stopBy": "end"}}],
+          "stopBy": "end"
+        }
+      }
+    }
+  },
+  "action": "warn",
+  "catch": [
+    "git push", "git fetch; git push origin main", "make && git push", "(git push)", "bash -c 'git push'",
+    "git push && git pull", "cd repo && git push"
+  ],
+  "pass": [
+    "git pull; git push", "git pull && git push", "git pull --rebase && make && git push",
+    "bash -c 'git pull && git push'", "git status", "echo git push", "man git"
+  ]
+}
+```
+
+`not follows` reads "no earlier sibling is a `git pull`". `git push && git pull` is still caught: `follows` is
+directional. The same shape with `precedes` says "nothing later is ...". The second alternative inside `follows` is
+needed for the same reason as in the `git after cd` rule: `a && b && git push` nests the earlier commands in a sibling
+`list`.
+
 ## Every list shape
 
 ```rule-example

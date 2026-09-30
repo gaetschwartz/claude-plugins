@@ -23,7 +23,7 @@ Every block is checked by `tests/test_ast_examples.py` against the real engine: 
   "action": "deny",
   "catch": [
     "git push --force", "git -C ../repo push -f", "git push -uf origin x", "git push origin +main",
-    "sudo git push --force"
+    "bash -c 'git push --force'"
   ],
   "pass": [
     "git push", "git push --force-with-lease origin main", "git push -u origin feat-f",
@@ -56,7 +56,7 @@ push that this rule allows.
   },
   "action": "deny",
   "catch": [
-    "rm -rf /", "rm -r -f $HOME", "rm -rf \"$HOME\"", "rm -rf /*", "sudo rm -rf /",
+    "rm -rf /", "rm -r -f $HOME", "rm -rf \"$HOME\"", "rm -rf /*", "bash -c 'rm -rf /'",
     "rm --recursive --force ${HOME}"
   ],
   "pass": [

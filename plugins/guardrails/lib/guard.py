@@ -20,20 +20,19 @@ def hook(data: str) -> None:
 
     out = io.StringIO()
     failure: BaseException = RuntimeError("unknown")
-    fast = False
     watchdog.start(HOOK_BUDGET)
     try:
         engine.run_hook(io.StringIO(data), out)
         sys.stdout.write(out.getvalue())
         return
     except watchdog.Expired:
-        failure, fast = TimeoutError("hook time budget exceeded"), True
+        failure = TimeoutError("hook time budget exceeded")
     except Exception as exc:  # noqa: BLE001
         failure = exc
     finally:
         watchdog.stop()
     try:
-        engine.run_safe(data, sys.stdout, failure, fast)
+        engine.run_safe(data, sys.stdout, failure)
     except Exception:  # noqa: BLE001
         json.dump({"systemMessage": "guardrails: the hook failed and could not evaluate this command, so it was "
                    "allowed."}, sys.stdout)

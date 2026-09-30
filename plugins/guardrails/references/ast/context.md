@@ -100,16 +100,30 @@ A bare `sleep 5` passes because nothing contains it.
 substitution is found through `sudo bash -c '...'` because the shell string is parsed again. Top-level `pkill x` is not
 matched here on purpose: that is another rule's job. A regex like `\$\(.*pkill` would fire on `echo '$(pkill x)'`.
 
-## Negated context does not work
+## A command unless it is guarded
 
-`not` around a relation to an ancestor or sibling (`not inside`, `not follows`, `not precedes`) gives false matches:
-every simple command is also re-checked on its own, without its surroundings, so the "unguarded" command is always
-found. Verified:
+`not` around a relation (`not inside`, `not follows`, `not precedes`) works: every rule runs on the parse tree of the
+command as written, and again on the tree of each shell string (`bash -c '...'`, `eval ...`), so "the unguarded
+command" is decided by what really surrounds it.
 
-```json
-{"ast": {"pattern": "npm publish $$$", "not": {"inside": {"kind": "if_statement", "stopBy": "end"}}}}
+```rule-example
+{
+  "id": "npm-publish-unguarded",
+  "title": "npm publish outside an if",
+  "rule": {"ast": {"pattern": "npm publish $$$", "not": {"inside": {"kind": "if_statement", "stopBy": "end"}}}},
+  "action": "deny",
+  "catch": [
+    "npm publish", "npm publish --tag next", "make && npm publish", "echo $(npm publish)",
+    "bash -c 'npm publish'", "bash -c 'if a; then b; fi; npm publish'", "sudo npm publish"
+  ],
+  "pass": [
+    "if [ -n \"$TAG\" ]; then npm publish; fi", "bash -c 'if true; then npm publish; fi'",
+    "eval 'if a; then npm publish; fi'", "npm view x", "echo npm publish", "man npm",
+    "cat <<'EOF'\nnpm publish\nEOF"
+  ]
+}
 ```
 
-matches `if [ -n "$TAG" ]; then npm publish; fi` as well as `npm publish`. State the dangerous context positively (an
-`inside` or `follows` rule), or split the rule. `not has` looks inside the matched command only, so it is reliable:
-see the `--force-with-lease` exception in [flags.md](flags.md).
+The last two `pass` lines before `man` show the point of scanning shell strings as units of their own: the `if` inside
+`bash -c '...'` guards the `npm publish` in that string, and the `if` in `bash -c 'if a; then b; fi; npm publish'` does
+not. `stopBy: end` makes `inside` climb to the root; without it only the parent is checked.

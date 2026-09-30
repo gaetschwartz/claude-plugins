@@ -1,417 +1,169 @@
-"""AST evaluation of match.ast rules through the ast-grep binary.
+"""Evaluate rules against a command with ast-grep: one scan per level of shell-string nesting.
 
-Wrapper look-through works by rewriting the source (dropping the wrapper's own words, or replacing a shell string by
-its content) and re-parsing, so relations such as `inside` still see the real surroundings.
+The command is scanned as written. The script of every `bash -c '...'` and the arguments of every `eval` are unquoted
+and scanned as units of their own, to a bounded depth; a hit inside one of them counts as wrapped.
 """
 
 from __future__ import annotations
 
-import json
 import re
-from typing import Any
+from collections.abc import Iterator
+from typing import Any, NamedTuple
 
-import ansic
+import astrules
 import policy
-from astcli import Cli, Node, RuleError, Src, Unavailable
+from astcli import Cli, Hit, Node, RuleError, Src, Unavailable
 
-MAX_DEPTH = 16
-MAX_UNITS = 512
-MAX_UNIT_BYTES = 32768
-MAX_SOURCE_BYTES = 4 << 20
-MAX_PARSE_BYTES = 1 << 20
-PARSE_COST = 256
+MAX_DEPTH = 8
+MAX_UNITS = 64
+MAX_SCRIPT_BYTES = 256 << 10
 MAX_RULES_BYTES = 256 * 1024
-CONTEXT = {"any": [{"kind": "pipeline"}, {"kind": "command_substitution"}, {"kind": "process_substitution"}],
-           "stopBy": "end"}
-REDIRECTS = frozenset({"file_redirect", "heredoc_redirect", "herestring_redirect"})
-ASSIGN = re.compile(r"^[A-Za-z_][A-Za-z0-9_]*=")
-DQ_ESCAPE = re.compile(r'\\([\\"$`])')
-WORD_ESCAPE = re.compile(r"\\(.)")
-SIMPLE_WORD = re.compile(r"[A-Za-z0-9_.+@%:,=-]+")
-TRAILING_HOLE = re.compile(r"^(.*\S)\s+\$\$\$$", re.DOTALL)
-REWRITABLE = re.compile(r"['\"\\/=]")
-YAML_UNSAFE = re.compile("[\x7f-\x9f\u2028\u2029\ufeff]")
 LEAF_KINDS = ("word", "command_name", "raw_string", "number")
+ESCAPED_IN_DOUBLE_QUOTES = re.compile(r'\\([\\"$`])')
+WORD_PIECE = re.compile(r"""'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)|([^'"\\]+)""", re.DOTALL)
 
 Rule = dict[str, Any]
-Table = dict[str, dict[str, Any]]
 
 
-class Unit:
-    """One tree to evaluate: the command as written, its normalised form, or a rewrite exposed by a wrapper."""
-
-    __slots__ = ("hi", "label", "lo", "src", "tree")
-
-    def __init__(self, src: str, lo: int = -1, hi: int = -1, label: str = "", tree: Node | None = None) -> None:
-        self.src, self.lo, self.hi, self.label, self.tree = src, lo, hi, label, tree
-
-    @property
-    def derived(self) -> bool:
-        return self.lo >= 0
+class Limit(Exception):
+    """Unpacking shell strings hit a cap: "depth", "units" or "size"."""
 
 
-def dequote(node: Node) -> str:
-    kind, text = node.kind, node.text()
-    if kind == "raw_string":
-        return text[1:-1]
-    if kind == "string":
-        return DQ_ESCAPE.sub(r"\1", text[1:-1])
-    if kind == "ansi_c_string":
-        return ansic.decode(text[2:-1])
-    if kind == "word":
-        return WORD_ESCAPE.sub(r"\1", text)
-    if kind == "concatenation":
-        return "".join(dequote(c) for c in node.named_children())
-    return text
+class Unit(NamedTuple):
+    depth: int
+    src: Src
+    hits: list[Hit]
 
 
-def is_flag(node: Node) -> bool:
-    return node.kind in ("word", "number", "concatenation") and node.text().startswith("-")
+def unquote(word: str) -> str:
+    """The text one shell word stands for: its single-quoted, double-quoted, backslashed and bare pieces joined."""
+
+    def piece(found: re.Match[str]) -> str:
+        single, double, escaped, bare = found.groups()
+        if double is not None:
+            return ESCAPED_IN_DOUBLE_QUOTES.sub(r"\1", double)
+        return next(text for text in (single, escaped, bare) if text is not None)
+
+    return WORD_PIECE.sub(piece, word)
 
 
-def cluster_takes_value(word: str, flags: set[str]) -> bool:
-    if len(word) < 3 or word[1] == "-" or not word[1:].isalpha():
-        return False
-    for i, letter in enumerate(word[1:]):
-        if f"-{letter}" in flags:
-            return i == len(word) - 2
-    return False
+def eval_words(src: Src, hits: list[Hit]) -> list[list[str]]:
+    """The unquoted arguments of each `eval` command in a unit, each argument filed under its innermost command."""
+    commands = sorted((hit for hit in hits if hit.rule == astrules.EVAL_COMMAND), key=lambda hit: hit.lo)
+    args = sorted((hit for hit in hits if hit.rule == astrules.EVAL_ARG), key=lambda hit: hit.lo)
+    found: dict[int, list[str]] = {command.lo: [] for command in commands}
+    open_commands: list[Hit] = []
+    upcoming = iter(commands)
+    pending = next(upcoming, None)
+    for arg in args:
+        while pending is not None and pending.lo <= arg.lo:
+            open_commands.append(pending)
+            pending = next(upcoming, None)
+        while open_commands and open_commands[-1].hi < arg.hi:
+            open_commands.pop()
+        if open_commands:
+            found[open_commands[-1].lo].append(unquote(src.text[arg.lo:arg.hi]))
+    return list(found.values())
 
 
-def shell_flag_matches(word: str, flag: str) -> bool:
-    if word == flag:
-        return True
-    return len(flag) == 2 and re.fullmatch(r"-[A-Za-z]*" + re.escape(flag[1]) + r"[A-Za-z]*", word) is not None
+def scripts_in(src: Src, hits: list[Hit]) -> list[str]:
+    """The text run by each `bash -c` string and `eval` in a unit; `eval` joins its arguments like the shell does."""
+    scripts = [unquote(src.text[hit.lo:hit.hi]) for hit in hits if hit.rule == astrules.SHELL_SCRIPT]
+    scripts += [" ".join(words) for words in eval_words(src, hits)]
+    return [script for script in scripts if script.strip()]
 
 
-def command_parts(node: Node) -> tuple[Node, list[Node]] | None:
-    """(command_name node, argument nodes without redirects) of a `command` node."""
-    name = next((c for c in node.children if c.field == "name"), None)
-    if name is None:
-        return None
-    seen = False
-    args = []
-    for child in node.named_children():
-        if not seen:
-            seen = child is name and child.kind == "command_name"
-            continue
-        if child.kind not in REDIRECTS:
-            args.append(child)
-    return name, args
-
-
-def resolve(entry: dict[str, Any], args: list[Node]) -> tuple[str, Any] | None:
-    """("command", index of the wrapped command's first word) or ("shell", script text); None when nothing runs."""
-    with_value = set(entry.get("flagsWithValue", ()))
-    inert = set(entry.get("noCommandFlags", ()))
-    shell = entry.get("shellString")
-    i = 0
-    while i < len(args):
-        word = args[i]
-        text = word.text()
-        if text == "--":
-            i += 1
-            break
-        if is_flag(word):
-            if shell and shell != "rest" and shell_flag_matches(text, shell):
-                at = i + 1 + (1 if i + 1 < len(args) and args[i + 1].text() == "--" else 0)
-                return ("shell", dequote(args[at])) if at < len(args) else None
-            if text in inert:
-                return None
-            i += 2 if text in with_value or cluster_takes_value(text, with_value) else 1
-            continue
-        if entry.get("assignments") and ASSIGN.match(dequote(word)):
-            i += 1
-            continue
-        break
-    i += entry.get("skip", 0)
-    if i >= len(args):
-        return None
-    if shell == "rest":
-        return "shell", " ".join(dequote(a) for a in args[i:])
-    if shell:
-        return None
-    return "command", i
-
-
-def simple_word(value: str) -> str | None:
-    """The command name a word would run (directory and quotes dropped), when it is a plain name."""
-    base = value.rsplit("/", 1)[-1]
-    return base if SIMPLE_WORD.fullmatch(base) else None
-
-
-def apply_edits(src: str, edits: list[tuple[int, int, str]]) -> str:
-    kept: list[tuple[int, int, str]] = []
-    for lo, hi, text in sorted(edits, key=lambda e: (e[0], e[1])):
-        if not kept or lo >= kept[-1][1]:
-            kept.append((lo, hi, text))
-    for lo, hi, text in reversed(kept):
-        src = src[:lo] + text + src[hi:]
-    return src
-
-
-def commands_of(tree: Node) -> list[Node]:
-    return [n for n in tree.walk() if n.kind == "command"]
-
-
-def normalise(src: str, tree: Node) -> str:
-    """Drop what precedes the command name without changing what runs: VAR=value prefixes, directories, quotes."""
-    edits: list[tuple[int, int, str]] = []
-    for cmd in commands_of(tree):
-        parts = command_parts(cmd)
-        if parts is None:
-            continue
-        name = parts[0]
-        assigns = [c for c in cmd.named_children() if c.kind == "variable_assignment"]
-        if assigns:
-            edits.append((assigns[0].lo, name.lo, ""))
-        inner = name.named_children()
-        plain = simple_word(dequote(inner[0])) if len(inner) == 1 else None
-        if plain is not None and plain != name.text():
-            edits.append((name.lo, name.hi, plain))
-    return apply_edits(src, edits)
-
-
-def normalise_shell(script: str, cli: Cli) -> str:
-    """normalise() of a shell string; without quotes, slashes or assignments there is nothing to rewrite."""
-    if not REWRITABLE.search(script):
-        return script
-    return normalise(script, cli.dump([Src(script)])[0])
-
-
-def variants(src: str, tree: Node, table: Table, cli: Cli, within: tuple[int, int] | None = None
-             ) -> list[tuple[str, int, int, str]]:
-    """(rewritten source, region start, region end, label) for each wrapper command in the tree.
-
-    After the first round only commands inside the region a rewrite exposed are expanded: the others were already
-    handled from the original tree, and expanding their combinations would grow without bound.
-    """
-    out = []
-    for cmd in commands_of(tree):
-        parts = command_parts(cmd)
-        if parts is None:
-            continue
-        if within is not None and not (cmd.lo < within[1] and cmd.hi > within[0]):
-            continue
-        name, args = parts
-        base = name.text().strip("\"'").rsplit("/", 1)[-1]
-        entry = table.get(base)
-        if entry is None:
-            continue
-        found = resolve(entry, args)
-        if found is None:
-            continue
-        if found[0] == "command":
-            first = args[found[1]]
-            word = simple_word(dequote(first)) or first.text()
-            out.append((src[:name.lo] + word + src[first.hi:], name.lo, name.lo + len(word) + cmd.hi - first.hi, base))
-        else:
-            replacement = "{ " + normalise_shell(found[1], cli) + "\n}"
-            out.append((src[:cmd.lo] + replacement + src[cmd.hi:], cmd.lo, cmd.lo + len(replacement), base))
-    return out
-
-
-def mentions_wrapper(src: str, table: Table) -> bool:
-    return any(name in src for name in table)
-
-
-def parse_units(units: list[Unit], cli: Cli, wanted: list[bool]) -> None:
-    chosen = [u for u, want in zip(units, wanted) if want]
-    for unit, tree in zip(chosen, cli.dump([Src(u.src) for u in chosen])):
-        unit.tree = tree
-
-
-def unit_trees(command: str, table: Table, cli: Cli, everything: bool = False) -> tuple[list[Unit], str | None]:
-    """Every tree to evaluate, and why the expansion stopped early ("depth", "units" or "size"), if it did.
-
-    `everything` parses units even when nothing in them can be rewritten or unwrapped. Parsing costs a process, so a
-    unit whose text has no wrapper name (and, for the command itself, nothing that normalise() would rewrite) is left
-    without a tree: it can expose no further unit. The work is bounded by counts and bytes, never by the clock.
-    """
-    first = Unit(command)
-    parse_units([first], cli, [everything or bool(REWRITABLE.search(command)) or mentions_wrapper(command, table)])
-    units = [first]
+def walk(command: str, bodies: dict[str, dict[str, Any]], cli: Cli) -> Iterator[Unit]:
+    """The command, then the shell strings it unpacks, level by level, each scanned with every rule in `bodies`."""
     seen = {command}
-    base = first
-    plain = normalise(command, first.tree) if first.tree else command
-    if plain != command:
-        base = Unit(plain)
-        parse_units([base], cli, [True])
-        units.append(base)
-        seen.add(plain)
-    spent = len(command) + len(plain) + 2 * PARSE_COST
-    frontier = [base]
-    reason: str | None = None
-    level = 0
-    while frontier and reason is None:
-        fresh: list[Unit] = []
-        for unit in frontier:
-            within = (unit.lo, unit.hi) if unit.derived else None
-            found = variants(unit.src, unit.tree, table, cli, within) if unit.tree else []
-            for new_src, lo, hi, label in found:
-                if new_src in seen:
+    level = [command]
+    spent = 0
+    depth = 0
+    while level:
+        sources = [Src(text) for text in level]
+        found = cli.scan(bodies, sources)
+        level = []
+        for src, hits in zip(sources, found):
+            yield Unit(depth, src, hits)
+            for script in scripts_in(src, hits):
+                if script in seen:
                     continue
-                spent += len(new_src) + PARSE_COST
-                if level + 1 > MAX_DEPTH:
-                    reason = "depth"
-                elif len(units) + len(fresh) >= MAX_UNITS:
-                    reason = "units"
-                elif len(new_src) > MAX_UNIT_BYTES or spent > MAX_PARSE_BYTES:
-                    reason = "size"
-                if reason:
-                    break
-                seen.add(new_src)
-                fresh.append(Unit(new_src, lo, hi, label))
-            if reason:
-                break
-        units.extend(fresh)
-        parse_units(fresh, cli, [everything or mentions_wrapper(u.src, table) for u in fresh])
-        frontier = fresh
-        level += 1
-    return units, reason
+                spent += len(script)
+                if depth >= MAX_DEPTH:
+                    raise Limit("depth")
+                if len(seen) >= MAX_UNITS:
+                    raise Limit("units")
+                if spent > MAX_SCRIPT_BYTES:
+                    raise Limit("size")
+                seen.add(script)
+                level.append(script)
+        depth += 1
 
 
-def widen(rule: Any) -> Any:
-    """A pattern ending in ` $$$` also selects the command when it has no arguments (the bare hole never does)."""
-    if isinstance(rule, list):
-        return [widen(item) for item in rule]
-    if not isinstance(rule, dict):
-        return rule
-    out = {key: value if key == "pattern" else widen(value) for key, value in rule.items()}
-    pattern = rule.get("pattern")
-    found = TRAILING_HOLE.match(pattern.strip()) if isinstance(pattern, str) else None
-    if not found:
-        return out
-    either = {"any": [{"pattern": pattern}, {"pattern": {"context": found.group(1), "selector": "command"}}]}
-    keep = {k: v for k, v in out.items() if k in ("stopBy", "field")}
-    rest = {k: v for k, v in out.items() if k not in ("pattern", "stopBy", "field")}
-    return {"all": [either, rest] if rest else [either], **keep}
-
-
-def document(rule_id: str, rule: Any) -> str:
-    """One ast-grep rule document; JSON is valid YAML, and the characters YAML treats as line breaks stay escaped."""
-    text = json.dumps({"id": rule_id, "language": "bash", "rule": rule}, ensure_ascii=False)
-    return YAML_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
-
-
-def rule_files(live: dict[str, Rule]) -> tuple[dict[str, str], dict[str, str]]:
-    """(one rules file per live rule: the rule plus its in-context twin, rule id per file name)."""
-    files, owners = {}, {}
-    for i, (rid, rule) in enumerate(live.items()):
-        files[f"g{i}"] = document(f"g{i}", rule) + "\n---\n" + document(
-            f"g{i}c", {"all": [rule, {"inside": CONTEXT}]}) + "\n"
-        owners[f"g{i}"] = rid
-    return files, owners
-
-
-def admissible(rules: dict[str, Rule]) -> tuple[dict[str, Rule], dict[str, str]]:
+def admissible(rules: dict[str, policy.Rule]) -> tuple[dict[str, policy.Rule], dict[str, str]]:
     """The rules small enough to run, in order, and the reason for each one left out."""
-    ok: dict[str, Rule] = {}
+    ok: dict[str, policy.Rule] = {}
     errors: dict[str, str] = {}
     total = 0
     for rid, rule in rules.items():
-        size = len(json.dumps(rule))
+        ast = policy.ast_of(rule)
+        size = policy.ast_size(ast) if ast else 0
         if size > policy.MAX_AST_BYTES:
             errors[rid] = f"match.ast is larger than {policy.MAX_AST_BYTES // 1024} KiB ({size} bytes)"
         elif total + size > MAX_RULES_BYTES:
-            errors[rid] = f"the enabled match.ast rules together exceed {MAX_RULES_BYTES // 1024} KiB; this one is skipped"
+            errors[rid] = f"the enabled rules together exceed {MAX_RULES_BYTES // 1024} KiB of match.ast; this one is skipped"
         else:
             total += size
             ok[rid] = rule
     return ok, errors
 
 
-def prepare(rules: dict[str, Rule], cli: Cli) -> tuple[dict[str, Rule], dict[str, str]]:
-    """(rules ready to run, reason per rule that is not)."""
-    sized, errors = admissible(rules)
-    if not sized:
-        return {}, errors
-    widened = {rid: widen(rule) for rid, rule in sized.items()}
+def compiling(rules: dict[str, policy.Rule], wrappers: list[str], cli: Cli) -> tuple[dict[str, policy.Rule], dict[str, str]]:
+    """Split rules into those ast-grep accepts and the reason for each it rejects."""
+    ok: dict[str, policy.Rule] = {}
+    errors: dict[str, str] = {}
+    for rid, rule in rules.items():
+        try:
+            cli.check(astrules.documents({rid: rule}, wrappers)[0])
+        except RuleError as exc:
+            errors[rid] = str(exc)
+        else:
+            ok[rid] = rule
+    return ok, errors
+
+
+def kind_of(branch: str, depth: int) -> str:
+    return "direct" if branch == astrules.DIRECT and depth == 0 else "wrapped"
+
+
+def verdicts_of(command: str, rules: dict[str, policy.Rule], wrappers: list[str], cli: Cli
+                ) -> tuple[dict[str, str | None], str | None]:
+    """(how each rule matched: "direct", "wrapped" or None; the reason unpacking stopped early, if it did)."""
+    bodies, owners = astrules.documents(rules, wrappers)
+    verdicts: dict[str, str | None] = {rid: None for rid in rules}
     try:
-        cli.check(rule_files(widened)[0])
-        return widened, errors
-    except RuleError:
-        pass
-    ready: dict[str, Rule] = {}
-    for rid, rule in sized.items():
-        for candidate in (widened[rid], rule):
-            try:
-                cli.check(rule_files({rid: candidate})[0])
-            except RuleError as exc:
-                errors[rid] = str(exc)
-                continue
-            ready[rid] = candidate
-            errors.pop(rid, None)
-            break
-    return ready, errors
-
-
-def best(current: str | None, new: str) -> str:
-    return "direct" if "direct" in (current, new) else new
-
-
-def verdicts_of(units: list[Unit], lexed: list[dict[str, Any]], hits: list[list[Any]], owners: dict[str, str],
-                live: dict[str, Rule]) -> dict[str, str | None]:
-    verdicts: dict[str, str | None] = {rid: None for rid in live}
-    for at, found in enumerate(hits):
-        in_context = {(h.rule, h.lo, h.hi) for h in found if h.rule.endswith("c")}
-        unit = units[at] if at < len(units) else None
-        for hit in found:
-            if hit.rule.endswith("c"):
-                continue
-            if unit is None:
-                tagged = lexed[at - len(units)].get("wrapped") or (hit.rule + "c", hit.lo, hit.hi) in in_context
-                kind = "wrapped" if tagged else "direct"
-            elif unit.derived:
-                if not (hit.lo < unit.hi and hit.hi > unit.lo):
-                    continue
-                kind = "wrapped"
-            else:
-                kind = "wrapped" if (hit.rule + "c", hit.lo, hit.hi) in in_context else "direct"
-            rid = owners[hit.rule]
-            verdicts[rid] = best(verdicts[rid], kind)
-    return verdicts
-
-
-def distinct_lexed(items: list[dict[str, Any]]) -> tuple[list[dict[str, Any]], str | None]:
-    """The lexer's units without repeats, cut at the unit and byte caps (with the reason when something was cut)."""
-    out: list[dict[str, Any]] = []
-    seen: set[tuple[str, bool]] = set()
-    spent = 0
-    for item in items:
-        key = (item["src"], bool(item.get("wrapped")))
-        if key in seen:
-            continue
-        spent += len(item["src"])
-        if len(item["src"]) > MAX_UNIT_BYTES or spent > MAX_SOURCE_BYTES:
-            return out, "size"
-        if len(out) >= MAX_UNITS:
-            return out, "units"
-        seen.add(key)
-        out.append({"src": item["src"], "wrapped": key[1]})
-    return out, None
+        for unit in walk(command, bodies, cli):
+            for hit in unit.hits:
+                if hit.rule in owners:
+                    rid, branch = owners[hit.rule]
+                    kinds = (verdicts[rid], kind_of(branch, unit.depth))
+                    verdicts[rid] = "direct" if "direct" in kinds else "wrapped"
+    except Limit as exc:
+        return verdicts, str(exc)
+    return verdicts, None
 
 
 def evaluate(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
-    rules: dict[str, Rule] = request.get("rules") or {}
+    wrappers: list[str] = list(request.get("wrappers") or ())
+    rules, errors = admissible(request.get("rules") or {})
     command = request["command"].replace("\x00", " ")
-    lexed, cut = distinct_lexed(list(request.get("lexed") or ()))
-    sized, errors = admissible(rules)
-    live: dict[str, Rule] = {rid: widen(rule) for rid, rule in sized.items()}
-    units, reason = unit_trees(command, request.get("wrappers") or {}, cli) if live else ([], None)
-    sources = [Src(u.src) for u in units] + [Src(item["src"]) for item in lexed]
-    hits: list[list[Any]] = [[] for _ in sources]
-    owners: dict[str, str] = {}
-    while live:
-        files, owners = rule_files(live)
-        try:
-            hits = cli.scan(files, sources)
-            break
-        except RuleError:
-            live, errors = prepare(rules, cli)
-    reason = reason or cut
-    return {"ok": True, "verdicts": verdicts_of(units, lexed, hits, owners, live), "errors": errors,
-            "limited": reason is not None, "reason": reason, "version": cli.version}
+    try:
+        verdicts, limit = verdicts_of(command, rules, wrappers, cli)
+    except RuleError:
+        rules, rejected = compiling(rules, wrappers, cli)
+        errors.update(rejected)
+        verdicts, limit = verdicts_of(command, rules, wrappers, cli)
+    return {"ok": True, "verdicts": verdicts, "errors": errors, "limit": limit, "version": cli.version}
 
 
 def with_depth(root: Node) -> list[tuple[Node, int]]:
@@ -426,7 +178,7 @@ def with_depth(root: Node) -> list[tuple[Node, int]]:
 
 def broken(cst: Node) -> bool:
     """ERROR nodes, or zero-width nodes the parser invented to recover (MISSING)."""
-    return any(n.kind == "ERROR" or (n.lo == n.hi and n is not cst and n.kind not in ("program", "heredoc_body"))
+    return any(n.kind == "ERROR" or (n.lo == n.hi and n is not cst and n.kind not in ("program", "heredoc_body", "heredoc_content"))
                for n in cst.walk())
 
 
@@ -448,12 +200,19 @@ def rows(ast: Node, cst: Node) -> list[list[Any]]:
 
 
 def tree(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
-    units, reason = unit_trees(request["command"].replace("\x00", " "), request.get("wrappers") or {}, cli, True)
-    sources = [Src(u.src) for u in units]
-    complete = cli.dump(sources, "cst")
-    shown = [{"label": u.label if u.derived else "", "src": u.src, "nodes": rows(u.tree or complete[i], complete[i]),
-              "broken": broken(complete[i])} for i, u in enumerate(units)]
-    return {"ok": True, "units": shown, "limited": reason is not None, "reason": reason, "version": cli.version}
+    wrappers: list[str] = list(request.get("wrappers") or ())
+    limit: str | None = None
+    units: list[Src] = []
+    try:
+        units.extend(unit.src for unit in walk(request["command"].replace("\x00", " "),
+                                               astrules.shell_string_rules(wrappers), cli))
+    except Limit as exc:
+        limit = str(exc)
+    simple = cli.dump(units)
+    complete = cli.dump(units, "cst")
+    shown = [{"label": "shell string" if i else "", "src": src.text, "nodes": rows(simple[i], complete[i]),
+              "broken": broken(complete[i])} for i, src in enumerate(units)]
+    return {"ok": True, "units": shown, "limit": limit, "version": cli.version}
 
 
 def handle(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
@@ -463,7 +222,9 @@ def handle(request: dict[str, Any], cli: Cli) -> dict[str, Any]:
     if op == "tree":
         return tree(request, cli)
     if op == "check":
-        return {"ok": True, "errors": prepare(request.get("rules") or {}, cli)[1], "version": cli.version}
+        rules, errors = admissible(request.get("rules") or {})
+        errors.update(compiling(rules, list(request.get("wrappers") or ()), cli)[1])
+        return {"ok": True, "errors": errors, "version": cli.version}
     if op == "ping":
         return {"ok": True, "version": cli.version}
     return {"ok": False, "error": f"unknown op {op!r}"}

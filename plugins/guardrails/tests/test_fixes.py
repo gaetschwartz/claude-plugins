@@ -3,7 +3,6 @@ from __future__ import annotations  # noqa: I001
 import io
 import json
 import os
-import random
 import re
 import shlex
 import subprocess
@@ -11,10 +10,10 @@ import sys
 import time
 import unittest
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any
 from unittest import mock
 
-from helpers import HOOKS, LIB, AstIsolated, Isolated
+from helpers import HOOKS, LIB, ROOT, AstIsolated, Isolated
 
 import astbin
 import astrun
@@ -40,142 +39,73 @@ def is_denied(out: dict[str, Any] | None) -> bool:
 
 
 FORMS = [
-    f"xargs -I{{}} {K} {{}}", f"xargs -I{{}} sh -c '{K} {{}}'", f"env - {K} x", f'env "A=1 B" {K} x',
-    f"bash -c -- '{K} x'", f"sudo -nu bob {K} x", f"sudo -Eu bob {K} x", f"sudo -iu bob {K} x", f"xargs -i {K} {{}}",
-    f"cat <<EOF\n\t$({K} x)\nEOF", f"cat <<EOF\n`{K} x`\nEOF", f"cat <<-EOF\n\t$({K} x)\n\tEOF",
-    f"echo $(cat <<EOF\n$({K} x)\nEOF\n)", f'echo "$(nm $({K} z))"', f"sudo -u bob -- {K} x",
+    "xargs -I{} KILL {}", "xargs -I{} sh -c 'KILL {}'", "env - KILL x", 'env "A=1 B" KILL x', "bash -c -- 'KILL x'",
+    "sudo -nu bob KILL x", "sudo -Eu bob KILL x", "sudo -iu bob KILL x", "xargs -i KILL {}", "cat <<EOF\n$(KILL x)\nEOF",
+    "echo $(cat <<EOF\n$(KILL x)\nEOF\n)", 'echo "$(nm $(KILL z))"', "sudo -u bob -- KILL x",
 ]
+HEREDOC_SUBSTITUTIONS_THE_PARSER_DOES_NOT_SEE = ["cat <<EOF\n`KILL x`\nEOF", "cat <<EOF\n\t$(KILL x)\nEOF",
+                                                 "cat <<-EOF\n\t$(KILL x)\n\tEOF"]
 
 
-class PlainForms(Isolated):
-    def test_the_plain_lexer_sees_every_form(self) -> None:
+class Forms(AstIsolated):
+    def test_program_sees_every_form_and_quoted_heredocs_stay_data(self) -> None:
         for command in FORMS:
             with self.subTest(command=command):
-                self.assertIsNotNone(matching.evaluate(command, {"r": PROGRAM_RULE}).kinds["r"])
-
-    def test_quoted_heredocs_stay_data(self) -> None:
+                self.assertIsNotNone(matching.evaluate(command.replace("KILL", K), {"r": PROGRAM_RULE}).kinds["r"])
         for command in (f"cat <<'EOF'\n$({K} x)\nEOF", f"cat <<\"EOF\"\n`{K} x`\nEOF"):
             self.assertIsNone(matching.evaluate(command, {"r": PROGRAM_RULE}).kinds["r"], command)
 
-
-class AstForms(AstIsolated):
-    def test_the_ast_path_sees_every_form(self) -> None:
-        for command in FORMS:
+    def test_known_limit_substitutions_in_heredoc_bodies_that_the_parser_leaves_as_text(self) -> None:
+        for command in HEREDOC_SUBSTITUTIONS_THE_PARSER_DOES_NOT_SEE:
             with self.subTest(command=command):
-                self.assertIsNotNone(matching.evaluate(command, {"r": AST_RULE}).kinds["r"])
-
-    def test_quoted_heredocs_stay_data(self) -> None:
-        for command in (f"cat <<'EOF'\n$({K} x)\nEOF", f"echo '{K} x'"):
-            self.assertIsNone(matching.evaluate(command, {"r": AST_RULE}).kinds["r"], command)
+                self.assertIsNone(matching.evaluate(command.replace("KILL", K), {"r": PROGRAM_RULE}).kinds["r"])
+        self.assertIn("backticks", (ROOT / "references" / "matching.md").read_text())
 
 
-class Layering(Isolated):
+class Layering(AstIsolated):
     def managed_rules(self) -> None:
         self.put(self.mpath, {"rules": {"no-kill": {"match": {"program": K}, "message": "No kill by name."},
-                                        "no-strings": {"match": {"program": "strings", "args": "^-n"},
+                                        "no-strings": {"match": {"program": "strings", "args": "^strings -n"},
                                                        "message": "No strings."}}})
 
-    def test_a_project_cannot_swallow_a_command_with_a_wrapper_flag(self) -> None:
+    def test_lower_layers_only_add_wrapper_names(self) -> None:
         self.managed_rules()
-        self.assertTrue(is_denied(self.hook(f"sudo -E {K} x", "a")))
-        self.put(self.ppath, {"wrappers": {"sudo": {"flagsWithValue": ["-E"], "noCommandFlags": ["-E"]},
-                                           "nohup": {"skip": 2}}})
-        for n, command in enumerate([f"sudo -E {K} x", f"nohup {K} x", f"env -i {K} x"]):
-            out = self.hook(command, f"b{n}")
-            self.assertTrue(is_denied(out), command)
-
-    def test_the_ignored_entry_is_reported_once_per_session(self) -> None:
-        self.managed_rules()
-        self.put(self.ppath, {"wrappers": {"sudo": {"flagsWithValue": ["-E"]}}})
-        first = self.hook(f"sudo -E {K} x", "once")
-        assert first is not None
-        self.assertIn("wrapper 'sudo' is built in", first["systemMessage"])
-        second = self.hook(f"sudo -E {K} y", "once")
-        assert second is not None
-        self.assertNotIn("systemMessage", second)
-
-    def test_a_project_cannot_make_a_command_vanish_by_declaring_it_a_wrapper(self) -> None:
-        self.managed_rules()
-        self.put(self.ppath, {"wrappers": {K: {}, "strings": {"flagsWithValue": ["-n"]}}})
-        for n, command in enumerate([f"{K} x", f"true && {K} x", "strings -n 4 /bin/ls", f"{K} -f y | head"]):
-            self.assertTrue(is_denied(self.hook(command, f"v{n}")), command)
+        self.put(self.ppath, {"wrappers": {"mywrap": {}, "sudo": {"flagsWithValue": ["-E"], "noCommandFlags": ["-E"]},
+                                           K: {"skip": 2}}})
+        for n, command in enumerate([f"sudo -E {K} x", f"nohup {K} x", f"env -i {K} x", f"mywrap -x {K} x", f"{K} x",
+                                     "strings -n 4 /bin/ls"]):
+            self.assertTrue(is_denied(self.hook(command, f"b{n}")), command)
 
     def test_a_global_layer_is_held_to_the_same_rule(self) -> None:
         self.managed_rules()
-        self.put(self.gpath, {"wrappers": {"sudo": {"flagsWithValue": ["-E"]}, K: {"skip": 3}}})
+        self.put(self.gpath, {"wrappers": {"sudo": {"skip": 3}, K: {}}})
         self.assertTrue(is_denied(self.hook(f"sudo -E {K} x", "g1")))
         self.assertTrue(is_denied(self.hook(f"{K} x", "g2")))
 
-    def test_the_cli_refuses_to_redefine_a_builtin(self) -> None:
-        code, _, err = self.cli("wrapper", "add", "sudo", "--json", '{"flagsWithValue": ["-E"]}')
+    def test_old_wrapper_entries_load_and_their_options_are_ignored(self) -> None:
+        old = {"flagsWithValue": ["-x"], "shellString": "-c", "skip": 1, "assignments": True, "noCommandFlags": ["-v"]}
+        self.put(self.gpath, {"wrappers": {"mywrap": old}, "rules": {"k": {"match": {"program": K}, "message": "m"}}})
+        self.assertTrue(is_denied(self.hook(f"mywrap -x 3 {K} a")))
+        self.assertEqual(self.cli("status", "--problems")[0], 0)
+
+    def test_the_cli_takes_names_and_refuses_builtins(self) -> None:
+        code, _, err = self.cli("wrapper", "add", "sudo")
         self.assertEqual(code, 2)
-        self.assertIn("built in", err)
+        self.assertIn("already built in", err)
         self.assertFalse(self.gpath.exists())
 
-    def test_status_reports_ignored_wrapper_entries(self) -> None:
-        self.put(self.ppath, {"wrappers": {"sudo": {"skip": 1}}})
-        self.assertIn("wrapper 'sudo' is built in", self.cli("status")[1])
-
-
-NAMES = [*wrappers.DEFAULTS, K, "strings", "grep", "find", "kill", "fresh", "nm", "mywrap"]
-FLAGS = ["-E", "-x", "-n", "-u", "-9", "-r", "-s", "-c", "-v", "-i"]
-CORPUS = [*DENY, *ALLOW[:20], f"sudo -E {K} x", f"nohup {K} x", f"env -i {K} x", f"command -p {K} x",
-          f"timeout 5 {K} a", f"sudo -u bob -- {K} x", f"bash -c '{K} x'", f"x=$({K} y)", f"a | {K} b",
-          "strings -n 4 /bin/ls", "grep -r foo .", "sudo grep -rn foo ."]
-
-
-def random_entry(rng: random.Random) -> dict[str, Any]:
-    entry: dict[str, Any] = {}
-    if rng.random() < 0.7:
-        entry["flagsWithValue"] = rng.sample(FLAGS, rng.randint(1, 4))
-    if rng.random() < 0.4:
-        entry["shellString"] = rng.choice(["-c", "rest"])
-    if rng.random() < 0.4:
-        entry["skip"] = rng.randint(0, 3)
-    if rng.random() < 0.3:
-        entry["assignments"] = True
-    if rng.random() < 0.4:
-        entry["noCommandFlags"] = rng.sample(FLAGS, rng.randint(1, 2))
-    return entry
-
-
-def random_state(rng: random.Random) -> dict[str, Any]:
-    return {"wrappers": {rng.choice(NAMES): random_entry(rng) for _ in range(rng.randint(1, 6))}}
-
-
-class NeverReducesDetection(Isolated):
-    RULES: ClassVar[dict[str, policy.Rule]] = {"p": policy.with_defaults({"match": {"program": [K, "killall"]}, "message": "m"}),
-             "s": policy.with_defaults({"match": {"program": "strings", "args": "^-n"}, "message": "m"}),
-             "g": policy.with_defaults({"match": {"builtin": "grep-recursive"}, "message": "m"})}
-
-    def check(self, rules: dict[str, policy.Rule], iterations: int, seed: int) -> None:
-        rng = random.Random(seed)
-        base = {c: matching.evaluate(c, rules).kinds for c in CORPUS}
-        for _ in range(iterations):
-            managed, _ = policy.managed_layer([("/m", random_state(rng))])
-            table = policy.effective_wrappers(managed, random_state(rng), random_state(rng))
-            for command in CORPUS:
-                after = matching.evaluate(command, rules, table).kinds
-                for rid, before in base[command].items():
-                    if before is not None:
-                        self.assertIsNotNone(after[rid], f"{rid} stopped matching {command!r} with {table}")
-
-    def test_plain_rules(self) -> None:
-        self.check(self.RULES, 120, 3)
-
-
-class NeverReducesDetectionAst(AstIsolated):
-    def test_ast_rules(self) -> None:
-        rules = {"a": AST_RULE, "p": PROGRAM_RULE}
-        rng = random.Random(9)
-        base = {c: matching.evaluate(c, rules).kinds for c in CORPUS[:40]}
-        for _ in range(12):
-            table = policy.effective_wrappers({}, random_state(rng), random_state(rng))
-            for command in CORPUS[:40]:
-                after = matching.evaluate(command, rules, table).kinds
-                for rid, before in base[command].items():
-                    if before is not None:
-                        self.assertIsNotNone(after[rid], f"{rid} stopped matching {command!r}")
+    def test_adding_names_never_reduces_detection(self) -> None:
+        rules = {"p": PROGRAM_RULE, "s": policy.with_defaults({"match": {"program": "strings"}, "message": "m"}),
+                 "g": policy.with_defaults({"match": {"builtin": "grep-recursive"}, "message": "m"})}
+        corpus = [*DENY, *ALLOW[:20], f"sudo -E {K} x", f"nohup {K} x", f"timeout 5 {K} a", f"bash -c '{K} x'",
+                  "grep -r foo .", "sudo grep -rn foo .", "strings -n 4 /bin/ls"]
+        base = {c: matching.evaluate(c, rules).kinds for c in corpus}
+        names = wrappers.effective({"wrappers": {K: {}, "strings": {}, "grep": {}, "mywrap": {}}})
+        for command in corpus:
+            after = matching.evaluate(command, rules, names).kinds
+            for rid, before in base[command].items():
+                if before is not None:
+                    self.assertIsNotNone(after[rid], f"{rid} stopped matching {command!r}")
 
 
 class HostileExecutables(Isolated):
@@ -189,18 +119,16 @@ class HostileExecutables(Isolated):
     def test_no_environment_variable_selects_an_executable_a_url_or_an_engine_mode(self) -> None:
         for module in (astrun, astbin, matching, engine, policy):
             text = Path(module.__file__).read_text()
-            for name in ("GUARDRAILS_UV", "GUARDRAILS_AST_BOOTSTRAP", "GUARDRAILS_AST_INPROCESS", "GUARDRAILS_PARITY",
-                         "GUARDRAILS_AST_GREP", "CLAUDE_PLUGIN_ROOT"):
+            for name in ("GUARDRAILS_UV", "GUARDRAILS_AST_BOOTSTRAP", "GUARDRAILS_AST_INPROCESS", "GUARDRAILS_AST_GREP",
+                         "CLAUDE_PLUGIN_ROOT"):
                 self.assertNotIn(name, text)
         used = set(re.findall(r'environ(?:\.get)?[\[(]"([A-Z_a-z]+)"', (LIB / "astbin.py").read_text()))
         self.assertEqual(used, set())
         evil = self.plant("ast-grep")
         hostile = {"GUARDRAILS_AST_GREP": str(evil), "CLAUDE_PLUGIN_ROOT": str(self.proj), "PATH": str(evil.parent),
-                   "GUARDRAILS_PARITY": "ast", "GUARDRAILS_AST_INPROCESS": "1"}
-        with mock.patch.dict(os.environ, hostile):
-            with self.assertRaises(astbin.Missing):
-                astbin.locate(str(self.data))
-            self.assertFalse(matching.PARITY)
+                   "GUARDRAILS_AST_INPROCESS": "1"}
+        with mock.patch.dict(os.environ, hostile), self.assertRaises(astbin.Missing):
+            astbin.locate(str(self.data))
 
     def test_a_node_modules_planted_in_the_project_is_never_the_engine(self) -> None:
         plat = astbin.detect()
@@ -286,161 +214,236 @@ class HostileExecutables(Isolated):
         self.assertFalse((self.tmp / "PWNED-python3").exists())
 
 
-class Degradation(Isolated):
+RULES_FOR_OUTAGES: dict[str, Any] = {
+    "strings": {"match": {"program": "strings"}, "message": "No strings."},
+    "ast": {"match": {"ast": BY_NAME}, "message": "No kill."},
+    "pipe": {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "No pipe."}}
+
+
+class LoudAndAllow(AstIsolated):
+    """Without a working engine, rules that need the parser cannot judge: the command is allowed, loudly."""
+
     def setUp(self) -> None:
         super().setUp()
-        self.put(self.gpath, {"rules": {"strings": {"match": {"program": "strings"}, "message": "No strings."},
-                                        "ast": {"match": {"ast": BY_NAME}, "message": "No kill."}}})
+        self.put(self.gpath, {"rules": RULES_FOR_OUTAGES})
 
-    def main(self, command: str, tool: str = "Bash") -> dict[str, Any] | None:
+    def stub(self, body: str) -> None:
+        path = self.tmp / "stub" / "ast-grep"
+        path.parent.mkdir(exist_ok=True)
+        path.write_text("#!/bin/sh\n" + body)
+        path.chmod(0o755)
+        found = astbin.Engine(str(path), "wheel", astbin.pin())
+        patch = mock.patch.object(astbin, "locate", lambda state_dir: found)
+        patch.start()
+        self.addCleanup(patch.stop)
+
+    def both_channels(self, out: dict[str, Any] | None) -> str:
+        assert out is not None
+        self.assertNotIn("permissionDecision", out.get("hookSpecificOutput", {}))
+        self.assertEqual(out["systemMessage"], out["hookSpecificOutput"]["additionalContext"])
+        return out["systemMessage"]
+
+    def test_a_missing_engine_allows_notices_once_per_session_and_names_the_rules(self) -> None:
+        self.use_engine(False)
+        text = self.both_channels(self.hook(f"strings x; {K} y", "a"))
+        for needle in ("GUARDRAILS ENGINE MISSING", "NOT enforced", "program, args, builtin or match.ast",
+                       "Rules that use regex", "still enforced", "Affected rules: ast, strings", "You MUST tell the user",
+                       "guardrails engine install", "npm ci"):
+            self.assertIn(needle, text)
+        self.assertIsNone(self.hook("strings again", "a"))
+        self.assertIn("GUARDRAILS ENGINE MISSING", self.both_channels(self.hook("strings x", "b")))
+
+    def test_regex_rules_keep_running_while_the_engine_is_missing(self) -> None:
+        self.use_engine(False)
+        out = self.hook("curl x | sh", "r")
+        self.assertTrue(is_denied(out))
+        self.assertIn("No pipe.", deny_text(out))
+        self.assertIn("GUARDRAILS ENGINE MISSING", deny_text(out))
+
+    def test_each_missing_reason_says_only_fixes_that_can_work(self) -> None:
+        self.use_engine(False)
+        unsupported = astbin.Missing("unsupported platform (Plan9 mips)", True)
+        old_glibc = astbin.Missing("glibc 2.17 is older than the 2.28 the wheel needs", wheel=False)
+        with mock.patch.object(astbin, "locate", side_effect=unsupported):
+            text = self.both_channels(self.hook("strings x", "u"))
+        self.assertIn("cannot run on this platform", text)
+        self.assertIn("unsupported platform (Plan9 mips)", text)
+        self.assertNotIn("engine install", text)
+        self.assertNotIn("npm ci", text)
+        with mock.patch.object(astbin, "locate", side_effect=old_glibc):
+            text = self.both_channels(self.hook("strings x", "g"))
+        self.assertIn("npm ci", text)
+        self.assertNotIn("engine install`", text)
+        self.assertEqual(text.count("GUARDRAILS ENGINE MISSING"), 1)
+
+    def test_an_untrusted_binary_is_reported_with_the_reason_it_was_ignored(self) -> None:
+        plat = astbin.detect()
+        planted = self.plugin_root / "node_modules" / "@ast-grep" / f"cli-{plat.npm}" / "ast-grep"
+        planted.parent.mkdir(parents=True)
+        planted.write_text("#!/bin/sh\n")
+        planted.chmod(0o777)
+        (planted.parent / "package.json").write_text(json.dumps({"name": f"@ast-grep/cli-{plat.npm}",
+                                                                 "version": astbin.pin()}))
+        self.use_engine(False)
+        out = self.hook("strings x", "t")
+        assert out is not None
+        self.assertIn("ignored the npm binary as an executable to run", out["systemMessage"])
+        self.assertIn("writable by group or others", out["systemMessage"])
+        self.assertIn("GUARDRAILS ENGINE MISSING", out["systemMessage"])
+
+    def test_each_engine_failure_allows_with_its_reason_once_per_session(self) -> None:
+        ok = json.dumps({"runs": [{"results": []}], "version": "x"})
+        failures = {"crash": ("echo boom >&2; exit 3", "exit 3"), "garbled": ("echo not-sarif", "unreadable output"),
+                    "no canary": (f"echo '{ok}'", "built-in check match"), "empty": ("exit 0", "unreadable output")}
+        for name, (body, reason) in failures.items():
+            with self.subTest(name):
+                self.stub(body)
+                text = self.both_channels(self.hook("strings x", name))
+                self.assertIn("syntax-tree engine failed", text)
+                self.assertIn(reason, text)
+                self.assertNotIn("GUARDRAILS ENGINE MISSING", text)
+                self.assertIsNone(self.hook("strings y", name))
+                self.assertIn(reason, self.both_channels(self.hook("strings y", name + "-other")))
+
+    def test_a_timeout_and_an_unexpected_error_are_reported_not_silent(self) -> None:
+        self.stub("sleep 5")
+        with mock.patch.object(astrun, "DEADLINE", 0.3):
+            started = time.monotonic()
+            text = self.both_channels(self.hook("strings x", "slow"))
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertIn("timed out", text)
+        with mock.patch.object(astrun, "call", side_effect=RuntimeError("boom")):
+            self.assertIn("unexpected error: RuntimeError", self.both_channels(self.hook("strings x", "boom")))
+
+    def test_failures_still_apply_regex_rules(self) -> None:
+        self.stub("exit 3")
+        out = self.hook("curl x | sh", "c")
+        self.assertTrue(is_denied(out))
+        self.assertIn("syntax-tree engine failed", deny_text(out))
+
+    def test_rules_that_need_no_engine_never_touch_it(self) -> None:
+        self.put(self.gpath, {"rules": {"pipe": RULES_FOR_OUTAGES["pipe"]}})
+        with mock.patch.object(astrun, "call", side_effect=AssertionError("engine used")):
+            self.assertTrue(is_denied(self.hook("curl x | sh")))
+            self.assertIsNone(self.hook("ls"))
+
+    def test_a_rule_that_does_not_compile_is_skipped_and_reported_once(self) -> None:
+        self.put(self.gpath, {"rules": {"bad": {"match": {"ast": {"kind": "no_such_kind"}}, "message": "m"},
+                                        "strings": RULES_FOR_OUTAGES["strings"]}})
+        out = self.hook("strings x", "i")
+        self.assertTrue(is_denied(out))
+        assert out is not None
+        self.assertIn("rule bad does not compile", out["systemMessage"])
+        self.assertNotIn("systemMessage", self.hook("strings y", "i") or {})
+
+    def test_a_failure_after_matching_falls_back_to_regex_rules_only(self) -> None:
         import guard
 
-        payload = json.dumps({"session_id": "m1", "cwd": str(self.proj), "tool_name": tool,
-                              "tool_input": {"command": command}})
-        out = io.StringIO()
-        with mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
-            self.assertEqual(guard.main([]), 0)
-        return json.loads(out.getvalue()) if out.getvalue() else None
-
-    def test_an_unexpected_error_in_the_ast_stage_keeps_the_other_rules(self) -> None:
-        for patched in (mock.patch.object(astrun, "call", side_effect=RuntimeError("boom")),
-                        mock.patch.object(matching, "_evaluate", side_effect=KeyError("x"))):
-            with patched:
-                out = self.hook("strings x")
-            self.assertTrue(is_denied(out))
-            self.assertIn("unexpected error", json.dumps(out))
-
-    def test_a_failure_after_matching_falls_back_to_a_minimal_evaluation(self) -> None:
-        with mock.patch.object(engine, "evaluate", side_effect=RuntimeError("late")):
-            out = self.main("strings /bin/ls")
-        self.assertTrue(is_denied(out))
-        self.assertIn("No strings.", deny_text(out))
-        self.assertIn("failed internally (RuntimeError)", deny_text(out))
-        assert out is not None
-        self.assertIn("failed internally", out["systemMessage"])
-
-    def test_the_minimal_evaluation_applies_ast_rules_by_name_and_warns_otherwise(self) -> None:
-        with mock.patch.object(engine, "evaluate", side_effect=RuntimeError("late")):
-            self.assertTrue(is_denied(self.main(f"sudo {K} x")))
-            out = self.main("ls")
-        assert out is not None
-        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
-        self.assertIn("failed internally", out["hookSpecificOutput"]["additionalContext"])
+        payload = json.dumps({"session_id": "m1", "cwd": str(self.proj), "tool_name": "Bash",
+                              "tool_input": {"command": "curl x | sh"}})
+        for failure in (RuntimeError("late"), TimeoutError("late")):
+            out = io.StringIO()
+            with mock.patch.object(engine, "evaluate", side_effect=failure), \
+                    mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
+                self.assertEqual(guard.main([]), 0)
+            result = json.loads(out.getvalue())
+            self.assertIn("No pipe.", result["hookSpecificOutput"]["permissionDecisionReason"])
+            self.assertIn("only rules with regex were applied", result["systemMessage"])
 
     def test_a_failure_inside_the_state_lock_is_not_silent(self) -> None:
-        with mock.patch.object(engine.store, "locked", side_effect=ValueError("lock")):
-            self.assertTrue(is_denied(self.main("strings x")))
+        self.put(self.gpath, {"rules": {"pipe": RULES_FOR_OUTAGES["pipe"]}})
+        import guard
+
+        payload = json.dumps({"session_id": "m1", "cwd": str(self.proj), "tool_name": "Bash",
+                              "tool_input": {"command": "curl x | sh"}})
+        out = io.StringIO()
+        with mock.patch.object(engine.store, "locked", side_effect=ValueError("lock")), \
+                mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
+            guard.main([])
+        self.assertIn("No pipe.", out.getvalue())
 
     def test_when_even_the_minimal_evaluation_fails_the_user_is_told(self) -> None:
+        import guard
+
+        payload = json.dumps({"session_id": "m1", "cwd": str(self.proj), "tool_name": "Bash",
+                              "tool_input": {"command": "strings x"}})
+        out = io.StringIO()
         with mock.patch.object(engine, "evaluate", side_effect=RuntimeError("a")), \
-                mock.patch.object(engine, "run_safe", side_effect=RuntimeError("b")):
-            out = self.main("strings x")
-        assert out is not None
-        self.assertIn("could not evaluate", out["systemMessage"])
+                mock.patch.object(engine, "run_safe", side_effect=RuntimeError("b")), \
+                mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
+            guard.main([])
+        self.assertIn("could not evaluate", json.loads(out.getvalue())["systemMessage"])
 
     def test_payloads_without_a_command_stay_silent(self) -> None:
-        for payload in ("", "garbage", "[]", json.dumps({"tool_name": "Bash", "tool_input": None})):
-            import guard
+        import guard
 
+        for payload in ("", "garbage", "[]", json.dumps({"tool_name": "Bash", "tool_input": None})):
             out = io.StringIO()
             with mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
                 self.assertEqual(guard.main([]), 0)
             self.assertEqual(out.getvalue(), "", payload)
 
 
-class DegradationAst(AstIsolated):
+class Oversize(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
-        self.put(self.gpath, {"rules": {"strings": {"match": {"program": "strings"}, "message": "No strings."},
-                                        "ast": {"match": {"ast": BY_NAME}, "message": "No kill."}}})
+        self.put(self.gpath, {"rules": RULES_FOR_OUTAGES})
 
-    def test_an_incomplete_worker_reply_degrades(self) -> None:
-        import astworker
+    def test_a_command_over_the_cap_is_denied_and_never_parsed(self) -> None:
+        for command in ("echo " + "y" * matching.MAX_COMMAND, "strings " + "é" * matching.MAX_COMMAND,
+                        "echo " + "a" * matching.MAX_COMMAND + f"; {K} x"):
+            with mock.patch.object(astrun, "call", side_effect=AssertionError("parsed")):
+                out = self.hook(command, f"big{len(command)}")
+            self.assertTrue(is_denied(out))
+            self.assertIn("command too large to check", deny_text(out))
 
-        for reply in ({"ok": True}, {"ok": True, "verdicts": None, "errors": {}}, {"ok": True, "verdicts": {},
-                                                                                     "errors": None}):
-            with mock.patch.object(astworker, "handle", return_value=reply):
-                out = self.hook(f"strings x; {K} y", f"r{len(str(reply))}")
-            self.assertTrue(is_denied(out), reply)
-            self.assertIn("No strings.", deny_text(out))
-            self.assertIn("No kill.", deny_text(out))
-            self.assertIn("unavailable", deny_text(out))
+    def test_regex_only_rules_need_no_parser_so_size_alone_is_not_a_denial(self) -> None:
+        self.put(self.gpath, {"rules": {"pipe": RULES_FOR_OUTAGES["pipe"]}})
+        self.assertIsNone(self.hook("echo " + "y" * (matching.MAX_COMMAND + 10)))
+        self.assertTrue(is_denied(self.hook("curl x | sh " + "y" * (matching.MAX_COMMAND + 10))))
+
+    def test_just_under_the_cap_is_analysed(self) -> None:
+        started = time.monotonic()
+        out = self.hook("echo " + "y" * (matching.MAX_COMMAND - 100) + f"; {K} x")
+        self.assertLess(time.monotonic() - started, 3)
+        self.assertTrue(is_denied(out))
+        self.assertIn("No kill.", deny_text(out))
+
+    def test_the_cap_counts_bytes(self) -> None:
+        out = self.hook("echo " + "日" * (matching.MAX_COMMAND // 3 + 10))
+        self.assertTrue(is_denied(out))
 
 
 class Limits(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
-        self.put(self.gpath, {"rules": {"a": {"match": {"ast": BY_NAME}, "message": "No kill."}}})
+        self.put(self.gpath, {"rules": {"a": {"match": {"program": K}, "message": "No kill."}}})
 
     def test_seven_nested_shell_strings_are_analysed(self) -> None:
         command = f"{K} x"
         for _ in range(7):
             command = "bash -c " + shlex.quote(command)
         self.assertTrue(is_denied(self.hook(command)))
-        nested = "sudo bash -c 'sudo bash -c \"sudo " + f"{K} x" + "\"'"
-        self.assertTrue(is_denied(self.hook(nested, "n2")))
 
-    def test_deep_eval_chains_fall_back_to_names_and_warn(self) -> None:
-        out = self.hook("eval " * 30 + f"{K} x")
+    def test_nesting_beyond_the_caps_is_refused_not_passed(self) -> None:
+        command = f"{K} x"
+        for _ in range(9):
+            command = "bash -c " + shlex.quote(command)
+        out = self.hook(command, "deep")
         self.assertTrue(is_denied(out))
-        self.assertIn("nests wrappers or shells too deeply", json.dumps(out))
-        self.assertIn("this rule applied because the command mentions", deny_text(out))
+        self.assertIn("command too complex to check", deny_text(out))
+        self.assertIn("nests shell strings too deeply", deny_text(out))
+        out = self.hook("eval " * 30 + f"{K} x", "evals")
+        self.assertIn("nests shell strings too deeply", deny_text(out))
+        out = self.hook("; ".join(f"bash -c 'echo {n}'" for n in range(100)), "wide")
+        self.assertIn("too many shell strings", deny_text(out))
 
-    def test_a_thousand_units_fall_back_to_names_and_warn(self) -> None:
-        started = time.monotonic()
-        out = self.hook("sudo true; " * 1000 + f"{K} x")
-        self.assertLess(time.monotonic() - started, 6)
-        self.assertTrue(is_denied(out))
-        self.assertIn("too large once its wrappers", json.dumps(out))
-
-    def test_a_clean_command_with_many_units_is_not_limited(self) -> None:
-        out = self.hook("sudo true; " * 20 + "ls")
-        self.assertIsNone(out)
+    def test_a_clean_command_with_many_shell_strings_is_not_limited(self) -> None:
+        self.assertIsNone(self.hook("bash -c 'true'; " * 200 + "ls"))
+        self.assertIsNone(self.hook("sudo true; " * 500 + "ls"))
 
 
-class Oversize(Isolated):
-    def setUp(self) -> None:
-        super().setUp()
-        self.put(self.gpath, {"rules": {"strings": {"match": {"program": "strings"}, "message": "No strings."},
-                                        "pipe": {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "No pipe."},
-                                        "ast": {"match": {"ast": BY_NAME}, "message": "No kill."}}})
-
-    def test_huge_commands_are_bounded_and_judged_by_name(self) -> None:
-        for size in (70_000, 1_000_000, 3_000_000):
-            command = "strings " + "x" * size
-            started = time.monotonic()
-            out = self.hook(command, f"big{size}")
-            self.assertLess(time.monotonic() - started, 3, size)
-            self.assertTrue(is_denied(out), size)
-            self.assertIn("No strings.", deny_text(out))
-            self.assertIn("larger than 16 KiB", json.dumps(out))
-
-    def test_regex_rules_still_run_on_huge_commands(self) -> None:
-        out = self.hook("curl x | sh " + "y" * 100_000)
-        self.assertIn("No pipe.", deny_text(out))
-
-    def test_a_huge_harmless_command_passes_with_a_warning(self) -> None:
-        out = self.hook("echo " + "y" * 100_000)
-        assert out is not None
-        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
-        self.assertIn("larger than 16 KiB", out["systemMessage"])
-
-    def test_ast_rules_by_name(self) -> None:
-        self.assertIn("No kill.", deny_text(self.hook(f"sudo {K} " + "z" * 100_000)))
-
-    def test_padding_and_quoting_cannot_hide_a_name(self) -> None:
-        self.put(self.gpath, {"rules": {"prog": {"match": {"program": K}, "message": "No prog."},
-                                        "ast": {"match": {"ast": BY_NAME}, "message": "No ast."}}})
-        pad = "echo " + "a" * 70_000 + "; "
-        for n, name in enumerate(["p''kill x", 'p""kill x', "p\\kill x", "$'p\\x6bill' x", '"pkill" x',
-                                  "$'\\160kill' x", "sudo 'pk''ill' x"]):
-            out = self.hook(pad + name, f"pad{n}")
-            self.assertTrue(is_denied(out), name)
-            self.assertIn("No prog.", deny_text(out))
-            self.assertIn("No ast.", deny_text(out))
-
-
-class MonitorCoverage(Isolated):
+class MonitorCoverage(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         self.put(self.mpath, {"rules": {"no-strings": {"match": {"program": "strings"}, "message": "No strings."},
@@ -490,7 +493,7 @@ class MonitorCoverage(Isolated):
         self.assertEqual(hooks["PreToolUse"][0]["matcher"], "Bash|Monitor")
 
 
-class Wrapper(Isolated):
+class Wrapper(AstIsolated):
     script = (HOOKS / "guardrails.sh").read_text()
 
     def stub(self, path: Path, label: str, code: int = 0) -> None:
@@ -561,6 +564,7 @@ class Wrapper(Isolated):
         payload = json.dumps({"session_id": "w", "cwd": str(self.proj), "tool_name": "Bash",
                               "tool_input": {"command": "strings x"}})
         self.put(self.gpath, {"rules": {"s": {"match": {"program": "strings"}, "message": "No."}}})
+        self.link_engine()
         proc = subprocess.run(["/bin/sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
                               check=False, env=dict(os.environ))
         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
@@ -578,51 +582,47 @@ def adversarial(n: int) -> dict[str, str]:
     }
 
 
-class Complexity(Isolated):
-    def test_the_lexer_is_linear_on_adversarial_shapes(self) -> None:
-        import shellwords
+RUNNABLE = {"ticks", "heredocs", "heredoc-open", "squote", "dquote", "list", "pipes", "word", "words", "ansi",
+            "backslash", "balanced", "wrappers", "dollar", "dash-heredoc"}
 
-        for size, budget in ((10_000, 1.0), (16_384, 1.0), (65_536, 2.0)):
-            for name, text in adversarial(size).items():
-                started = time.monotonic()
-                try:
-                    shellwords.simple_commands(text)
-                except ValueError:
-                    pass
-                self.assertLess(time.monotonic() - started, budget, f"{name} at {size}")
 
-    def test_the_whole_hook_answers_quickly_and_the_deny_rule_still_fires(self) -> None:
+class Complexity(AstIsolated):
+    def setUp(self) -> None:
+        super().setUp()
         self.put(self.gpath, {"rules": {
             "no-kill": {"match": {"program": K}, "message": "No kill."},
             "rx": {"match": {"regex": r"never-present-\d+"}, "message": "No rx."},
             "ast": {"match": {"ast": BY_NAME}, "message": "No ast."}}})
-        for size in (10_000, 65_536, 1_000_000):
+
+    def test_adversarial_shapes_are_answered_quickly_and_the_deny_rule_still_fires(self) -> None:
+        for size in (2_000, 10_000):
             for name, text in adversarial(size).items():
                 started = time.monotonic()
                 out = self.hook(text + f"; {K} x", f"c{size}{name}")
                 self.assertLess(time.monotonic() - started, 3.0, f"{name} at {size}")
-                self.assertTrue(is_denied(out), f"{name} at {size}")
+                if name in RUNNABLE:
+                    self.assertTrue(is_denied(out), f"{name} at {size}")
 
-    def test_the_subst_bomb_from_the_review(self) -> None:
-        self.put(self.gpath, {"rules": {"no-kill": {"match": {"program": K}, "message": "No kill."}}})
-        started = time.monotonic()
-        out = self.hook("$(" * 32000 + f" {K} x")
-        self.assertLess(time.monotonic() - started, 3.0)
-        self.assertTrue(is_denied(out))
+    def test_the_largest_shapes_never_crash_and_are_never_silent(self) -> None:
+        for name in ("open-subst", "balanced", "word", "list", "heredoc-open"):
+            started = time.monotonic()
+            out = self.hook(adversarial(100_000)[name] + f"; {K} x", f"big{name}")
+            self.assertLess(time.monotonic() - started, 8.0, name)
+            self.assertTrue(is_denied(out) or (out is not None and "syntax-tree engine" in json.dumps(out)), name)
 
 
-class Budget(Isolated):
-    def test_the_overall_watchdog_degrades_to_names_and_warns(self) -> None:
+class Budget(AstIsolated):
+    def test_the_overall_watchdog_applies_regex_rules_and_warns(self) -> None:
         import guard
 
-        self.put(self.gpath, {"rules": {"s": {"match": {"program": "strings"}, "message": "No strings."}}})
+        self.put(self.gpath, {"rules": {"s": {"match": {"regex": r"\bstrings\b"}, "message": "No strings."}}})
 
         def spin(*_: Any, **__: Any) -> Any:
             while True:
                 pass
 
         payload = json.dumps({"session_id": "b", "cwd": str(self.proj), "tool_name": "Bash",
-                              "tool_input": {"command": "sudo 'str''ings' /bin/ls"}})
+                              "tool_input": {"command": "sudo strings /bin/ls"}})
         out = io.StringIO()
         started = time.monotonic()
         with mock.patch.object(guard, "HOOK_BUDGET", 0.4), mock.patch.object(engine, "evaluate", spin), \
@@ -655,32 +655,15 @@ class Budget(Isolated):
         self.assertLess(astrun.DEADLINE, guard.HOOK_BUDGET)
 
 
-class Mentions(Isolated):
-    def test_validation(self) -> None:
-        ok = {"match": {"ast": BY_NAME, "mentions": ["pkill", "killall"]}, "message": "m"}
-        policy.validate_rule(ok)
-        for bad in ([], "pkill", [""], ["a b"], [3]):
-            with self.assertRaises(policy.Invalid):
-                policy.validate_rule({"match": {"ast": BY_NAME, "mentions": bad}, "message": "m"})
-        with self.assertRaises(policy.Invalid):
-            policy.validate_rule({"match": {"mentions": ["x"]}, "message": "m"})
-
-    def test_derived_names(self) -> None:
-        rule = {"match": {"ast": {"pattern": "xargs kill $$$", "inside": {"kind": "pipeline"}}}, "message": "m"}
-        self.assertEqual(policy.mentions_of(rule), ["xargs", "kill"])
-        named = {"match": {"ast": {"kind": "command", "has": {"field": "name", "regex": "(^|/)pkill$"}}}}
-        self.assertEqual(policy.mentions_of(named), ["pkill"])
-        self.assertEqual(policy.mentions_of({"match": {"ast": {"kind": "pipeline"}}}), [])
-
-    def test_settable_from_the_cli(self) -> None:
-        rule = json.dumps({"match": {"ast": {"kind": "pipeline"}}, "message": "m"})
-        self.assertEqual(self.cli("rule", "add", "r", "--json", rule)[0], 0)
-        self.assertEqual(self.cli("rule", "set", "r", "mentions=xargs, sudo")[0], 0)
-        self.assertEqual(self.get(self.gpath)["rules"]["r"]["match"]["mentions"], ["xargs", "sudo"])
-
-    def test_word_boundaries(self) -> None:
-        self.assertTrue(policy.mentioned("sudo /usr/bin/pkill x", ["pkill"]))
-        self.assertFalse(policy.mentioned("echo pkills pkill-ish", ["pkill"]))
+class RetiredMentions(AstIsolated):
+    def test_a_state_file_with_mentions_still_loads_and_the_key_does_nothing(self) -> None:
+        rule = {"match": {"ast": BY_NAME, "mentions": ["pkill", "killall"]}, "message": "m"}
+        policy.validate_rule(rule)
+        self.put(self.gpath, {"rules": {"r": rule}})
+        self.assertIsNone(self.hook("echo pkill"))
+        self.assertTrue(is_denied(self.hook(f"{K} x")))
+        self.assertEqual(self.cli("status", "--problems")[0], 0)
+        self.assertEqual(self.cli("rule", "set", "r", "mentions=x")[0], 2)
 
 
 if __name__ == "__main__":

@@ -87,7 +87,7 @@ worse, never matches.
 5. `id` from the intent (`no-pkill`), `description` in the user's words, `action`, `message`.
 
 Negated context (`not` around `inside`, `follows`, `precedes`) is unreliable, see
-[ast/context.md](ast/context.md#negated-context-does-not-work): express the dangerous context positively.
+[ast/context.md](ast/context.md#a-command-unless-it-is-guarded): express the dangerous context positively.
 
 ## 6. Test matrix
 

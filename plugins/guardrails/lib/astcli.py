@@ -10,7 +10,7 @@ import os
 import re
 import subprocess
 import time
-from typing import NamedTuple
+from typing import Any, NamedTuple
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 CONFIG = os.path.join(HERE, "engine-sgconfig.yml")
@@ -22,9 +22,16 @@ CAUSE = re.compile(r"^\s*╰▻ ?(.*)$")
 GENERIC_CAUSE = re.compile(r"^(Fail to parse yaml|`rule` is not configured|Rule contains invalid)")
 
 
-CANARY = '{"id":"canary","language":"bash","rule":{"kind":"program"}}\n'
+CANARY = '{"id":"canary","language":"bash","rule":{"any":[{"kind":"program"},{"kind":"ERROR"}]}}\n'
+YAML_UNSAFE = re.compile("[\x7f-\x9f\u2028\u2029\ufeff]")
 NO_IGNORE = ("--no-ignore", "hidden", "--no-ignore", "dot", "--no-ignore", "exclude", "--no-ignore", "global",
              "--no-ignore", "parent", "--no-ignore", "vcs")
+
+
+def document(rule_id: str, body: dict[str, Any]) -> str:
+    """One ast-grep rule document; JSON is valid YAML, and the characters YAML treats as line breaks stay escaped."""
+    text = json.dumps({"id": rule_id, "language": "bash", **body}, ensure_ascii=False)
+    return YAML_UNSAFE.sub(lambda m: f"\\u{ord(m.group()):04x}", text)
 
 
 def private_dir() -> str:
@@ -221,11 +228,11 @@ class Cli:
             return RuleError(rule_reason(err))
         return Unavailable(f"ast-grep failed (exit {code}): {summary(err)}")
 
-    def check(self, rule_files: dict[str, str]) -> None:
+    def check(self, rules: dict[str, Any]) -> None:
         """Raise RuleError when ast-grep does not accept these rules."""
-        self.scan(rule_files, [Src("true")])
+        self.scan(rules, [Src("true")])
 
-    def scan(self, rule_files: dict[str, str], sources: list[Src]) -> list[list[Hit]]:
+    def scan(self, rules: dict[str, Any], sources: list[Src]) -> list[list[Hit]]:
         """Per source, every match of any rule (by rule id and character range).
 
         Rules and sources travel as files in a private temporary directory, so no size of either can overflow the
@@ -240,35 +247,34 @@ class Cli:
             os.mkdir(os.path.join(folder, "units"), 0o700)
             write_private(os.path.join(folder, "sgconfig.yml"), b"ruleDirs:\n  - rules\n")
             write_private(os.path.join(folder, "rules", "canary.yml"), CANARY.encode())
-            for name, text in rule_files.items():
-                write_private(os.path.join(folder, "rules", f"{name}.yml"), text.encode())
+            text = "\n---\n".join(document(rid, body) for rid, body in rules.items()) + "\n"
+            write_private(os.path.join(folder, "rules", "rules.yml"), text.encode())
             for i, src in enumerate(sources):
                 write_private(os.path.join(folder, "units", f"u{i}.sh"), src.data)
-            code, out, err = self._run(["scan", "-c", os.path.join(folder, "sgconfig.yml"), "--json=compact",
+            code, out, err = self._run(["scan", "-c", os.path.join(folder, "sgconfig.yml"), "--format", "sarif",
                                         *NO_IGNORE, os.path.join(folder, "units")])
         finally:
             remove_tree(folder)
         if code != 0:
             raise self._failure(code, err)
-        allowed = {"canary", *rule_files, *(f"{name}c" for name in rule_files)}
-        return self._hits(out, sources, allowed)
+        return self._hits(out, sources, {"canary", *rules})
 
     def _hits(self, out: str, sources: list[Src], allowed: set[str]) -> list[list[Hit]]:
         try:
             found = json.loads(out)
-            if not isinstance(found, list):
-                raise TypeError("not a list")
+            if not isinstance(found, dict) or len(found["runs"]) != 1 or not isinstance(found["runs"][0], dict):
+                raise TypeError("unexpected document")
             hits: list[list[Hit]] = [[] for _ in sources]
             canary = [False] * len(sources)
-            for item in found:
-                name = item["file"]
-                named = re.fullmatch(r"u(\d+)\.sh", os.path.basename(name))
+            for item in found["runs"][0]["results"]:
+                place = item["locations"][0]["physicalLocation"]
+                named = re.fullmatch(r"u(\d+)\.sh", os.path.basename(place["artifactLocation"]["uri"]))
                 if named is None:
                     raise ValueError("unknown file")
                 at = int(named.group(1))
                 rule = item["ruleId"]
-                span = item["range"]["byteOffset"]
-                lo, hi = span["start"], span["end"]
+                lo = place["region"]["byteOffset"]
+                hi = lo + place["region"]["byteLength"]
                 if rule not in allowed or not (isinstance(lo, int) and isinstance(hi, int) and 0 <= lo <= hi
                                                <= len(sources[at].data)):
                     raise ValueError("unexpected entry")

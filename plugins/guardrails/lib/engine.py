@@ -103,18 +103,9 @@ def oversized_of(rules: dict[str, policy.Rule], tool: str = "Bash") -> list[str]
             and (ast := policy.ast_of(rules[rid])) and policy.ast_size(ast) > policy.MAX_AST_BYTES]
 
 
-def approximate(rule: policy.Rule, names: list[str], reason: str) -> policy.Rule:
-    """The rule with a note that it was applied by command name because the real matcher could not judge."""
-    note = f" [guardrails: {reason}; this rule applied because the command mentions {', '.join(names)}.]"
-    out = {**rule, "message": str(rule["message"]) + note}
-    if isinstance(rule.get("messageShort"), str):
-        out["messageShort"] = rule["messageShort"] + note
-    return out
-
-
 def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, policy.Mode],
              session: Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
-             warnings: tuple[str, ...] = (), table: wrapper_table.Table | None = None,
+             warnings: tuple[str, ...] = (), wrappers: wrapper_table.Names | None = None,
              state_dir: str | None = None, pre: matching.Evaluation | None = None,
              tool: str = "Bash") -> tuple[Output | None, bool]:
     active = policy.active_modes(modes, session)
@@ -137,17 +128,14 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
             notices.append(text)
     candidates = candidates_of(rules, tool)
     evaluation = pre if pre is not None and all(rid in pre.kinds for rid in candidates) \
-        else matching.evaluate(command, candidates, table, state_dir)
+        else matching.evaluate(command, candidates, wrappers, state_dir)
     agent_notes: list[str] = []
-    for rid in list(evaluation.approx):
-        if rid in candidates:
-            candidates[rid] = approximate(candidates[rid], evaluation.approx[rid], evaluation.approx_reason)
     for key, warning in evaluation.warnings():
         if remember(session, "reported", key):
             changed = True
             notices.append(warning)
             agent_notes.append(warning)
-            if key == matching.DEGRADED_KEY:
+            if key == matching.ENGINE_MISSING_KEY:
                 import astrun
 
                 astrun.warm(state_dir)
@@ -175,9 +163,13 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
 
     output: Output = {}
     extra = "\n\n" + "\n".join(agent_notes) if agent_notes else ""
-    if denies:
+    if denies or evaluation.refusal:
         text, composed = compose(denies + warns, modes, session, shown_before, session_id, managed_ids)
         changed = changed or composed
+        if evaluation.refusal:
+            refusal = (f"[guardrails] Denied: {evaluation.refusal}. Rules that use program, args, builtin or match.ast "
+                       "cannot be evaluated on it. Split it up or put the content in a file.")
+            text = "\n\n".join(filter(None, [refusal, text]))
         output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                         "permissionDecisionReason": text + extra}
     else:
@@ -227,7 +219,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         args = (managed, {}, {}) if killed else (managed, g, pstate)
         return policy.effective_rules(*args), policy.effective_modes(*args)
 
-    def wrapper_layers(g: store.State) -> wrapper_table.Table:
+    def wrapper_layers(g: store.State) -> wrapper_table.Names:
         killed = not gstate_ok or g.get("enabled", True) is False
         return policy.effective_wrappers(*((managed, {}, {}) if killed else (managed, g, pstate)))
 
@@ -280,14 +272,14 @@ def run_warm(stdin: IO[str]) -> None:
         rules = policy.effective_rules(managed, store.load(store.global_state_path()), pstate)
     except store.StateError:
         return
-    if any(policy.ast_of(rule) and rule.get("enabled") is True for rule in rules.values()):
+    if any(policy.needs_parse(rule) and rule.get("enabled") is True for rule in rules.values()):
         import astrun
 
         astrun.warm(os.path.dirname(store.global_state_path()))
 
 
-def run_safe(text: str, stdout: IO[str], failure: BaseException, fast: bool = False) -> None:
-    """After run_hook failed: judge the command by the stdlib matchers and command names, without session state."""
+def run_safe(text: str, stdout: IO[str], failure: BaseException) -> None:
+    """After run_hook failed: apply the regex rules (the only ones that need no parser) and allow the rest, loudly."""
     payload = json.loads(text)
     tool = payload.get("tool_name") if isinstance(payload, dict) else None
     tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
@@ -309,10 +301,9 @@ def run_safe(text: str, stdout: IO[str], failure: BaseException, fast: bool = Fa
     candidates = candidates_of(rules, tool)
     reason = ("the guardrails hook exceeded its time budget" if isinstance(failure, TimeoutError)
               else f"the guardrails hook failed internally ({type(failure).__name__})")
-    ev = matching.plain(command, candidates, reason, fast)
-    hits = {rid: approximate(rule, ev.approx[rid], reason) if rid in ev.approx else rule
-            for rid, rule in candidates.items() if ev.kinds.get(rid) is not None}
-    notice = f"guardrails: {reason}; rules were applied by a minimal fallback without session state."
+    hits = {rid: rule for rid, rule in candidates.items() if policy.regex_kind(rule, command)}
+    notice = (f"guardrails: {reason}; only rules with regex were applied, without session state. Rules using program, "
+              "args, builtin or match.ast were not checked.")
     denied = [(rid, policy.render(r["message"])) for rid, r in hits.items() if r["action"] == "deny"]
     warned = [(rid, policy.render(r["message"])) for rid, r in hits.items() if r["action"] != "deny"]
     lines = [f"[guardrails:{rid}] {text}" for rid, text in denied + warned]

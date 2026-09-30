@@ -164,7 +164,7 @@ degraded name scan, so `$'p\x6bill' x` is seen as `pkill x` everywhere.
 Known gaps, for any engine: `find -exec`/`-execdir`, variable-held names (`P=pkill; $P x`), `bash <<< 'cmd'`,
 `echo cmd | sh`, `su -c`, `ssh host cmd`, and scripts run from a file.
 
-### Worked example: one bundled policy, three AST rules
+### Worked example: one bundled policy, three rules
 
 A policy that says "do not kill by name, do not use `pgrep` inside a substitution, pipeline or loop, do not pipe PIDs
 into `xargs kill`" is three rules with their own message. Each rule below was run with `guardrails rule test` against
@@ -174,7 +174,7 @@ into `xargs kill`" is three rules with their own message. Each rule below was ru
 name says and nothing else (a heredoc or a quoted mention is data).
 
 ```json
-{"match": {"ast": {"any": [{"pattern": "pkill $$$"}, {"pattern": "killall $$$"}]}}, "message": "Do not kill by name: it can hit your own shell or an innocent process. Look the PID up with `pgrep -xl <name>` as its own command, then `kill <pid>`."}
+{"match": {"program": ["pkill", "killall"]}, "message": "Do not kill by name: it can hit your own shell or an innocent process. Look the PID up with `pgrep -xl <name>` as its own command, then `kill <pid>`."}
 ```
 
 ```json
@@ -188,13 +188,6 @@ name says and nothing else (a heredoc or a quoted mention is data).
 Add each with `guardrails rule add <id> --json - <<'EOF' … EOF`. A `regex` for the first two would also match
 `echo "pkill x"` and heredocs, and would need a pattern per wrapper form; `regex` stays the tool for dataflow the tree
 cannot express.
-
-**Matcher parity.** `program`, `args` and `builtin` stay on the stdlib lexer. `lib/parity.py` compiles them into
-`ast` rules and `tests/parity_study.py` (`matching.PARITY` switches the engine itself) runs the whole corpus plus
-a fuzz over command shapes through both: on the corpus the only difference is the unbalanced-quote fallback, and on
-the fuzz the tree is right where the lexer loses commands in nested substitutions (`echo "$(nm $(z))"`) or misses a
-pipeline marker; an `args` regex anchored on the joined arguments cannot be expressed as an ast rule, so the two
-engines are not interchangeable. Tests switch engine modes through module attributes (`matching.PARITY`), never through the environment.
 
 ## Modes
 

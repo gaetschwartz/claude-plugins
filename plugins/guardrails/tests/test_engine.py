@@ -5,7 +5,7 @@ import os
 import unittest
 from typing import Any
 
-from helpers import LIB, Isolated
+from helpers import LIB, AstIsolated
 
 import store
 
@@ -26,7 +26,7 @@ def reason(out: dict[str, Any] | None) -> str:
     return out["hookSpecificOutput"]["permissionDecisionReason"]
 
 
-class Hook(Isolated):
+class Hook(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         self.put(self.gpath, {"rules": {"no-strings": dict(STRINGS)}, "modes": dict(MODES)})
@@ -190,7 +190,7 @@ class Hook(Isolated):
 PKILL: dict[str, Any] = {"match": {"program": "pkill"}, "message": "No pkill.", "action": "deny"}
 
 
-class ManagedHook(Isolated):
+class ManagedHook(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         self.put(self.mpath, {"rules": {"no-pkill": dict(PKILL)}})
@@ -376,7 +376,7 @@ class ManagedHook(Isolated):
         self.assertIsNone(self.hook("pkill node"))
 
 
-class ManagedSources(Isolated):
+class ManagedSources(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         self.put(self.dpath, {"rules": {"no-pkill": dict(PKILL)}})
@@ -414,7 +414,7 @@ class ManagedSources(Isolated):
         self.assertIn("NOT enforced", out["systemMessage"])
 
 
-class EndToEnd(Isolated):
+class EndToEnd(AstIsolated):
     def test_deny_through_wrapper(self) -> None:
         self.put(self.gpath, {"rules": {"no-strings": dict(STRINGS)}, "modes": dict(MODES)})
         payload = json.dumps({"session_id": "e", "cwd": str(self.proj), "tool_name": "Bash",
@@ -439,7 +439,7 @@ class EndToEnd(Isolated):
                 self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
 
 
-class ManagedEndToEnd(Isolated):
+class ManagedEndToEnd(AstIsolated):
     def test_managed_deny_beats_project_disable_through_wrapper(self) -> None:
         self.put(self.mpath, {"rules": {"no-pkill": dict(PKILL)}})
         self.put(self.ppath, {"rules": {"no-pkill": {"enabled": False, "action": "warn", "retry": "same-command"}}})

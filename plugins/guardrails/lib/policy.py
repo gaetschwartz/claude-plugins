@@ -5,11 +5,9 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Sequence
-from typing import Any, Callable
+from typing import Any
 
-import ansic
 import wrappers as wrapper_table
-from shellwords import SimpleCommand
 
 Rule = dict[str, Any]
 Mode = dict[str, Any]
@@ -17,51 +15,19 @@ Mode = dict[str, Any]
 ACTIONS = ("deny", "warn")
 RETRIES = ("none", "same-command")
 MAX_AST_BYTES = 16384
-MATCH_KEYS = ("program", "args", "builtin", "regex", "ast", "mentions")
+MATCH_KEYS = ("program", "args", "builtin", "regex", "ast")
+RETIRED_MATCH_KEYS = ("mentions",)
+BUILTINS = ("grep-recursive",)
 AST_KEYS = ("pattern", "kind", "regex", "inside", "has", "follows", "precedes", "not", "any", "all", "stopBy", "field")
 AST_RELATIONS = ("inside", "has", "follows", "precedes")
 AST_PATTERN_KEYS = ("context", "selector", "strictness")
 AST_MAX_DEPTH = 12
+PROGRAM = re.compile(r"[^\s/]+")
 PLACEHOLDER = re.compile(r"\{which:([^{}]+)\}")
-NAME_WORD = re.compile(r"[A-Za-z0-9_][A-Za-z0-9_.+-]*")
-SHELL_WORDS = frozenset({"if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac",
-                         "in", "function", "select", "time"})
-
-GREPS = {"grep", "egrep", "fgrep"}
-# grep short options whose argument may be glued on (-e r ≠ -r)
-GREP_OPTS_WITH_ARG = "efmABCdD"
 
 
 class Invalid(Exception):
     """A rule, mode or CLI argument is malformed."""
-
-
-def grep_is_recursive(args: list[str]) -> bool:
-    it = iter(args)
-    for a in it:
-        if a == "--":
-            return False
-        if a in ("--recursive", "--dereference-recursive", "--directories=recurse"):
-            return True
-        if a == "--directories":
-            return next(it, "") == "recurse"
-        if a.startswith("--") or not a.startswith("-") or a == "-":
-            continue
-        for i, c in enumerate(a[1:]):
-            if c in "rR":
-                return True
-            if c in GREP_OPTS_WITH_ARG:
-                if c == "d" and (a[i + 2:] or next(it, "")) == "recurse":
-                    return True
-                break
-    return False
-
-
-def _grep_recursive(cmd: SimpleCommand) -> bool:
-    return cmd.name in GREPS and grep_is_recursive(cmd.args)
-
-
-BUILTINS: dict[str, Callable[[SimpleCommand], bool]] = {"grep-recursive": _grep_recursive}
 
 
 def view(mapping: object, key: str) -> dict[str, Any]:
@@ -125,56 +91,6 @@ def validate_ast(node: object, path: str = "match.ast", depth: int = 0) -> None:
             raise Invalid(f"'{path}.stopBy' must be \"neighbor\", \"end\" or a rule")
 
 
-def mentions_of(rule: Rule) -> list[str]:
-    """Command names that must appear in a command for this rule to possibly match it.
-
-    Used when the real matcher cannot run: the declared 'match.mentions', else the names in the ast patterns and
-    regexes, else the program names.
-    """
-    match = view(rule, "match")
-    declared = match.get("mentions")
-    if isinstance(declared, list):
-        return [x for x in declared if isinstance(x, str)]
-    found: list[str] = []
-    for text in ast_patterns(match.get("ast")) + ast_regexes(match.get("ast")):
-        found += [w for w in NAME_WORD.findall(re.sub(r"\$+[A-Za-z_]*", " ", text))
-                  if w not in SHELL_WORDS and len(w) > 1 and re.search(r"[A-Za-z]", w)]
-    found += programs_of(rule)
-    if match.get("builtin") == "grep-recursive":
-        found += sorted(GREPS)
-    return list(dict.fromkeys(found))
-
-
-def ast_regexes(node: object) -> list[str]:
-    out: list[str] = []
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key == "regex" and isinstance(value, str):
-                out.append(value)
-            else:
-                out += ast_regexes(value)
-    elif isinstance(node, list):
-        for item in node:
-            out += ast_regexes(item)
-    return out
-
-
-ANSI_C = re.compile(r"\$'((?:\\.|[^'\\])*)'")
-
-
-def normalized(command: str) -> str:
-    """The text with shell quoting resolved, so p''kill, p\\kill and $'p\\x6bill' read as the name they run."""
-    text = ANSI_C.sub(lambda m: ansic.decode(m.group(1)), command)
-    text = re.sub(r"\\(.)", r"\1", text, flags=re.DOTALL)
-    return text.replace("'", "").replace('"', "")
-
-
-def mentioned(command: str, names: list[str], normal: str | None = None) -> bool:
-    texts = (command, normal if normal is not None else normalized(command))
-    return any(re.search(r"(?<![A-Za-z0-9_-])" + re.escape(n) + r"(?![A-Za-z0-9_-])", text)
-               for n in names for text in texts)
-
-
 def ast_size(ast: object) -> int:
     return len(json.dumps(ast))
 
@@ -210,31 +126,30 @@ def validate_rule(rule: object) -> None:
     match = rule.get("match")
     if not isinstance(match, dict) or not any(match.get(k) for k in ("program", "builtin", "regex", "ast")):
         raise Invalid("'match' needs at least one of 'program', 'builtin', 'regex', 'ast'")
-    unknown = set(match) - set(MATCH_KEYS)
+    unknown = set(match) - set(MATCH_KEYS) - set(RETIRED_MATCH_KEYS)
     if unknown:
         raise Invalid(f"unknown match keys: {', '.join(sorted(unknown))}")
     program = match.get("program")
-    if program is not None and not (isinstance(program, str) and program) and not _str_list(program):
-        raise Invalid("'match.program' must be a string or a list of strings")
+    names = [program] if isinstance(program, str) else program
+    if program is not None and not (isinstance(names, list) and names
+                                    and all(isinstance(n, str) and PROGRAM.fullmatch(n) for n in names)):
+        raise Invalid("'match.program' must be a command name or a list of them (no spaces or '/')")
     builtin = match.get("builtin")
     if builtin is not None and builtin not in BUILTINS:
-        raise Invalid(f"unknown builtin '{builtin}' (known: {', '.join(sorted(BUILTINS))})")
+        raise Invalid(f"unknown builtin '{builtin}' (known: {', '.join(BUILTINS)})")
     if "ast" in match:
         validate_ast(match["ast"])
         size = ast_size(match["ast"])
         if size > MAX_AST_BYTES:
             raise Invalid(f"'match.ast' is {size} bytes, over the {MAX_AST_BYTES // 1024} KiB limit; split it into rules")
-    if "mentions" in match and not (isinstance(match["mentions"], list) and match["mentions"] and all(
-            isinstance(x, str) and NAME_WORD.fullmatch(x) for x in match["mentions"])):
-        raise Invalid("'match.mentions' must be a non-empty list of command names")
     for key in ("args", "regex"):
-        if key in match:
-            if not isinstance(match[key], str):
-                raise Invalid(f"'match.{key}' must be a string")
-            try:
-                re.compile(match[key])
-            except re.error as exc:
-                raise Invalid(f"'match.{key}' is not a valid regex: {exc}") from exc
+        if key in match and not isinstance(match[key], str):
+            raise Invalid(f"'match.{key}' must be a string")
+    if "regex" in match:
+        try:
+            re.compile(match["regex"])
+        except re.error as exc:
+            raise Invalid(f"'match.regex' is not a valid regex: {exc}") from exc
     if rule.get("action", "deny") not in ACTIONS:
         raise Invalid(f"'action' must be one of {', '.join(ACTIONS)}")
     if rule.get("retry", "none") not in RETRIES:
@@ -327,8 +242,8 @@ def wrapper_layers(managed: object, global_state: object, project_state: object)
     return layers
 
 
-def effective_wrappers(managed: object, global_state: object, project_state: object) -> wrapper_table.Table:
-    """Built-in wrappers plus new names from each layer; existing wrappers are never altered."""
+def effective_wrappers(managed: object, global_state: object, project_state: object) -> wrapper_table.Names:
+    """Built-in wrapper names plus those added by each layer."""
     return wrapper_table.resolve(wrapper_layers(managed, global_state, project_state))[0]
 
 
@@ -386,16 +301,13 @@ def managed_layer(sources: Sequence[tuple[str, object]]) -> tuple[dict[str, Any]
         problems += _shape_problems(path, state)
         if isinstance(state, dict) and "wrappers" in state and not isinstance(state["wrappers"], dict):
             problems.append(f"managed state {path}: 'wrappers' must be an object, so all its entries are ignored")
-        for name, entry in _entries(state, "wrappers").items():
+        for name in view(state, "wrappers"):
             try:
-                wrapper_table.validate(name, entry)
+                wrapper_table.check_name(name)
             except ValueError as exc:
                 problems.append(f"managed state {path}: {exc}, so it is ignored")
                 continue
-            if name in wrapper_table.DEFAULTS or name in extra:
-                problems.append(f"managed state {path}: wrapper '{name}' is already defined, so this entry is ignored")
-                continue
-            extra[name] = {k: v for k, v in entry.items() if k != "setBy"}
+            extra.setdefault(name, {})
         for name, m in _entries(state, "modes").items():
             modes[name] = merge_mode(modes[name], m, False) if name in modes else _mode(m)
         for rid, r in _entries(state, "rules").items():
@@ -431,48 +343,16 @@ def active_modes(modes: dict[str, Mode], session: object) -> dict[str, dict[str,
     return active
 
 
-def _fallback(program: str) -> re.Pattern[str]:
-    return re.compile(r"(^|[^A-Za-z0-9_.-])([^\s]*/)?" + re.escape(program) + r"([^A-Za-z0-9_-]|$)")
-
-
-def _command_matches(rule: Rule, cmd: SimpleCommand) -> bool:
+def needs_parse(rule: Rule) -> bool:
+    """True when the rule can only be judged by parsing the command (program, builtin or ast)."""
     match = view(rule, "match")
-    programs = programs_of(rule)
-    builtin = match.get("builtin")
-    if not programs and not builtin:
-        return False
-    if programs and cmd.name not in programs:
-        return False
-    if match.get("args") and not re.search(match["args"], " ".join(cmd.args)):
-        return False
-    return not builtin or BUILTINS[builtin](cmd)
+    return any(match.get(key) for key in ("program", "builtin", "ast"))
 
 
-def match_kind(rule: Rule, command: str, cmds: list[SimpleCommand] | None) -> str | None:
-    """None when the rule's matcher does not select the command, else "direct" or "wrapped".
-
-    "wrapped" means only the look-through (wrapper, shell string, substitution, pipeline member) made a
-    program/args/builtin match; a regex match reads the raw text and never counts as wrapped.
-    """
-    match = view(rule, "match")
-    kind: str | None = None
-    if cmds is not None:
-        hits = [c for c in cmds if _command_matches(rule, c)]
-        if hits:
-            kind = "direct" if any(not c.wrapped for c in hits) else "wrapped"
-    elif (programs_of(rule) and not match.get("builtin")
-          and any(_fallback(p).search(command) for p in programs_of(rule))
-          and (not match.get("args") or re.search(match["args"], command))):
-        kind = "direct"
-    regex = match.get("regex")
-    if regex and re.search(regex, command) is not None:
-        return "direct"
-    return kind
-
-
-def rule_matches(rule: Rule, command: str, cmds: list[SimpleCommand] | None) -> bool:
-    """cmds is None when the command could not be lexed (unbalanced quotes)."""
-    return match_kind(rule, command, cmds) is not None
+def regex_kind(rule: Rule, command: str) -> str | None:
+    """"direct" when the rule's regex finds the command's raw text, else None."""
+    regex = view(rule, "match").get("regex")
+    return "direct" if regex and re.search(regex, command) is not None else None
 
 
 def requirements_met(rule: Rule) -> bool:

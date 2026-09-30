@@ -5,12 +5,12 @@ import os
 import stat
 import subprocess
 
-from helpers import ROOT, Isolated
+from helpers import ROOT, AstIsolated
 
 BIN = ROOT / "bin" / "guardrails"
 
 
-class BareCommand(Isolated):
+class BareCommand(AstIsolated):
     def run_bin(self, *argv: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([str(BIN), *argv], capture_output=True, text=True, check=False, env=dict(os.environ))
 

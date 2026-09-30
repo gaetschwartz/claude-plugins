@@ -75,11 +75,11 @@ class ExamplesRun(AstIsolated):
                 shown = {kind for unit in matching.tree(e["catch"][0])["units"] for _, kind, _ in unit["nodes"]}
                 self.assertEqual(set(re.findall(r"[a-z_]+", e["tree"])) - shown, set())
 
-    def test_negated_context_is_defeated_by_the_lexer_pass(self) -> None:
-        ast = {"pattern": "npm publish $$$", "not": {"inside": {"kind": "if_statement", "stopBy": "end"}}}
-        rule = policy.with_defaults({"match": {"ast": ast}, "message": "m"})
-        got = self.kinds(rule, ["npm publish", "if true; then npm publish; fi"])
-        self.assertTrue(all(got.values()), "update the docs if `not inside` now works")
+    def test_negated_relations_are_documented_as_working(self) -> None:
+        text = "\n".join(path.read_text() for path in sources())
+        for needle in ('"not": {"inside"', '"not": {\n        "follows"'):
+            self.assertIn(needle, text)
+        self.assertNotIn("Negated context does not work", text)
 
 
 if __name__ == "__main__":

@@ -19,6 +19,7 @@ from helpers import LIB, REAL_WANTED, ROOT, AstIsolated, Isolated
 import astbin
 import astcli
 import astrun
+import policy
 
 STUB = "#!/bin/sh\necho 'ast-grep {pin}'\n"
 PLATFORMS = [
@@ -516,8 +517,7 @@ class RealEngine(AstIsolated):
         previous = os.getcwd()
         os.chdir(nested)
         self.addCleanup(os.chdir, previous)
-        request = {"op": "eval", "command": "sudo pkill x", "rules": {"r": {"pattern": "pkill $$$"}},
-                   "wrappers": {"sudo": {}}}
+        request = {"op": "eval", "command": "sudo pkill x", "rules": {"r": PKILL_RULE}, "wrappers": ["sudo"]}
         self.assertEqual(self.call(request)["verdicts"], {"r": "wrapped"})
 
     def test_the_child_gets_a_minimal_environment_and_a_neutral_directory(self) -> None:
@@ -531,7 +531,7 @@ class RealEngine(AstIsolated):
         hostile = {"UV_CACHE_DIR": "/evil", "NODE_OPTIONS": "--require /evil", "PYTHONPATH": "/evil",
                    "HOME": "/evil", "LD_PRELOAD": "/evil", "DYLD_INSERT_LIBRARIES": "/evil"}
         with mock.patch.dict(os.environ, hostile), mock.patch.object(astcli.subprocess, "run", spy):
-            self.call({"op": "eval", "command": "pkill x", "rules": {"r": {"pattern": "pkill $$$"}}})
+            self.call({"op": "eval", "command": "pkill x", "rules": {"r": PKILL_RULE}, "wrappers": []})
         self.assertTrue(seen)
         for call in seen:
             self.assertEqual(call["env"], {"PATH": "/usr/bin:/bin"})
@@ -544,11 +544,11 @@ class RealEngine(AstIsolated):
     def test_a_dead_binary_degrades_instead_of_raising(self) -> None:
         with mock.patch.object(astcli.Cli, "_run", side_effect=astcli.Unavailable("timed out")), \
                 self.assertRaises(astrun.Unavailable):
-            self.call({"op": "eval", "command": "pkill x", "rules": {"r": {"pattern": "pkill $$$"}}})
+            self.call({"op": "eval", "command": "pkill x", "rules": {"r": PKILL_RULE}, "wrappers": []})
 
 
 class BrokenBinary(World):
-    """An installed binary that misbehaves degrades the rules by name; it is not reported as missing."""
+    """An installed binary that misbehaves lets the command through with a named warning; it is not reported as missing."""
 
     def use(self, script: str) -> None:
         stub = script.encode()
@@ -560,25 +560,29 @@ class BrokenBinary(World):
             astbin.install(self.state)
         self.put(self.gpath, {"rules": {"k": {"match": {"ast": {"pattern": "pkill $$$"}}, "message": "No pkill."}}})
 
-    def test_garbage_failures_and_hangs_degrade_with_the_usual_note(self) -> None:
+    def test_garbage_failures_and_hangs_are_allowed_with_a_named_warning(self) -> None:
+        empty = '{"runs":[{"results":[]}],"version":"x"}'
+        unit = '{"artifactLocation":{"uri":"units/u0.sh"}'
         for label, script in (("garbage", "#!/bin/sh\necho garbage\n"),
                               ("failure", "#!/bin/sh\necho 'Error: boom' >&2\nexit 7\n"),
-                              ("not json", "#!/bin/sh\necho '[{\"file\": 1}]'\n"),
+                              ("not sarif", "#!/bin/sh\necho '[{\"file\": 1}]'\n"),
                               ("empty success", "#!/bin/sh\nexit 0\n"), ("object", "#!/bin/sh\necho '{}'\n"),
-                              ("list without the canary", "#!/bin/sh\necho '[]'\n"),
-                              ("truncated", "#!/bin/sh\nprintf '[{\"text\":'\n"),
-                              ("failure with a list", "#!/bin/sh\necho '[]'\nexit 1\n"),
-                              ("entry without a range", "#!/bin/sh\necho '[{\"file\":\"u0.sh\",\"ruleId\":\"canary\"}]'\n"),
-                              ("unknown rule id", "#!/bin/sh\necho '[{\"file\":\"u0.sh\",\"ruleId\":\"x\",\"range\":" +
-                               "{\"byteOffset\":{\"start\":0,\"end\":1}}}]'\n")):
+                              ("results without the canary", f"#!/bin/sh\necho '{empty}'\n"),
+                              ("truncated", "#!/bin/sh\nprintf '{\"runs\":[{\"results\":['\n"),
+                              ("failure with a document", f"#!/bin/sh\necho '{empty}'\nexit 1\n"),
+                              ("entry without a range", "#!/bin/sh\necho '{\"runs\":[{\"results\":[{\"ruleId\":\"canary\"," +
+                               f"\"locations\":[{{\"physicalLocation\":{unit}}}}}]}}]}}]}}'\n"),
+                              ("unknown rule id", "#!/bin/sh\necho '{\"runs\":[{\"results\":[{\"ruleId\":\"x\",\"locations\":" +
+                               "[{\"physicalLocation\":{\"artifactLocation\":{\"uri\":\"units/u0.sh\"},\"region\":" +
+                               "{\"byteOffset\":0,\"byteLength\":1}}}]}]}]}'\n")):
             with self.subTest(case=label):
                 self.use(script)
                 out = self.hook("pkill x", session=label)
                 assert out is not None
-                self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-                self.assertIn("the AST matcher is unavailable", out["systemMessage"])
+                self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
+                self.assertIn("syntax-tree engine failed", out["systemMessage"])
+                self.assertEqual(out["systemMessage"], out["hookSpecificOutput"]["additionalContext"])
                 self.assertNotIn("ENGINE MISSING", out["systemMessage"])
-                self.assertIn("this rule applied because the command mentions", out["hookSpecificOutput"]["permissionDecisionReason"])
 
     def test_a_hung_binary_is_cut_off_at_the_deadline(self) -> None:
         self.use("#!/bin/sh\nsleep 30\n")
@@ -590,10 +594,14 @@ class BrokenBinary(World):
         self.assertIn("timed out", out["systemMessage"])
 
 
+PKILL_RULE = policy.with_defaults({"match": {"ast": {"pattern": "pkill $$$"}}, "message": "m"})
+
+
 class EngineMissingNotice(Isolated):
     """The loud warning when neither the npm binary nor the wheel binary is usable."""
 
     RULES: ClassVar[dict[str, Any]] = {"rules": {"k": {"match": {"ast": {"pattern": "pkill $$$"}}, "message": "No pkill."}}}
+    WITH_REGEX: ClassVar[dict[str, Any]] = {"rules": {**RULES["rules"], "rx": {"match": {"regex": "zzz"}, "message": "No zzz."}}}
 
     def setUp(self) -> None:
         super().setUp()
@@ -611,13 +619,15 @@ class EngineMissingNotice(Isolated):
         user, agent = self.channels(self.hook("ls"))
         for text in (user, agent):
             self.assertIn("GUARDRAILS ENGINE MISSING", text)
-            self.assertIn("NOT being enforced", text)
+            self.assertIn("NOT enforced until the engine is installed", text)
+            self.assertIn("program, args, builtin or match.ast", text)
+            self.assertIn("Rules that use regex (raw text, no parser needed) are still enforced", text)
+            self.assertIn("Affected rules: k", text)
             self.assertIn("You MUST tell the user", text)
             self.assertIn("Reason: npm install missing", text)
             self.assertIn("`guardrails engine install`", text)
             self.assertIn(f"`{astbin.npm_fix()}`", text)
             self.assertIn("`guardrails engine status`", text)
-            self.assertIn("degraded mode", text)
 
     def test_the_agent_text_is_framed_as_guardrails_own_notice(self) -> None:
         _, agent = self.channels(self.hook("ls"))
@@ -631,8 +641,13 @@ class EngineMissingNotice(Isolated):
         self.assertIn("ENGINE MISSING", json.dumps(self.hook("ls", session="b")))
         self.assertIsNone(self.hook("ls", session="b"))
 
-    def test_it_also_fires_for_monitor_and_when_the_command_is_denied(self) -> None:
+    def test_it_also_fires_for_monitor_and_rides_along_with_a_regex_denial(self) -> None:
+        self.put(self.gpath, self.WITH_REGEX)
         out = self.hook("pkill x", session="m", tool="Monitor")
+        assert out is not None
+        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
+        self.assertIn("ENGINE MISSING", out["systemMessage"])
+        out = self.hook("zzz", session="d")
         assert out is not None
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
         self.assertIn("ENGINE MISSING", out["systemMessage"])
@@ -670,9 +685,9 @@ class EngineMissingNotice(Isolated):
             problems = self.cli("status", "--problems")[1]
         for text in (user, agent):
             self.assertIn("cannot run on this platform", text)
-            self.assertIn("NOT being enforced", text)
+            self.assertIn("NOT enforced on this platform", text)
             self.assertIn("You MUST tell the user", text)
-            self.assertIn("remove or disable the match.ast rules", text)
+            self.assertIn("express the rules with regex", text)
             self.assertNotIn("guardrails engine install", text)
             self.assertNotIn("npm ci", text)
         for text in (status, problems):
@@ -688,21 +703,26 @@ class EngineMissingNotice(Isolated):
         self.assertNotIn("guardrails engine install", user)
         self.assertIn("older than the 2.28", user)
 
-    def test_no_rules_or_no_ast_rules_means_no_notice(self) -> None:
-        self.put(self.gpath, {"rules": {"s": {"match": {"program": "strings"}, "message": "No."}}})
+    def test_no_rules_or_only_regex_rules_means_no_notice(self) -> None:
+        self.put(self.gpath, {"rules": {"s": {"match": {"regex": "strings"}, "message": "No."}}})
         self.assertIsNone(self.hook("ls"))
         self.put(self.gpath, {})
         self.assertIsNone(self.hook("ls", session="none"))
 
     def test_status_problems_and_rule_test_carry_the_fix(self) -> None:
         out = self.cli("status", "--problems")[1]
-        self.assertIn("cannot be evaluated", out)
+        self.assertIn("NOT enforced while the engine cannot run", out)
+        self.assertIn("regex rules still are", out)
         self.assertIn("guardrails engine install", out)
         self.assertIn("npm ci --ignore-scripts", out)
         rule = json.dumps({"match": {"ast": {"pattern": "pkill $$$"}}, "message": "m"})
         code, text, _ = self.cli("rule", "test", "--json", rule, "pkill x")
         self.assertEqual(code, 0)
-        self.assertIn("GUARDRAILS ENGINE MISSING", text)
+        self.assertIn("cannot evaluate", text)
+        self.assertIn("the engine is missing", text)
+        self.assertIn("  cannot pkill x", text)
+        regex = json.dumps({"match": {"regex": "^pkill"}, "message": "m"})
+        self.assertIn("match  pkill x", self.cli("rule", "test", "--json", regex, "pkill x")[1])
 
 
 class EngineUsableNoNotice(AstIsolated):

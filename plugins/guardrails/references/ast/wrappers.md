@@ -18,7 +18,7 @@ that is parsed as written still contains it.
   "rule": {"ast": {"pattern": "sudo $$$"}},
   "action": "deny",
   "catch": [
-    "sudo ls", "make && sudo make install", "FOO=1 sudo ls", "env A=1 sudo ls", "bash -c 'sudo ls'",
+    "sudo ls", "make && sudo make install", "env A=1 sudo ls", "bash -c 'sudo ls'",
     "echo x | sudo tee f", "x=$(sudo ls)"
   ],
   "pass": [

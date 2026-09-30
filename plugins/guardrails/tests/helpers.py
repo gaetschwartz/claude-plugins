@@ -133,7 +133,15 @@ class Isolated(unittest.TestCase):
             code = cli_module.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
+    def link_engine(self) -> None:
+        """Make the real binary findable by a subprocess, which cannot see this process's patches."""
+        engine_dir = getattr(self, "engine_dir", None)
+        if engine_dir and not (self.data / "engine").exists():
+            self.data.mkdir(parents=True, exist_ok=True)
+            os.symlink(engine_dir, self.data / "engine")
+
     def run_guard(self, payload: str) -> subprocess.CompletedProcess[str]:
+        self.link_engine()
         return subprocess.run(["bash", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True,
                               text=True, check=False, env=dict(os.environ))
 
@@ -148,7 +156,13 @@ class AstIsolated(Isolated):
             if os.environ.get("GUARDRAILS_REQUIRE_AST") == "1":
                 self.fail(SKIP_AST)
             self.skipTest(SKIP_AST)
-        patch = mock.patch.object(astbin, "engine_root", lambda state_dir: root)
+        self.engine_dir = root
+        self.use_engine(True)
+
+    def use_engine(self, present: bool) -> None:
+        """Point the wheel lookup at the real binary, or at an empty directory (engine missing)."""
+        empty = str(self.tmp / "no-engine")
+        patch = mock.patch.object(astbin, "engine_root", lambda state_dir: self.engine_dir if present else empty)
         patch.start()
         self.addCleanup(patch.stop)
 

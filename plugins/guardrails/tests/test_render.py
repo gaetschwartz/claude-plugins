@@ -7,7 +7,7 @@ import re
 import unittest
 from unittest import mock
 
-from helpers import ROOT, Isolated, render
+from helpers import ROOT, AstIsolated, render
 
 PRESENTATION = (ROOT / "references" / "presentation.md").read_text()
 SPAN = re.compile(r"^- [✗✓] (?:⚠ )?(?P<fence>`+)(?P<body>.*?)(?P=fence)(?!`) ", re.MULTILINE)
@@ -82,7 +82,7 @@ class Spans(unittest.TestCase):
         self.assertEqual(render.common_width([]), 0)
 
 
-class Card(Isolated):
+class Card(AstIsolated):
     def card(self, rule: dict, examples: list, *extra: str) -> str:
         code, out, err = self.cli("rule", "test", "--render", "--json", json.dumps(rule), "--examples",
                                   json.dumps(examples), *extra)
@@ -317,7 +317,7 @@ class Card(Isolated):
         self.assertNotIn("|", out.replace("pgrep -fl node | xargs", ""))
 
 
-class StatusRender(Isolated):
+class StatusRender(AstIsolated):
     def status(self, *extra: str) -> str:
         code, out, err = self.cli("status", "--render", *extra)
         self.assertEqual((code, err), (0, ""))
@@ -450,7 +450,7 @@ class StatusRender(Isolated):
         self.assertEqual(code, 0)
 
 
-class InputSources(Isolated):
+class InputSources(AstIsolated):
     RULE = json.dumps({"match": {"program": "strings"}, "message": "Don't use strings."})
 
     def test_add_from_file_stdin_and_home(self) -> None:
@@ -529,14 +529,6 @@ class InputSources(Isolated):
         self.assertEqual(self.get(self.gpath)["rules"]["r"]["message"], "Don't use strings.")
 
 
-class Wrapped(unittest.TestCase):
-    def test_parser_flags(self) -> None:
-        from shellwords import simple_commands
-
-        flags = {c.name: c.wrapped for c in simple_commands("sudo pkill x; ls | wc; echo $(cat f)")}
-        self.assertEqual(flags, {"pkill": True, "ls": True, "wc": True, "echo": False, "cat": True})
-
-
 def control_chars(text: str) -> list[str]:
     import unicodedata
 
@@ -546,7 +538,7 @@ def control_chars(text: str) -> list[str]:
 EVIL = "x\x1b[2J\ty\u2028z\x85w\u202ev\u200bu\U000e0041"
 
 
-class Sanitising(Isolated):
+class Sanitising(AstIsolated):
     def test_clean_replaces_every_class(self) -> None:
         cleaned = render.clean(EVIL + "\x00\x7f")
         self.assertEqual(control_chars(cleaned), [])
@@ -600,13 +592,13 @@ class Sanitising(Isolated):
         self.assertIn("mode 'g h'", out)
 
 
-class WrappedForms(Isolated):
+class WrappedForms(AstIsolated):
     def kinds(self, commands: list[str]) -> dict[str, str | None]:
+        import matching
         import policy
-        from shellwords import simple_commands
 
         rule = policy.with_defaults({"match": {"program": "pkill"}, "message": "m"})
-        return {c: policy.match_kind(rule, c, simple_commands(c)) for c in commands}
+        return {c: matching.evaluate(c, {"r": rule}).kinds["r"] for c in commands}
 
     def test_glued_substitutions_and_process_substitution(self) -> None:
         commands = ["echo foo$(pkill x)", "x=$(pkill y)", "echo --a=$(pkill x)", "cat <(pkill x)", "echo $(pkill x)",
@@ -625,7 +617,6 @@ class WrappedForms(Isolated):
             self.assertEqual(kind, "direct", command)
 
     def test_verdicts_agree_with_the_hook(self) -> None:
-        import cli
         import engine
         import policy
 
@@ -640,10 +631,11 @@ class WrappedForms(Isolated):
             for command in commands:
                 with self.subTest(rule=raw, command=command):
                     output, _ = engine.evaluate(command, {"r": rule}, {}, {}, "s")
-                    self.assertEqual(cli.verdict(rule, command) is not None, output is not None)
+                    shown = self.cli("rule", "test", "--json", json.dumps({**raw, "message": "m"}), command)[1]
+                    self.assertEqual("  match  " in shown, output is not None)
 
 
-class Isolation(Isolated):
+class Isolation(AstIsolated):
     def test_render_stdout_is_only_the_block(self) -> None:
         extra = self.tmp / "custom.json"
         code, out, err = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--scope", "managed",
@@ -681,7 +673,7 @@ class Isolation(Isolated):
         self.assertNotIn("unreadable global", self.cli("status", "--render", "--scope", "project")[1])
 
 
-class Inputs(Isolated):
+class Inputs(AstIsolated):
     def test_id_name_is_validated(self) -> None:
         code, _, err = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--id-name",
                                 "bad id ### x", "ls")

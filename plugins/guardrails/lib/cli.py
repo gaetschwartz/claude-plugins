@@ -22,7 +22,7 @@ from policy import Invalid, view
 
 PRESETS_DIR = os.path.join(os.path.dirname(store.HERE), "presets")
 SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description",
-            "program", "args", "builtin", "regex", "ast", "mentions", "requires")
+            "program", "args", "builtin", "regex", "ast", "requires")
 SCOPES = ("global", "project", "managed")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
@@ -262,17 +262,16 @@ def snapshot(args: Args) -> Snapshot:
                        *rule_origins.get(rid, []))
     for text in policy.wrapper_problems(mstate, gstate, pstate):
         report(text, "managed", "global", "project")
-    asts = {rid: ast for rid, rule in rules.items() if rule.get("enabled") is True and (ast := policy.ast_of(rule))
-            and not any(p.startswith(f"rule {rid}:") for p in problems)}
-    if asts:
-        where = sorted({layer for rid in asts for layer in rule_origins.get(rid, [])})
+    parsed = {rid: rule for rid, rule in rules.items() if rule.get("enabled") is True and policy.needs_parse(rule)
+              and not any(p.startswith(f"rule {rid}:") for p in problems)}
+    if parsed:
+        where = sorted({layer for rid in parsed for layer in rule_origins.get(rid, [])})
         try:
-            for rid, why in matching.check(asts, state_dir()).items():
-                report(f"rule {rid}: match.ast does not compile ({why}) (skipped by the hook)",
-                       *rule_origins.get(rid, []))
+            for rid, why in matching.check(parsed, policy.effective_wrappers(mstate, gstate, pstate), state_dir()).items():
+                report(f"rule {rid}: does not compile ({why}) (skipped by the hook)", *rule_origins.get(rid, []))
         except astrun.Unavailable as exc:
-            report(f"match.ast rules ({', '.join(sorted(asts))}) cannot be evaluated: {exc}; the hook applies them "
-                   f"only by command name and warns once per session{engine_fix(exc)}", *where)
+            report(f"rules {', '.join(sorted(parsed))} use program, args, builtin or match.ast and are NOT enforced "
+                   f"while the engine cannot run ({exc}); regex rules still are{engine_fix(exc)}", *where)
     return Snapshot(extra, sources, mstate, gstate, pstate, gpath, ppath, gstate.get("enabled", True) is not False,
                     rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers)
 
@@ -447,23 +446,22 @@ def engine_fix(exc: Exception) -> str:
     if not isinstance(exc, astrun.Missing):
         return ""
     if exc.unsupported:
-        return ". ast-grep cannot run on this platform, so there is nothing to install; remove or disable the match.ast rules"
+        return ". ast-grep cannot run on this platform, so there is nothing to install; use regex rules here"
     fixes = f"`{astbin.FIX_INSTALL}` or `{astbin.npm_fix()}`" if exc.wheel else f"`{astbin.npm_fix()}`"
     return f". Fix: run {fixes}; `guardrails engine status` shows the state"
 
 
-def check_ast_rule(rule: policy.Rule) -> str:
-    """Raise Invalid when match.ast does not compile; a note when it could not be checked."""
-    ast = policy.ast_of(rule)
-    if not ast:
+def check_ast_rule(rule: policy.Rule, wrappers: wrapper_table.Names) -> str:
+    """Raise Invalid when the rule does not compile; a note when it could not be checked."""
+    if not policy.needs_parse(rule):
         return ""
     try:
-        errors = matching.check({"rule": ast}, state_dir())
+        errors = matching.check({"rule": rule}, wrappers, state_dir())
     except astrun.Unavailable as exc:
-        return (f"note: match.ast was not compile-checked ({exc}); the hook skips a rule that does not compile and "
+        return (f"note: the rule was not compile-checked ({exc}); the hook skips a rule that does not compile and "
                 f"warns once per session{engine_fix(exc)}")
     if errors:
-        raise Invalid(f"match.ast does not compile: {errors['rule']}")
+        raise Invalid(f"the rule does not compile: {errors['rule']}")
     return ""
 
 
@@ -472,7 +470,7 @@ def cmd_rule_add(args: Args) -> int:
     check_name("rule", args.id)
     rule, _ = split_envelope(load_json(args.json, "--json"))
     policy.validate_rule(rule)
-    unchecked = check_ast_rule(rule)
+    unchecked = check_ast_rule(rule, current_wrappers(args))
     rule["setBy"] = stamp(args.reason)
     scope = resolve_scope(args)
     path = scope_path(scope, args)
@@ -517,8 +515,6 @@ def apply_assignment(rule: dict[str, Any], key: str, value: str) -> None:
         elif key == "program":
             names = [x.strip() for x in value.split(",") if x.strip()]
             match["program"] = names[0] if len(names) == 1 else names
-        elif key == "mentions":
-            match["mentions"] = [x.strip() for x in value.split(",") if x.strip()]
         else:
             match[key] = value
         rule["match"] = match
@@ -595,7 +591,7 @@ def cmd_rule_set(args: Args) -> int:
         for key, value in pairs:
             apply_assignment(rule, key, value)
         policy.validate_rule(policy.merge_rule(base, rule) if base is not None else rule)
-        unchecked.append(check_ast_rule(rule))
+        unchecked.append(check_ast_rule(rule, current_wrappers(args)))
         rule["setBy"] = stamp(args.reason)
         return rule
 
@@ -691,24 +687,29 @@ def state_dir() -> str:
     return os.path.dirname(store.global_state_path())
 
 
-def wrapper_table_for(mstate: store.State, gstate: store.State, pstate: store.State) -> wrapper_table.Table:
-    return policy.effective_wrappers(mstate, gstate, pstate)
+def current_wrappers(args: Args | None = None) -> wrapper_table.Names:
+    """The effective wrapper names; an unreadable state file contributes none (status reports it)."""
+
+    def load(path: str | None) -> store.State:
+        try:
+            return store.load(path)
+        except store.StateError:
+            return {}
+
+    return policy.effective_wrappers(store.load_managed(extra_path(args) if args else None)[0],
+                                     load(store.global_state_path()), load(store.project_state_path()))
 
 
-def verdict(rule: policy.Rule, command: str) -> str | None:
-    table = wrapper_table_for(store.load_managed()[0], store.load(store.global_state_path()),
-                              store.load(store.project_state_path()))
-    return matching.evaluate(command, {"rule": rule}, table, state_dir()).kinds["rule"]
-
-
-def ast_notes(rule: policy.Rule, degraded: str | None, missing: astrun.Missing | None = None) -> list[str]:
-    notes = []
-    if degraded:
-        fix = f". GUARDRAILS ENGINE MISSING{engine_fix(missing)}" if missing else ""
-        notes.append(f"the AST matcher could not run ({degraded}), so match.ast was applied only by command name "
-                     "(a command that mentions one of its names counts as a match, anything else passes); the hook "
-                     f"does the same and warns the session once{fix}")
-    return notes
+def cannot_evaluate_note(ev: matching.Evaluation) -> str:
+    """Why this rule's program/args/builtin/ast part could not be judged, when it could not."""
+    if ev.refusal:
+        return f"cannot evaluate the parsing part of this rule: {ev.refusal}; the hook denies such a command"
+    if isinstance(ev.outage, astrun.Missing):
+        return (f"cannot evaluate the parsing part of this rule (program, args, builtin, match.ast): the engine is "
+                f"missing ({ev.outage}); the hook allows the command without it and warns the session"
+                f"{engine_fix(ev.outage)}")
+    return (f"cannot evaluate the parsing part of this rule (program, args, builtin, match.ast): the engine failed "
+            f"({ev.outage}); the hook allows the command and warns the session")
 
 
 def cmd_rule_test(args: Args) -> int:
@@ -757,15 +758,15 @@ def cmd_rule_test(args: Args) -> int:
     notes = effect_notes(args, rule, layers, mstate, gstate, pstate)
     if file and not store.hook_enforces(file):
         notes.append(f"the hook enforces {file} only if {store.MANAGED_ENV} points at it")
-    table = wrapper_table_for(mstate, gstate, pstate)
-    evaluations = [matching.evaluate(cmd, {rid: rule}, table, state_dir()) for cmd, _, _ in examples]
+    wrappers = policy.effective_wrappers(mstate, gstate, pstate)
+    evaluations = [matching.evaluate(cmd, {rid: rule}, wrappers, state_dir()) for cmd, _, _ in examples]
     broken = {rid_: why for ev in evaluations for rid_, why in ev.invalid.items()}
     if broken:
-        raise Invalid(f"match.ast does not compile: {broken[rid]}")
-    gone = next((ev for ev in evaluations if ev.missing), None)
-    notes += ast_notes(rule, next((ev.degraded for ev in evaluations if ev.degraded), None),
-                       astrun.Missing(gone.degraded or "", gone.unsupported, gone.wheel_ok) if gone else None)
-    results = [render.Result(cmd, source, ev.kinds[rid], expect)
+        raise Invalid(f"the rule does not compile: {broken[rid]}")
+    unjudged = next((ev for ev in evaluations if rid in ev.unevaluated), None)
+    if unjudged:
+        notes.append(cannot_evaluate_note(unjudged))
+    results = [render.Result(cmd, source, render.UNEVALUATED if rid in ev.unevaluated else ev.kinds[rid], expect)
                for (cmd, source, expect), ev in zip(examples, evaluations)]
     if args.render:
         print(render.rule_card(rid, rule, policy.programs_of(rule), policy.render(rule["message"]), scope,
@@ -782,7 +783,8 @@ def cmd_rule_test(args: Args) -> int:
     for note in notes:
         print(render.clean(f"note: {note}"))
     for result in results:
-        print(f"  {'match' if result.matched else '-':<7}{render.clean(result.cmd, chr(92) + 'n')}")
+        label = "cannot" if result.kind == render.UNEVALUATED else "match" if result.matched else "-"
+        print(f"  {label:<7}{render.clean(result.cmd, chr(92) + 'n')}")
     print(render.clean(f"message: {policy.render(rule['message'])}", chr(92) + "n"))
     return 0
 
@@ -793,26 +795,26 @@ def cmd_rule_ast(args: Args) -> int:
     mstate, gstate, pstate = (managed_state(args), store.load(store.global_state_path()),
                               store.load(store.project_state_path()))
     try:
-        response = matching.tree(args.command, wrapper_table_for(mstate, gstate, pstate), state_dir())
+        response = matching.tree(args.command, policy.effective_wrappers(mstate, gstate, pstate), state_dir())
     except astrun.Unavailable as exc:
         raise Invalid(f"the AST engine is unavailable: {exc}{engine_fix(exc)}") from exc
     units = response["units"]
     print(render.clean(f"command: {args.command}"))
-    print(f"units: {len(units)} (1 as written, {len(units) - 1} through wrappers or shell strings)")
-    if response.get("limited"):
-        print("note: the wrapper nesting limit was reached; deeper units are not shown or matched")
+    print(f"units: {len(units)} (1 as written, {len(units) - 1} from shell strings)")
+    if response.get("limit"):
+        print(f"note: the command {matching.LIMIT_REASONS[response['limit']]}; the hook denies it and deeper units "
+              "are not shown")
     for unit in units:
         print()
         if unit["label"]:
-            print(render.clean(f"tree: through {unit['label']}, source: {unit['src']}"))
+            print(render.clean(f"tree: {unit['label']}, source: {unit['src']}"))
         else:
             print("tree: command as written")
         for depth, kind, text in unit["nodes"]:
             leaf = f" \u00ab{render.clean(text)}\u00bb" if text is not None else ""
             print(f"{'  ' * (depth + 1)}{render.clean(kind)}{leaf}")
         if unit["broken"]:
-            print("note: the parser reported errors here (ERROR or MISSING nodes); the hook also checks with the "
-                  "plain lexer")
+            print("note: the parser reported errors here (ERROR or MISSING nodes), so rules see a partial tree")
     return 0
 
 
@@ -846,10 +848,12 @@ def cmd_engine_status(args: Args) -> int:
                   f"{astbin.retry_clock(state_dir())}; `guardrails engine install` ignores the wait)")
     print(f"active: {info['active'] or 'none'}" + (f" ({info['binary']})" if info["binary"] else ""))
     if not info["binary"] and "unsupported" in info:
-        print("ast-grep cannot run on this platform, so match.ast rules are applied only by command name; there is no fix "
-              "here: remove or disable those rules, or use a supported system")
+        print("ast-grep cannot run on this platform, so rules using program, args, builtin or match.ast are NOT enforced "
+              "(their commands are allowed); regex rules still are. There is no fix here: use regex rules or a "
+              "supported system")
     elif not info["binary"]:
-        print("the syntax-tree engine is missing, so match.ast rules are applied only by command name. To fix, run one of:")
+        print("the syntax-tree engine is missing, so rules using program, args, builtin or match.ast are NOT enforced "
+              "(their commands are allowed); regex rules still are. To fix, run one of:")
         if not info["wheel"]["why"]:
             print(f"  {astbin.FIX_INSTALL}")
         print(f"  {astbin.npm_fix()}")
@@ -863,35 +867,25 @@ def cmd_engine_verify(args: Args) -> int:
     return 0 if all(ok for ok, _ in results) else 2
 
 
-def wrapper_entry(args: Args) -> dict[str, Any]:
-    entry = load_json(args.json, "--json")
+def cmd_wrapper_add(args: Args) -> int:
+    require_user(args, "wrapper add")
     try:
-        wrapper_table.validate(args.name, entry)
+        wrapper_table.check_name(args.name)
     except ValueError as exc:
         raise Invalid(str(exc)) from exc
     if args.name in wrapper_table.DEFAULTS:
-        raise Invalid(f"wrapper '{args.name}' is built in and cannot be redefined: a lower layer may only add new "
-                      "wrapper names")
-    return entry
-
-
-def cmd_wrapper_add(args: Args) -> int:
-    require_user(args, "wrapper add")
-    entry = wrapper_entry(args)
+        raise Invalid(f"wrapper '{args.name}' is already built in")
     scope = resolve_scope(args)
     path = scope_path(scope, args)
-    entry["setBy"] = stamp(args.reason)
 
     def change(state: store.State) -> bool:
         wrappers = table(state, "wrappers")
         existed = args.name in wrappers
-        wrappers[args.name] = entry
+        wrappers[args.name] = {"setBy": stamp(args.reason)}
         return existed
 
     existed = change_state(scope, path, change)
     print(f"{'replaced' if existed else 'added'} wrapper {args.name} in {path}")
-    if scope != "managed" and args.name in view(managed_state(args), "wrappers"):
-        print(f"note: {args.name} is also a managed wrapper, which wins: this entry is ignored")
     return 0
 
 
@@ -912,33 +906,17 @@ def cmd_wrapper_rm(args: Args) -> int:
     return 0
 
 
-def describe_wrapper(entry: dict[str, Any]) -> str:
-    bits = []
-    if entry.get("flagsWithValue"):
-        bits.append("flags-with-value " + ",".join(entry["flagsWithValue"]))
-    if entry.get("shellString"):
-        bits.append(f"shell-string {entry['shellString']}")
-    if entry.get("skip"):
-        bits.append(f"skip {entry['skip']}")
-    if entry.get("assignments"):
-        bits.append("assignments")
-    if entry.get("noCommandFlags"):
-        bits.append("no-command-flags " + ",".join(entry["noCommandFlags"]))
-    return "; ".join(bits) or "no options"
-
-
 def cmd_wrapper_list(args: Args) -> int:
     mstate = managed_state(args)
     gstate, pstate = store.load(store.global_state_path()), store.load(store.project_state_path())
-    effective = policy.effective_wrappers(mstate, gstate, pstate)
     origins = policy.origins("wrappers", mstate, gstate, pstate)
     shown = False
-    for name in sorted(effective):
+    for name in sorted(policy.effective_wrappers(mstate, gstate, pstate)):
         layers = (["builtin"] if name in wrapper_table.DEFAULTS else []) + origins.get(name, [])
         if args.scope and args.scope not in layers:
             continue
         shown = True
-        print(render.clean(f"{name} [{'+'.join(layers)}]: {describe_wrapper(effective[name])}"))
+        print(render.clean(f"{name} [{'+'.join(layers)}]"))
     if not shown:
         print(f"no wrappers with a {args.scope} entry")
     return 0
@@ -1182,13 +1160,11 @@ def build_parser() -> argparse.ArgumentParser:
                           "its wrappers and shell strings expose")
     ast.add_argument("command", metavar="CMD")
 
-    wrapper = verbs.add_parser("wrapper", help="commands the matcher looks through (sudo, env, bash -c, ...)"
+    wrapper = verbs.add_parser("wrapper", help="commands whose own words program/builtin rules look through (sudo, env, xargs, ...)"
                                ).add_subparsers(dest="op", required=True)
-    wadd = wrapper.add_parser("add", parents=[common, scoped], help="add or extend a wrapper")
+    wadd = wrapper.add_parser("add", parents=[common, scoped], help="add a wrapper name")
     wadd.add_argument("name")
-    wadd.add_argument("--json", required=True, help='{"flagsWithValue": [...], "shellString": "-c", "skip": N, '
-                      '"assignments": true, "noCommandFlags": [...]} as JSON, @<file> or - for stdin')
-    wrm = wrapper.add_parser("rm", parents=[common, scoped], help="remove a wrapper entry from a scope")
+    wrm = wrapper.add_parser("rm", parents=[common, scoped], help="remove a wrapper name from a scope")
     wrm.add_argument("name")
     wlist = wrapper.add_parser("list", parents=[common, pathed], help="list the effective wrappers")
     wlist.add_argument("--scope", choices=SCOPES, help="list only wrappers with an entry in this layer")
@@ -1214,7 +1190,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("name")
     install.add_argument("--only", help="comma-separated rule ids to install")
 
-    engine = verbs.add_parser("engine", help="the ast-grep binary behind match.ast (not a configuration change, so "
+    engine = verbs.add_parser("engine", help="the ast-grep binary behind program, args, builtin and match.ast (not a configuration change, so "
                               "--as-user does not apply)").add_subparsers(dest="op", required=True)
     engine.add_parser("install", help="download the pinned, hash-checked ast-grep wheel binary into the plugin data dir")
     engine.add_parser("status", help="which ast-grep the hook uses, where it came from, and how to fix a missing one")
