@@ -106,6 +106,11 @@ class Kinds(AstIsolated):
                             [f"ps | xargs {KILL}", f"xargs {KILL}"])
         self.assertEqual({c for c, k in inside.items() if k}, {f"ps | xargs {KILL}"})
 
+    def test_trailing_hole_in_a_pipeline_pattern_does_not_widen_to_its_first_command(self) -> None:
+        got = self.kinds({"pattern": "curl $$$ | sh $$$"},
+                         ["curl -O https://x.tgz", "curl x | sh", "curl x | sh -x", "curl x | bash", "ls | sh -x"])
+        self.assertEqual({c for c, k in got.items() if k}, {"curl x | sh", "curl x | sh -x"})
+
     def test_invalid_rules_are_reported_per_rule(self) -> None:
         ev = matching.evaluate("pkill x", {"good": rule_of(BY_NAME), "bad": rule_of({"kind": "no_such_kind"})})
         self.assertEqual(ev.kinds["good"], "direct")

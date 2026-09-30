@@ -24,6 +24,8 @@ ARGUMENT_KINDS = ("raw_string", "string", "ansi_c_string", "word", "number", "co
 COMMAND_STRING_FLAG = r"^-[A-Za-z]*c[A-Za-z]*$"
 RECURSIVE_FLAG = r"^(?:-[A-Za-z&&[^efmABCdD]]*[rR][A-Za-z]*|-drecurse|--recursive|--dereference-recursive|--directories=recurse)$"
 TRAILING_HOLE = re.compile(r"^(.*\S)\s+\$\$\$$", re.DOTALL)
+QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
+COMMAND_LIST = re.compile(r"[|;&\n]")
 SIMPLE_COMMAND = re.compile(r"[A-Za-z0-9_.+-]+(?: [^|&;<>(){}`\n]*)?")
 KEYWORDS = frozenset({"if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac", "in",
                       "function", "select", "time", "coproc"})
@@ -88,7 +90,10 @@ def widen(rule: Any) -> Any:
     found = TRAILING_HOLE.match(pattern.strip()) if isinstance(pattern, str) else None
     if not found:
         return out
-    either = {"any": [{"pattern": pattern}, {"pattern": {"context": found.group(1), "selector": "command"}}]}
+    head = found.group(1)
+    several = COMMAND_LIST.search(QUOTED.sub("", head))
+    bare = head if several else {"context": head, "selector": "command"}
+    either = {"any": [{"pattern": pattern}, {"pattern": bare}]}
     keep = {k: v for k, v in out.items() if k in ("stopBy", "field")}
     rest = {k: v for k, v in out.items() if k not in ("pattern", "stopBy", "field")}
     return {"all": [either, rest] if rest else [either], **keep}
