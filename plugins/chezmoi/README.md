@@ -8,7 +8,7 @@ chezmoi dotfile-manager expertise for Claude Code, plus a drift advisor hook.
 |---|---|
 | `chezmoi:update` | Pulling changes into a machine. Drives the fetch → inspect → integrate → apply sequence explicitly instead of the opaque `chezmoi update`, settling destination drift *before* apply so local edits aren't silently overwritten. |
 | `chezmoi:push` | Publishing changes. Captures uncaptured destination edits first, commits, pushes, and on rejection integrates rather than forcing — then reports what was pushed, what came back, and what changed locally. |
-| `chezmoi:status` | Answering "is anything drifted / do I need to push or pull". Loads the live picture up front so the answer needs no tool round-trips. |
+| `chezmoi:status` | Answering "is anything drifted / do I need to push or pull". Loads the live picture up front so the answer needs no tool round-trips, printing only the parts that have something to report. Also flags a stale generated config: the diff `chezmoi init` would write, and what regenerating would do to the managed files. |
 | `chezmoi:diff` | Showing how a drifted file differs from its source, as a readable line-numbered diff drawn in the direction that actually drifted. |
 | `chezmoi:hook` | Turning the drift hook off or on, and reading its state. |
 | `chezmoi:edit` | Adding, changing and removing managed files: which way each command moves data, and the template/encrypted exceptions to `re-add`. |
@@ -20,7 +20,7 @@ chezmoi dotfile-manager expertise for Claude Code, plus a drift advisor hook.
 
 All five skills use skill-injected commands — `` !`…` `` in the body, pre-approved with
 `allowed-tools` — so live state is already in context when the model starts reasoning,
-instead of costing several tool calls. The `status` snapshot is about 80 ms.
+instead of costing several tool calls. The `status` snapshot takes about 0.2 s when everything is in sync, and up to about 0.7 s when it also has to analyse a stale config.
 
 A reference skill is pending a rewrite; see the note at the end of this file.
 
