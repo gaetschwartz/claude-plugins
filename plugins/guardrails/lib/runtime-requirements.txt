@@ -1,0 +1,5 @@
+ast-grep-py==0.45.3 \
+    --hash=sha256:1ce386050969944a6e2d1757951869a8ff1edc2db3e75dd03bd3b489e57acfd7 \
+    --hash=sha256:b2e6a59ae46af6e95c628caf8f5629122174b6fcf91919a9a08930c2e5f27b0f \
+    --hash=sha256:c9f01ace9cacb6dc64ffb1c114d2fdee2a01dc2820acbbddd2d18b3a1c8a515c \
+    --hash=sha256:a0cd366e2559dc8d189c8ad91596f0253e4ec533d69fb880d4afa82d88f03681
