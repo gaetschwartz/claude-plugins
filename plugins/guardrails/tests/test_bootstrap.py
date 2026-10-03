@@ -220,6 +220,15 @@ class Ready(Pinned):
                     self.assertEqual(bootstrap.diagnose(self.data).state, "ready")
                     self.assertEqual(bootstrap.ensure(self.data).state, "ready")
 
+    def test_marking_a_runtime_broken_makes_the_next_ensure_rebuild_it(self) -> None:
+        self.install_fake()
+        before = (self.rt / "marker.json").stat().st_mtime_ns
+        bootstrap.mark_broken(self.data)
+        self.assertEqual(bootstrap.diagnose(self.data).state, "broken")
+        self.assertEqual(self.ensure().state, "installed")
+        self.assertEqual(bootstrap.diagnose(self.data).state, "ready")
+        self.assertNotEqual((self.rt / "marker.json").stat().st_mtime_ns, before)
+
     def test_a_symlinked_file_leaving_the_runtime_is_not_trusted(self) -> None:
         self.install_fake()
         link = self.rt / "venv" / "bin" / "python"

@@ -17,6 +17,7 @@ from verdict import Evaluation, Kind, Limit, Refusal, UnitTree, limit_reason
 
 MAX_COMMAND = 256 << 10
 DEADLINE_SECONDS = 5.0
+PROBE_SECONDS = 3.0
 
 
 class EngineError(Exception):
@@ -28,6 +29,25 @@ class Wire(TypedDict):
     invalid: dict[str, str]
     limit: str | None
     failure: str | None
+
+
+def probe() -> str:
+    """In a fresh child: does the library handle a trivial command? ("ok" or "bad")"""
+    import scanner
+
+    return "ok" if scanner.self_test() is None else "bad"
+
+
+def report_broken() -> None:
+    """The library crashes even on a trivial command: mark the runtime broken and rebuild it in the background."""
+    import bootstrap
+    import hostcli
+
+    bootstrap.mark_broken(bootstrap.data_dir())
+    hostcli.spawn_ensure()
+
+
+REPORT_BROKEN = report_broken
 
 
 def parseable(command: str) -> str:
@@ -86,7 +106,15 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
     ev.kinds = dict.fromkeys(rules)
     if not parsed:
         return ev
-    result = bounded.call(lambda: json.dumps(compute(command, rules, names, not oversize)), DEADLINE_SECONDS)
+    try:
+        result = bounded.call(lambda: json.dumps(compute(command, rules, names, not oversize)), DEADLINE_SECONDS)
+        if result.outcome is bounded.Outcome.CRASHED:
+            healthy = bounded.call(probe, PROBE_SECONDS) == bounded.Result(bounded.Outcome.DONE, "ok")
+            result = result if healthy else bounded.Result(bounded.Outcome.BROKEN)
+    except OSError as exc:
+        ev.failure = f"the checker could not be started ({type(exc).__name__})"
+        ev.unevaluated = set(parsed)
+        return ev
     match result.outcome:
         case bounded.Outcome.DONE:
             wire = json.loads(result.payload)
@@ -95,8 +123,11 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
                           "split it up or write it to a script file and run that")
             ev.refusal_kind = Refusal.TIMEOUT
         case bounded.Outcome.CRASHED:
-            ev.refusal = "command too complex to check (the checker failed on it)"
-            ev.refusal_kind = Refusal.COMPLEX
+            ev.refusal = "this command crashes the parser"
+            ev.refusal_kind = Refusal.CRASH
+        case bounded.Outcome.BROKEN:
+            REPORT_BROKEN()
+            ev.failure = "the ast-grep-py library crashes even on a trivial command; the runtime is being rebuilt"
     if wire is not None:
         ev.kinds = {rid: Kind(kind) if kind else None for rid, kind in wire["kinds"].items()}
         ev.invalid = dict(wire["invalid"])

@@ -103,6 +103,71 @@ class Pathological(AstIsolated):
                 self.assertIsNotNone(out, name)
 
 
+class Crashes(AstIsolated):
+    """A native crash of the library: deny the command that causes it, fail open when the library itself is broken."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.put(self.gpath, {"rules": {"no-kill": {"match": {"program": K}, "message": "No kill."}}})
+        self.broken = mock.patch.object(matching, "REPORT_BROKEN", mock.Mock())
+        self.reported = self.broken.start()
+        self.addCleanup(self.broken.stop)
+
+    def sequence(self, *results: bounded.Result) -> mock._patch:  # type: ignore[type-arg]
+        return mock.patch.object(bounded, "call", side_effect=list(results))
+
+    def test_a_command_that_crashes_a_healthy_parser_is_denied_alone(self) -> None:
+        crash, ok = bounded.Result(bounded.Outcome.CRASHED), bounded.Result(bounded.Outcome.DONE, "ok")
+        with self.sequence(crash, ok):
+            out = self.hook("ls")
+        assert out is not None
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("this command crashes the parser", out["hookSpecificOutput"]["permissionDecisionReason"])
+        self.reported.assert_not_called()
+
+    def test_a_library_that_crashes_on_a_trivial_command_fails_open_loudly_and_asks_for_a_rebuild(self) -> None:
+        crash = bounded.Result(bounded.Outcome.CRASHED)
+        with self.sequence(crash, crash):
+            out = self.hook("ls")
+        assert out is not None
+        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
+        text = out["systemMessage"]
+        self.assertIn("crashes even on a trivial command", text)
+        self.assertIn("being rebuilt", text)
+        self.assertEqual(out["hookSpecificOutput"]["additionalContext"], text)
+        self.reported.assert_called_once()
+        for banned in ("claude plugin disable", "guardrails disable"):
+            self.assertNotIn(banned, text)
+
+    def test_a_probe_that_does_not_answer_counts_as_broken_too(self) -> None:
+        with self.sequence(bounded.Result(bounded.Outcome.CRASHED), bounded.Result(bounded.Outcome.TIMEOUT)):
+            out = self.hook("ls")
+        assert out is not None
+        self.assertIn("crashes even on a trivial command", out["systemMessage"])
+        self.reported.assert_called_once()
+
+    def test_a_real_abort_in_the_library_is_classified_end_to_end(self) -> None:
+        import sys
+
+        stub = self.tmp / "stub"
+        stub.mkdir()
+        (stub / "ast_grep_py.py").write_text("import os\nos.abort()\n")
+        with mock.patch.dict(sys.modules), mock.patch.object(sys, "path", [str(stub), *sys.path]):
+            for name in ("ast_grep_py", "scanner", "rulebuilder"):
+                sys.modules.pop(name, None)
+            out = self.hook("ls")
+        assert out is not None
+        self.assertIn("crashes even on a trivial command", out["systemMessage"])
+        self.reported.assert_called_once()
+
+    def test_a_checker_that_cannot_be_started_is_not_a_broken_runtime(self) -> None:
+        with mock.patch.object(bounded, "call", side_effect=OSError("fork failed")):
+            out = self.hook("ls")
+        assert out is not None
+        self.assertIn("the checker could not be started", out["systemMessage"])
+        self.reported.assert_not_called()
+
+
 class Budget(Isolated):
     def test_the_checker_deadline_is_below_the_hook_timeout(self) -> None:
         import json

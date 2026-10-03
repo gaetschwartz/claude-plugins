@@ -25,6 +25,7 @@ class Refusal(StrEnum):
     OVERSIZE = "oversize"
     COMPLEX = "complex"
     TIMEOUT = "timeout"
+    CRASH = "crash"
 
 
 FAILED_PREFIX = "engine-failed:"

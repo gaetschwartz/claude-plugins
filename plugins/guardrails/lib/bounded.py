@@ -20,6 +20,7 @@ class Outcome(StrEnum):
     DONE = "done"
     TIMEOUT = "timeout"
     CRASHED = "crashed"
+    BROKEN = "broken"
 
 
 @dataclass(frozen=True, slots=True)
