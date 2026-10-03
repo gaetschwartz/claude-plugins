@@ -253,7 +253,7 @@ class Card(AstIsolated):
 
     def test_installed_rule_scope_is_its_layers(self) -> None:
         self.cli("rule", "add", "no-pkill", "--json", json.dumps(PKILL))
-        self.cli("rule", "set", "no-pkill", "retry=none", "--scope", "project")
+        self.cli("rule", "set", "no-pkill", "--json", '{"retry": "none"}', "--scope", "project")
         code, out, _ = self.cli("rule", "test", "--render", "--id", "no-pkill", "pkill a", "ls")
         self.assertEqual(code, 0)
         self.assertTrue(out.startswith("### no-pkill · deny · global+project\n"))
@@ -518,15 +518,6 @@ class InputSources(AstIsolated):
             self.assertEqual(self.cli("rule", "set", "r", "--json", "-")[0], 0)
         rule = self.get(self.gpath)["rules"]["r"]
         self.assertEqual((rule["action"], rule["retry"]), ("warn", "same-command"))
-        self.assertEqual(self.cli("rule", "set", "r", "--json", "{}", "retry=none")[0], 2)
-
-    def test_set_json_errors(self) -> None:
-        self.cli("rule", "add", "r", "--json", self.RULE)
-        for bad in ('[1]', '{"colour": "red"}', '{"message": 3}', '{"modes": [1]}'):
-            with self.subTest(bad=bad):
-                self.assertEqual(self.cli("rule", "set", "r", "--json", bad)[0], 2)
-        self.assertEqual(self.cli("rule", "set", "r")[0], 2)
-        self.assertEqual(self.get(self.gpath)["rules"]["r"]["message"], "Don't use strings.")
 
 
 def control_chars(text: str) -> list[str]:

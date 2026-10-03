@@ -19,13 +19,13 @@ class RuleCommands(AstIsolated):
         self.assertIn("added rule no-strings", out)
         rule = self.get(self.gpath)["rules"]["no-strings"]
         self.assertEqual((rule["setBy"]["by"], rule["setBy"]["reason"]), ("user", "user asked"))
-        self.assertEqual(self.cli("rule", "set", "no-strings", "action=warn", "program=strings,otool")[0], 0)
+        self.assertEqual(self.set_rule("no-strings", {"action": "warn", "program": ["strings", "otool"]})[0], 0)
         rule = self.get(self.gpath)["rules"]["no-strings"]
         self.assertEqual((rule["action"], rule["match"]["program"]), ("warn", ["strings", "otool"]))
-        self.assertEqual(self.cli("rule", "set", "no-strings", "messageShort=short", "requires=fd,fdfind")[0], 0)
+        self.assertEqual(self.set_rule("no-strings", {"messageShort": "short", "requires": ["fd", "fdfind"]})[0], 0)
         rule = self.get(self.gpath)["rules"]["no-strings"]
         self.assertEqual((rule["messageShort"], rule["requires"]), ("short", ["fd", "fdfind"]))
-        self.assertEqual(self.cli("rule", "set", "no-strings", "messageShort=")[0], 0)
+        self.assertEqual(self.set_rule("no-strings", {"messageShort": None})[0], 0)
         self.assertNotIn("messageShort", self.get(self.gpath)["rules"]["no-strings"])
         self.assertEqual(self.cli("rule", "rm", "no-strings")[0], 0)
         self.assertEqual(self.get(self.gpath)["rules"], {})
@@ -40,13 +40,13 @@ class RuleCommands(AstIsolated):
 
     def test_set_rejects_unknown_key_and_invalid_result(self) -> None:
         self.cli("rule", "add", "no-strings", "--json", RULE)
-        self.assertEqual(self.cli("rule", "set", "no-strings", "colour=red")[0], 2)
-        self.assertEqual(self.cli("rule", "set", "no-strings", "regex=(")[0], 2)
-        self.assertEqual(self.cli("rule", "set", "no-strings", "enabled=maybe")[0], 2)
+        for fields in ({"colour": "red"}, {"regex": "("}, {"enabled": "maybe"}, {"modes": [1]}, {"message": 3}, [1]):
+            with self.subTest(fields=fields):
+                self.assertEqual(self.set_rule("no-strings", fields)[0], 2)
         self.assertNotIn("regex", self.get(self.gpath)["rules"]["no-strings"]["match"])
 
     def test_unknown_rule(self) -> None:
-        self.assertEqual(self.cli("rule", "set", "ghost", "action=deny")[0], 2)
+        self.assertEqual(self.set_rule("ghost", {"action": "deny"})[0], 2)
         self.assertEqual(self.cli("rule", "rm", "ghost")[0], 2)
 
     def test_project_add_goes_to_project_file(self) -> None:
@@ -56,14 +56,15 @@ class RuleCommands(AstIsolated):
 
     def test_project_override_of_global_rule(self) -> None:
         self.cli("rule", "add", "no-strings", "--json", RULE)
-        code, out, _ = self.cli("rule", "set", "no-strings", "action=deny", "enabled=false", "args=-a", "--scope", "project")
+        code, out, _ = self.set_rule("no-strings", {"action": "deny", "enabled": False, "args": "-a"},
+                                     "--scope", "project")
         self.assertEqual(code, 0)
         entry = self.get(self.ppath)["rules"]["no-strings"]
         self.assertEqual(entry["action"], "deny")
         self.assertEqual(entry["match"], {"args": "-a"})
         self.assertNotIn("message", entry)
         self.assertIn("enabled=false", out)
-        self.assertIn("args=-a", out)
+        self.assertIn('args="-a"', out)
 
     def test_project_flag_outside_project(self) -> None:
         del os.environ["CLAUDE_PROJECT_DIR"]
@@ -272,7 +273,7 @@ class RuleTest(AstIsolated):
         self.cli("rule", "add", "no-strings", "--json",
                  '{"match": {"program": "strings"}, "message": "docs", "action": "warn", '
                  '"retry": "same-command", "modes": ["reverse-engineering"]}')
-        self.cli("rule", "set", "no-strings", "action=deny", "--scope", "project")
+        self.cli("rule", "set", "no-strings", "--json", '{"action": "deny"}', "--scope", "project")
         code, out, _ = self.cli("rule", "test", "--id", "no-strings", "strings a")
         self.assertEqual(code, 0)
         self.assertIn("rule no-strings [global+project]: deny retry modes=reverse-engineering", out)
@@ -315,7 +316,7 @@ class ManagedScope(AstIsolated):
         self.assertFalse(self.gpath.exists())
         self.assertEqual(stat.S_IMODE(self.mpath.stat().st_mode), 0o644)
         self.assertEqual(self.get(self.mpath)["rules"]["no-pkill"]["setBy"]["reason"], "policy")
-        self.assertEqual(self.managed("rule", "set", "no-pkill", "action=warn", "modes=")[0], 0)
+        self.assertEqual(self.managed("rule", "set", "no-pkill", "--json", '{"action": "warn", "modes": []}')[0], 0)
         rule = self.get(self.mpath)["rules"]["no-pkill"]
         self.assertEqual((rule["action"], rule["modes"]), ("warn", []))
         self.assertEqual(self.managed("rule", "rm", "no-pkill")[0], 0)
@@ -327,7 +328,7 @@ class ManagedScope(AstIsolated):
         self.assertTrue(self.mpath.is_file())
 
     def test_set_and_rm_need_an_existing_managed_rule(self) -> None:
-        self.assertEqual(self.managed("rule", "set", "ghost", "action=deny")[0], 2)
+        self.assertEqual(self.managed("rule", "set", "ghost", "--json", '{"action": "deny"}')[0], 2)
         self.assertEqual(self.managed("rule", "rm", "ghost")[0], 2)
 
     def test_always_enforced_note_only_without_modes(self) -> None:
@@ -335,7 +336,7 @@ class ManagedScope(AstIsolated):
         self.assertIn("note: managed rule bare lists no modes, so it is always enforced", out)
         _, out, _ = self.managed("rule", "add", "modal", "--json", RULE)
         self.assertNotIn("always enforced", out)
-        _, out, _ = self.managed("rule", "set", "modal", "modes=")
+        _, out, _ = self.managed("rule", "set", "modal", "--json", '{"modes": []}')
         self.assertIn("always enforced", out)
         _, out, _ = self.cli("rule", "add", "local", "--json", MANAGED_RULE)
         self.assertNotIn("always enforced", out)
@@ -344,12 +345,12 @@ class ManagedScope(AstIsolated):
         self.managed("rule", "add", "no-strings", "--json", RULE)
         before = self.mpath.read_text()
         for scope in ("global", "project"):
-            for argv in (("rule", "set", "no-strings", "action=warn"), ("rule", "rm", "no-strings")):
+            for argv in (("rule", "set", "no-strings", "--json", '{"action": "warn"}'), ("rule", "rm", "no-strings")):
                 with self.subTest(scope=scope, verb=argv[1]):
                     code, _, err = self.cli(*argv, "--scope", scope)
                     self.assertEqual(code, 3)
                     self.assertIn("--scope managed", err)
-        self.assertEqual(self.cli("rule", "set", "no-strings", "action=warn", "--scope", "project")[0], 3)
+        self.assertEqual(self.cli("rule", "set", "no-strings", "--json", '{"action": "warn"}', "--scope", "project")[0], 3)
         self.assertEqual(self.mpath.read_text(), before)
         self.assertFalse(self.gpath.exists())
         self.assertFalse(self.ppath.exists())
@@ -504,7 +505,7 @@ class ManagedScope(AstIsolated):
     def test_corrupt_managed_file_does_not_block_other_scopes(self) -> None:
         self.put(self.mpath, "{nope")
         self.assertEqual(self.cli("rule", "add", "x", "--json", RULE)[0], 0)
-        self.assertEqual(self.cli("rule", "set", "x", "action=warn")[0], 0)
+        self.assertEqual(self.cli("rule", "set", "x", "--json", '{"action": "warn"}')[0], 0)
         self.assertEqual(self.cli("rule", "test", "--id", "x", "strings a")[0], 0)
         self.assertEqual(self.cli("mode", "declare", "m")[0], 0)
         self.assertEqual(self.cli("rule", "rm", "x")[0], 0)
@@ -513,7 +514,7 @@ class ManagedScope(AstIsolated):
     def test_set_and_rm_work_on_the_users_own_override_of_a_managed_id(self) -> None:
         self.managed("rule", "add", "no-strings", "--json", RULE)
         self.assertEqual(self.cli("rule", "add", "no-strings", "--json", RULE, "--scope", "project")[0], 0)
-        self.assertEqual(self.cli("rule", "set", "no-strings", "message=mine", "--scope", "project")[0], 0)
+        self.assertEqual(self.cli("rule", "set", "no-strings", "--json", '{"message": "mine"}', "--scope", "project")[0], 0)
         self.assertEqual(self.get(self.ppath)["rules"]["no-strings"]["message"], "mine")
         self.assertEqual(self.cli("rule", "rm", "no-strings", "--scope", "project")[0], 0)
         self.assertEqual(self.get(self.ppath)["rules"], {})
@@ -523,7 +524,7 @@ class ManagedScope(AstIsolated):
     def test_global_override_of_a_managed_id_can_be_removed_and_set(self) -> None:
         self.managed("rule", "add", "no-strings", "--json", RULE)
         self.put(self.gpath, {"rules": {"no-strings": {**json.loads(RULE), "action": "warn"}}})
-        self.assertEqual(self.cli("rule", "set", "no-strings", "action=deny")[0], 0)
+        self.assertEqual(self.cli("rule", "set", "no-strings", "--json", '{"action": "deny"}')[0], 0)
         self.assertEqual(self.cli("rule", "rm", "no-strings")[0], 0)
         self.assertEqual(self.cli("rule", "rm", "no-strings")[0], 3)
 
@@ -655,7 +656,7 @@ class PathOption(AstIsolated):
 
     def test_every_write_verb_targets_the_path_file(self) -> None:
         self.assertEqual(self.with_path("rule", "add", "no-pkill", "--json", MANAGED_RULE)[0], 0)
-        self.assertEqual(self.with_path("rule", "set", "no-pkill", "action=warn")[0], 0)
+        self.assertEqual(self.with_path("rule", "set", "no-pkill", "--json", '{"action": "warn"}')[0], 0)
         self.assertEqual(self.with_path("mode", "declare", "incident")[0], 0)
         self.assertEqual(self.with_path("mode", "on", "incident")[0], 0)
         self.assertTrue(self.get(self.fpath)["modes"]["incident"]["active"])
@@ -674,7 +675,7 @@ class PathOption(AstIsolated):
         for argv in (("rule", "add", "x", "--json", RULE, "--path", p),
                      ("rule", "add", "x", "--json", RULE, "--path", p, "--scope", "global"),
                      ("rule", "add", "x", "--json", RULE, "--path", p, "--scope", "project"),
-                     ("rule", "set", "x", "action=warn", "--path", p),
+                     ("rule", "set", "x", "--json", '{"action": "warn"}', "--path", p),
                      ("rule", "rm", "x", "--path", p),
                      ("mode", "declare", "m", "--path", p),
                      ("mode", "undeclare", "m", "--path", p),

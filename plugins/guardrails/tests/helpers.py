@@ -133,6 +133,9 @@ class Isolated(unittest.TestCase):
             code = cli_module.main(list(argv))
         return code, out.getvalue(), err.getvalue()
 
+    def set_rule(self, rid: str, fields: Any, *extra: str, agent: bool = False) -> tuple[int, str, str]:
+        return self.cli("rule", "set", rid, "--json", json.dumps(fields), *extra, agent=agent)
+
     def stub_engine(self, body: str) -> None:
         """Replace the engine with a shell script that has this body."""
         path = self.tmp / "stub" / "ast-grep"

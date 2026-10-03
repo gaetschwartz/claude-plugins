@@ -502,88 +502,44 @@ def cmd_rule_add(args: Args) -> int:
     return 0
 
 
-def apply_assignment(rule: dict[str, Any], key: str, value: str) -> None:
-    if key == "enabled":
-        if value not in ("true", "false"):
-            raise Invalid("enabled must be true or false")
-        rule["enabled"] = value == "true"
-    elif key == "modes":
-        rule["modes"] = [x.strip() for x in value.split(",") if x.strip()]
-    elif key == "requires":
-        items = [x.strip() for x in value.split(",") if x.strip()]
-        if items:
-            rule["requires"] = items
-        else:
-            rule.pop("requires", None)
-    elif key in policy.MATCH_KEYS:
-        match = dict(view(rule, "match"))
-        if not value:
-            match.pop(key, None)
-        elif key == "ast":
-            match[key] = load_json(value, "ast")
-        elif key == "program":
-            names = [x.strip() for x in value.split(",") if x.strip()]
-            match["program"] = names[0] if len(names) == 1 else names
-        else:
-            match[key] = value
-        rule["match"] = match
-    elif value:
-        rule[key] = value
-    else:
-        rule.pop(key, None)
-
-
-def ineffective(pairs: list[tuple[str, str]], base: policy.Rule) -> list[str]:
-    notes = []
-    for key, value in pairs:
-        if (key, value) in (("action", "warn"), ("retry", "same-command"), ("enabled", "false")):
-            notes.append(f"{key}={value}")
-        elif key == "modes":
-            added = [m.strip() for m in value.split(",") if m.strip() and m.strip() not in policy.modes_of(base)]
-            if added:
-                notes.append(f"modes {','.join(added)} (a project can only remove suspending modes)")
-        elif key in policy.MATCH_KEYS or key == "requires":
-            notes.append(f"{key}={value} (a project cannot change what a global rule matches)")
-    return notes
-
-
-def json_assignments(fields: object) -> list[tuple[str, str]]:
-    if not isinstance(fields, dict):
-        raise Invalid("--json must be a JSON object of the fields to change")
-    pairs = []
+def apply_fields(rule: dict[str, Any], fields: dict[str, Any]) -> None:
+    """Set each field (null removes it); match keys go under 'match'."""
+    match = dict(view(rule, "match"))
     for key, value in fields.items():
-        if key not in SETTABLE:
-            raise Invalid(f"--json key {key!r} must be one of {', '.join(SETTABLE)}")
-        if isinstance(value, bool):
-            text = "true" if value else "false"
-        elif isinstance(value, list) and all(isinstance(x, str) for x in value):
-            text = ",".join(value)
-        elif isinstance(value, str):
-            text = value
-        elif isinstance(value, dict) and key == "ast":
-            text = json.dumps(value)
+        holder = match if key in policy.MATCH_KEYS else rule
+        if value is None:
+            holder.pop(key, None)
         else:
-            raise Invalid(f"--json key {key!r} must be a string, a list of strings or (for enabled) a boolean")
-        pairs.append((key, text))
-    return pairs
+            holder[key] = value
+    if any(key in policy.MATCH_KEYS for key in fields):
+        rule["match"] = match
+
+
+def ineffective(fields: dict[str, Any], base: policy.Rule) -> list[str]:
+    notes = []
+    for key, value in fields.items():
+        shown = f"{key}={json.dumps(value)}"
+        if (key, value) in (("action", "warn"), ("retry", "same-command"), ("enabled", False)):
+            notes.append(shown)
+        elif key == "modes":
+            added = [m for m in value if m not in policy.modes_of(base)] if isinstance(value, list) else []
+            if added:
+                notes.append(f"modes {','.join(map(str, added))} (a project can only remove suspending modes)")
+        elif key in policy.MATCH_KEYS or key == "requires":
+            notes.append(f"{shown} (a project cannot change what a global rule matches)")
+    return notes
 
 
 def cmd_rule_set(args: Args) -> int:
     require_user(args, "rule set")
     scope = resolve_scope(args)
     path = scope_path(scope, args)
-    pairs: list[tuple[str, str]] = []
-    if args.json is not None:
-        pairs = json_assignments(load_json(args.json, "--json"))
-    if not args.assignments and args.json is None:
-        raise Invalid("give key=value assignments or --json")
-    if args.assignments and args.json is not None:
-        raise Invalid("give key=value assignments or --json, not both")
-    for item in args.assignments:
-        key, sep, value = item.partition("=")
-        if not sep or key not in SETTABLE:
-            raise Invalid(f"expected key=value with key one of {', '.join(SETTABLE)}; got {item!r}")
-        pairs.append((key, value))
+    fields = load_json(args.json, "--json")
+    if not isinstance(fields, dict):
+        raise Invalid("--json must be a JSON object of the fields to change")
+    for key in fields:
+        if key not in SETTABLE:
+            raise Invalid(f"--json key {key!r} must be one of {', '.join(SETTABLE)}")
     refuse_managed_rule(args, scope, args.id, path)
     base = policy.effective_rules({}, store.load(store.global_state_path()), {}).get(args.id) \
         if scope == "project" else None
@@ -597,8 +553,7 @@ def cmd_rule_set(args: Args) -> int:
                 raise Invalid(f"no rule '{args.id}' in {path}")
             rules[args.id] = {}
         rule = rules[args.id]
-        for key, value in pairs:
-            apply_assignment(rule, key, value)
+        apply_fields(rule, fields)
         policy.validate_rule(policy.merge_rule(base, rule) if base is not None else rule)
         unchecked.append(check_ast_rule(rule, current_wrappers(args)))
         rule["setBy"] = stamp(args.reason)
@@ -609,7 +564,7 @@ def cmd_rule_set(args: Args) -> int:
     if unchecked and unchecked[-1]:
         print(unchecked[-1])
     if base is not None:
-        notes = ineffective(pairs, base)
+        notes = ineffective(fields, base)
         if notes:
             print("note: a project entry can only tighten a global rule; no effect: " + ", ".join(notes))
     note = always_enforced(scope, args.id, rule)
@@ -1148,8 +1103,7 @@ def build_parser() -> argparse.ArgumentParser:
     add.add_argument("--json", required=True, help="the rule as a JSON object, @<file> or - for stdin")
     set_ = rule.add_parser("set", parents=[common, scoped], help="change fields of a rule")
     set_.add_argument("id")
-    set_.add_argument("assignments", nargs="*", metavar="key=value")
-    set_.add_argument("--json", help="fields to change as a JSON object, @<file> or - for stdin")
+    set_.add_argument("--json", required=True, help="fields to change as a JSON object (null removes one), @<file> or - for stdin")
     rm = rule.add_parser("rm", parents=[common, scoped], help="remove a rule")
     rm.add_argument("id")
     test = rule.add_parser("test", parents=[common, pathed], help="dry-run a rule against sample commands")
@@ -1250,19 +1204,8 @@ def sudo_hint(args: Args, argv: list[str]) -> str:
     return shlex.join([*argv, *extra])
 
 
-def parse(argv: list[str]) -> Args:
-    """parse_args, except that key=value words after an option still reach `rule set` on every Python version."""
-    parser = build_parser()
-    args, rest = parser.parse_known_args(argv)
-    if rest and (args.verb, getattr(args, "op", None)) == ("rule", "set") and all("=" in word for word in rest):
-        args.assignments += rest
-    elif rest:
-        parser.error(f"unrecognized arguments: {' '.join(rest)}")
-    return args
-
-
 def main(argv: list[str]) -> int:
-    args = parse(argv)
+    args = build_parser().parse_args(argv)
     try:
         code = HANDLERS[(args.verb, getattr(args, "op", None))](args)
         note = unenforced_note(args) if code == 0 else ""

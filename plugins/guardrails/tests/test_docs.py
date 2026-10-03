@@ -109,7 +109,7 @@ class DocumentedCommands(AstIsolated):
         self.assertIn("'\"'\"'", quoted)
         self.assertEqual(json.loads(shlex.split(f"--json {quoted}")[1])["message"], "Don't kill by name")
         self.assertEqual(self.cli("rule", "add", "x", "--json", rule)[0], 0)
-        self.assertEqual(self.cli("rule", "set", "x", "message=Don't stop")[0], 0)
+        self.assertEqual(self.cli("rule", "set", "x", "--json", '{"message": "Don\'t stop"}')[0], 0)
         self.assertEqual(self.get(self.gpath)["rules"]["x"]["message"], "Don't stop")
 
 

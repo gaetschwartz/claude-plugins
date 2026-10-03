@@ -18,12 +18,12 @@ Arguments: $ARGUMENTS
 
 Parse the text above; every long flag has a short one.
 
-- `<id>`: the rule. `enable` / `disable`: set `enabled=true` / `enabled=false` on the rule (this is the rule's own flag,
+- `<id>`: the rule. `enable` / `disable`: set `enabled` to `true` / `false` on the rule (this is the rule's own flag,
   not the `guardrails enable|disable` hook verbs, which agents cannot run). `rm`: remove it. `key=value` pairs are
-  passed to `guardrails rule set`; the keys are `action`, `retry`, `enabled`, `modes`, `message`, `messageShort`,
-  `description`, `program`, `args`, `builtin`, `regex`, `ast`, `requires`. Comma lists for `modes`, `requires` and
-  `program`; an empty value clears a field; `program`, `args`, `builtin`, `regex`, `ast` edit `match` (`ast` is a
-  JSON object: pass it through `--json -`, as a JSON object value).
+  turned into a JSON object for `guardrails rule set --json`; the keys are `action`, `retry`, `enabled`, `modes`,
+  `message`, `messageShort`, `description`, `program`, `args`, `builtin`, `regex`, `ast`, `requires`. Comma lists for
+  `modes`, `requires` and `program` become JSON arrays, `enabled` is a boolean, an empty value becomes `null`, which
+  clears the field; `program`, `args`, `builtin`, `regex`, `ast` edit `match` (`ast` is a JSON object).
 - `-s` / `--scope global|project|managed` (default global), `-P` / `--path <file>` (managed-format file, needs
   `-s managed`), `-y` / `--yes` (do not confirm `rm`).
 - No arguments: run `guardrails status --render`, paste its output VERBATIM, ask (AskUserQuestion, or chat when there
@@ -36,10 +36,10 @@ Parse the text above; every long flag has a short one.
    state. A managed rule can only be changed with `--scope managed` (exit 3 otherwise); a project entry over a global
    or managed rule can only tighten it, and the CLI says which keys had no effect: tell the user.
 2. Apply it:
-   - changes: `guardrails rule set <id> key=value … --scope <s> [--path <file>] --as-user --reason "<user's words>"`
-   - text with quotes, backticks, `$(` or several lines (a `message`, a `regex`, an `args`): pass the fields as a JSON
-     object on stdin through a quoted heredoc, `guardrails rule set <id> --json - … <<'EOF'` … `EOF`; keys are the same
-     as above, lists are JSON arrays, `enabled` is a boolean. Do not quote such text on the command line.
+   - changes: pass the fields as a JSON object on stdin through a quoted heredoc,
+     `guardrails rule set <id> --json - --scope <s> [--path <file>] --as-user --reason "<user's words>" <<'EOF'` … `EOF`
+     (lists are JSON arrays, `enabled` is a boolean, `null` clears a field). Do not quote text with quotes, backticks
+     or `$(` on the command line.
    - `rule set` and `rule rm` change configuration and are not pre-approved; heredoc invocations are never
      pre-approved either, so expect permission prompts unless the user's mode skips them.
    - removal: confirm first with AskUserQuestion (`header` `Remove`, question "Remove rule `<id>` from `<scope>`?",
