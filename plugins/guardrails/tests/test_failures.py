@@ -124,7 +124,7 @@ class LoudAndAllow(AstIsolated):
             self.assertEqual(out.getvalue(), "", payload)
 
 
-def timed_out(work: Any, seconds: float) -> bounded.Result:
+def timed_out(work: Any, seconds: float, after_fork: Any = None) -> bounded.Result:
     return bounded.Result(bounded.Outcome.TIMEOUT)
 
 

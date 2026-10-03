@@ -11,7 +11,8 @@ from __future__ import annotations
 import itertools
 import math
 import re
-from collections import deque
+import time
+from collections import defaultdict, deque
 from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
@@ -72,6 +73,8 @@ class Scan:
     hits: tuple[Hit, ...]
     invalid: dict[str, str]
     limit: Limit | None
+    micros: dict[str, int]
+    parse_us: int
 
     def kinds(self, rule_ids: Sequence[str]) -> dict[str, Kind | None]:
         found = {hit.rule: hit.kind for hit in self.hits}
@@ -264,6 +267,7 @@ class Scanner:
         self.regexes = dict(regexes or {})
         self.invalid: dict[str, str] = {}
         self.found: dict[str, Hit] = {}
+        self.spent: defaultdict[str, int] = defaultdict(int)
 
     def matches(self, rid: str, root: SgNode, first_only: bool) -> list[SgNode]:
         """The nodes a rule selects; a rule whose config does not compile is dropped with the reason."""
@@ -292,7 +296,10 @@ class Scanner:
             if known is not None and known.kind is Kind.DIRECT:
                 continue
             first_only = unit.origin is not Origin.COMMAND and not unit.restricted
-            for node in self.matches(rid, root, first_only):
+            began = time.perf_counter_ns()
+            nodes = self.matches(rid, root, first_only)
+            self.spent[rid] += time.perf_counter_ns() - began
+            for node in nodes:
                 kind = Kind.WRAPPED if first_only else self.kind_of(unit, node)
                 if kind is None or (known is not None and kind is Kind.WRAPPED):
                     continue
@@ -304,11 +311,14 @@ class Scanner:
     def judge_regexes(self, root: SgNode) -> None:
         """`match.regex` reads the raw text of the command as written: a hit there is always direct."""
         for rid, config in self.regexes.items():
+            began = time.perf_counter_ns()
             try:
                 hit = root.find(config)
             except Exception as exc:  # noqa: BLE001
                 self.invalid[rid] = "match.regex is not valid Rust regex syntax: " + clean_error(str(exc))
                 continue
+            finally:
+                self.spent[rid] += time.perf_counter_ns() - began
             if hit is not None:
                 where = hit.range()
                 self.found[rid] = Hit(rid, Kind.DIRECT, where.start.index, where.end.index)
@@ -321,8 +331,11 @@ class Scanner:
                 self.judge_regexes(root)
             self.judge(unit, root)
 
+        began = time.perf_counter_ns()
         limit = walk(command, True, visit)
-        return Scan(tuple(self.found.values()), dict(self.invalid), limit)
+        parse_ns = time.perf_counter_ns() - began - sum(self.spent.values())
+        return Scan(tuple(self.found.values()), dict(self.invalid), limit,
+                    {rid: ns // 1000 for rid, ns in self.spent.items()}, max(parse_ns, 0) // 1000)
 
 
 def walk(command: str, with_variants: bool, visit: Callable[[Unit, SgNode], None]) -> Limit | None:

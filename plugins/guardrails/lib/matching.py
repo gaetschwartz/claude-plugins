@@ -7,13 +7,14 @@ be interrupted and a hook that runs out of time lets the command through.
 from __future__ import annotations
 
 import time
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, assert_never
 
 import bounded
 import policy
-from verdict import MAX_COMMAND_BYTES, Evaluation, Kind, Limit, UnitTree
+from verdict import MAX_COMMAND_BYTES, Evaluation, Fault, Kind, Limit, UnitTree
 
 if TYPE_CHECKING:
     from ast_grep_py import Config
@@ -37,6 +38,8 @@ class Computed:
     invalid: dict[str, str] = field(default_factory=dict)
     limit: Limit | None = None
     failure: str | None = None
+    micros: dict[str, int] = field(default_factory=dict)
+    parse_us: int = 0
 
 
 class Health(StrEnum):
@@ -92,14 +95,15 @@ def compute(command: str, rules: dict[str, policy.Rule]) -> Computed:
         result = scanner.Scanner(configs_of(rules), regexes_of(rules)).run(parseable(command))
     except Exception as exc:  # noqa: BLE001
         return Computed(dict.fromkeys(rules), failure=f"unexpected error: {type(exc).__name__}")
-    return Computed(result.kinds(list(rules)), result.invalid, result.limit)
+    return Computed(result.kinds(list(rules)), result.invalid, result.limit, micros=result.micros,
+                    parse_us=result.parse_us)
 
 
-def evaluate(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
+def evaluate(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[], None] | None = None) -> Evaluation:
     """How each rule's matcher selects the command: "direct", "wrapped" or None.
 
     What could not be judged (`unevaluated`) and why (`failure`, `refusal`) is kept for the caller to report. Hits
-    already found always stand. Never raises.
+    already found always stand. Never raises. `after_fork` runs in this process once the checker child exists.
     """
     ev = Evaluation(kinds=dict.fromkeys(rules))
     if not rules:
@@ -108,11 +112,12 @@ def evaluate(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
     if size > MAX_COMMAND_BYTES:
         ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND_BYTES // 1024} KiB)"
         ev.unevaluated = set(rules)
+        ev.fault = Fault.OVERSIZE
         return ev
     started = time.monotonic()
     state = Health.HEALTHY
     try:
-        result = bounded.call(lambda: compute(command, rules), DEADLINE_SECONDS)
+        result = bounded.call(lambda: compute(command, rules), DEADLINE_SECONDS, after_fork)
         if result.outcome is bounded.Outcome.CRASHED:
             state = health(started)
             ev.runtime_broken = state is Health.BROKEN
@@ -126,15 +131,19 @@ def evaluate(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
                 ev.kinds |= done.kinds
                 ev.invalid = dict(done.invalid)
                 ev.failure = done.failure
+                ev.micros, ev.parse_us = done.micros, done.parse_us
                 if done.limit is not None:
                     ev.refusal = f"command too complex to check (it {done.limit})"
+                    ev.fault = Fault.COMPLEXITY
             case bounded.Outcome.TIMEOUT:
                 ev.refusal = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "
                               "split it up or write it to a script file and run that")
+                ev.fault = Fault.TIMEOUT
             case bounded.Outcome.CRASHED:
                 match state:
                     case Health.HEALTHY:
                         ev.refusal = "this command crashes the parser"
+                        ev.fault = Fault.CRASH
                     case Health.BROKEN:
                         ev.failure = ("the ast-grep-py library crashes even on a trivial command; the runtime is being "
                                       "rebuilt")
@@ -146,6 +155,8 @@ def evaluate(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
                 ev.failure = "the checker answered with something unreadable"
             case _:
                 assert_never(result.outcome)
+    if ev.failure is not None:
+        ev.fault = ev.fault or Fault.ENGINE
     if ev.failure is not None or ev.refusal:
         ev.unevaluated = {rid for rid in rules if ev.kinds.get(rid) is None}
     ev.unevaluated |= {rid for rid in ev.invalid if ev.kinds.get(rid) is None}

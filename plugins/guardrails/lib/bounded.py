@@ -38,14 +38,18 @@ def child_main[T](work: Callable[[], T], tx: Connection, seconds: float) -> None
         os._exit(1)
 
 
-def call[T](work: Callable[[], T], seconds: float) -> Result[T]:
-    """What `work` returns, or TIMEOUT after `seconds`, CRASHED when the child dies, GARBLED for an unreadable answer."""
+def call[T](work: Callable[[], T], seconds: float, after_fork: Callable[[], None] | None = None) -> Result[T]:
+    """What `work` returns, or TIMEOUT after `seconds`, CRASHED when the child dies, GARBLED for an unreadable answer.
+
+    `after_fork` runs in the parent once the child exists, before it waits."""
     context = multiprocessing.get_context("fork")
     rx, tx = context.Pipe(duplex=False)
     proc = context.Process(target=child_main, args=(work, tx, seconds), daemon=True)
     proc.start()
     tx.close()
     try:
+        if after_fork is not None:
+            after_fork()
         if not rx.poll(seconds):
             return Result(Outcome.TIMEOUT)
         try:

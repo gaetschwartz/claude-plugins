@@ -27,6 +27,16 @@ class Limit(StrEnum):
     VARIANT_BYTES = "unwraps into too much command text to parse"
 
 
+class Fault(StrEnum):
+    """Why a call was not judged; the value is the pseudo rule id telemetry counts it under."""
+
+    OVERSIZE = "@oversize"
+    COMPLEXITY = "@complexity"
+    TIMEOUT = "@timeout"
+    CRASH = "@crash"
+    ENGINE = "@engine-failure"
+
+
 FAILED_PREFIX = "engine-failed:"
 
 
@@ -54,6 +64,9 @@ class Evaluation:
     failure: str | None = None
     refusal: str | None = None
     runtime_broken: bool = False
+    fault: Fault | None = None
+    micros: dict[str, int] = field(default_factory=dict)
+    parse_us: int = 0
 
     def failure_kind(self) -> str:
         return "refusal" if self.refusal else "engine"
