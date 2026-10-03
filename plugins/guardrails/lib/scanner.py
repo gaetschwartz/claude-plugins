@@ -257,30 +257,25 @@ def statement_variants(text: str, spans: Sequence[Span]) -> Iterator[str]:
 class Scanner:
     """One evaluation: the rules, the wrapper names and what has been found so far."""
 
-    def __init__(self, rules: dict[str, tuple[Config, ...]], wrapper_names: Sequence[str],
+    def __init__(self, rules: dict[str, Config], wrapper_names: Sequence[str],
                  regexes: dict[str, Config] | None = None) -> None:
-        self.active = {rid: list(configs) for rid, configs in rules.items() if configs}
+        self.active = dict(rules)
         self.regexes = dict(regexes or {})
         self.invalid: dict[str, str] = {}
         self.found: dict[str, Hit] = {}
         self.wrappers = tuple(wrapper_names)
 
     def matches(self, rid: str, root: SgNode, first_only: bool) -> list[SgNode]:
-        """The nodes a rule selects; a rule whose configs all fail to compile is dropped with the reason."""
-        configs = self.active[rid]
-        reason = "invalid rule"
-        while configs:
-            try:
-                if first_only:
-                    one = root.find(configs[0])
-                    return [one] if one is not None else []
-                return root.find_all(configs[0])
-            except Exception as exc:  # noqa: BLE001
-                reason = clean_error(str(exc))
-                configs.pop(0)
-        del self.active[rid]
-        self.invalid[rid] = reason
-        return []
+        """The nodes a rule selects; a rule whose config does not compile is dropped with the reason."""
+        try:
+            if first_only:
+                one = root.find(self.active[rid])
+                return [one] if one is not None else []
+            return root.find_all(self.active[rid])
+        except Exception as exc:  # noqa: BLE001
+            del self.active[rid]
+            self.invalid[rid] = clean_error(str(exc))
+            return []
 
     def kind_of(self, unit: Unit, node: SgNode) -> Kind | None:
         """None when the hit does not count: outside the substitutions of a restricted unit."""
@@ -362,7 +357,7 @@ class Scanner:
         return Scan(tuple(self.found.values()), dict(self.invalid), limit)
 
 
-def compile_errors(configs: dict[str, tuple[Config, ...]], regexes: dict[str, Config] | None = None) -> dict[str, str]:
+def compile_errors(configs: dict[str, Config], regexes: dict[str, Config] | None = None) -> dict[str, str]:
     """The reason per rule id none of whose configs compiles, or whose regex does not."""
     scanner = Scanner(configs, (), regexes)
     root = SgRoot("true", "bash").root()

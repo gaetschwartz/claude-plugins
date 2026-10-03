@@ -111,7 +111,7 @@ class LoudAndAllow(AstIsolated):
     def test_a_failed_self_test_allows_with_its_reason_once_per_session_and_names_the_rules(self) -> None:
         self.break_engine("it misparsed a test command")
         text = self.both_channels(self.hook(f"strings x; {K} y", "a"))
-        for needle in ("rules engine failed", "it misparsed a test command", "could not be checked",
+        for needle in ("rules engine failed", "unexpected error: RuntimeError", "could not be checked",
                        "Affected rules: ast, pipe, strings", "Tell the user", "guardrails engine status"):
             self.assertIn(needle, text)
         self.assertNotIn("engine install", text)
@@ -255,7 +255,7 @@ class FailurePolicy(AstIsolated):
         self.assertIn("last engine failure", out)
         self.assertIn("engine", out)
         rule = json.dumps({"match": {"program": "zap"}, "message": "m"})
-        self.assertIn("it misparsed a test command", self.cli("rule", "test", "--json", rule, "zap x")[1])
+        self.assertIn("unexpected error: RuntimeError", self.cli("rule", "test", "--json", rule, "zap x")[1])
 
 
 class Oversize(AstIsolated):
@@ -359,9 +359,12 @@ class MonitorCoverage(AstIsolated):
         self.assertTrue(is_denied(self.hook("sed -i x", "sh", tool="Bash")))
         self.assertIsNone(self.hook("sed -i x", "sh", tool="Monitor"))
 
-    def test_hooks_json_matches_bash_and_monitor(self) -> None:
-        hooks = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
-        self.assertEqual(hooks["PreToolUse"][0]["matcher"], "Bash|Monitor")
+    def test_hooks_json_matches_bash_and_monitor_and_the_deadlines_fit_its_timeout(self) -> None:
+        hooks = json.loads((HOOKS / "hooks.json").read_text())["hooks"]["PreToolUse"][0]
+        self.assertEqual(hooks["matcher"], "Bash|Monitor")
+        self.assertEqual(hooks["hooks"][0]["timeout"], matching.HOOK_SECONDS)
+        self.assertLessEqual(matching.DEADLINE_SECONDS + matching.PROBE_SECONDS + matching.HEADROOM_SECONDS,
+                             matching.HOOK_SECONDS)
 
 
 if __name__ == "__main__":

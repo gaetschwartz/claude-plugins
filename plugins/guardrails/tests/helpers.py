@@ -141,12 +141,13 @@ class AstIsolated(Isolated):
             self.skipTest(SKIP_AST)
 
     def break_engine(self, reason: str = "it misparsed a test command") -> None:
-        """Make the library's self-test fail, as a broken install would."""
+        """Make the library fail on every command and its self-test fail, as a broken install would."""
         import scanner
 
-        patch = mock.patch.object(scanner, "self_test", lambda: reason)
-        patch.start()
-        self.addCleanup(patch.stop)
+        for patch in (mock.patch.object(scanner, "self_test", lambda: reason),
+                      mock.patch.object(scanner.Scanner, "run", side_effect=RuntimeError(reason))):
+            patch.start()
+            self.addCleanup(patch.stop)
 
 
 def shared_runtime() -> bootstrap.Outcome:

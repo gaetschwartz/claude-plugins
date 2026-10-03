@@ -21,7 +21,7 @@ if TYPE_CHECKING:
 
 HOOK_SECONDS = 10.0
 HEADROOM_SECONDS = 2.0
-DEADLINE_SECONDS = 5.0
+DEADLINE_SECONDS = HOOK_SECONDS / 2
 PROBE_SECONDS = 3.0
 REPROBE_SECONDS = 6.0
 
@@ -77,18 +77,20 @@ def regexes_of(rules: dict[str, policy.Rule]) -> dict[str, Config]:
     return {rid: config for rid, rule in rules.items() if (config := rulebuilder.regex_config(rule)) is not None}
 
 
+def configs_of(rules: dict[str, policy.Rule]) -> dict[str, Config]:
+    import rulebuilder
+
+    return {rid: config for rid, rule in rules.items() if (config := rulebuilder.config_of(rule)) is not None}
+
+
 def compute(command: str, rules: dict[str, policy.Rule], names: wrapper_table.Names) -> Computed:
     """Every rule's verdict on one command; runs in the checker child."""
     try:
-        import rulebuilder
         import scanner
     except ImportError as exc:
         return Computed(dict.fromkeys(rules), failure=f"the ast-grep-py library cannot be imported ({type(exc).__name__})")
-    if (broken := scanner.self_test()) is not None:
-        return Computed(dict.fromkeys(rules), failure=f"the ast-grep-py self-test failed: {broken}")
     try:
-        result = scanner.Scanner({rid: rulebuilder.configs_of(rule) for rid, rule in rules.items()}, names,
-                                 regexes_of(rules)).run(parseable(command))
+        result = scanner.Scanner(configs_of(rules), names, regexes_of(rules)).run(parseable(command))
     except Exception as exc:  # noqa: BLE001
         return Computed(dict.fromkeys(rules), failure=f"unexpected error: {type(exc).__name__}")
     return Computed(result.kinds(list(rules)), result.invalid, result.limit)
@@ -172,11 +174,9 @@ def check(rules: dict[str, policy.Rule]) -> dict[str, str]:
     if not rules:
         return {}
     ensure_engine()
-    import rulebuilder
     import scanner
 
-    return scanner.compile_errors({rid: rulebuilder.configs_of(rule) for rid, rule in rules.items()},
-                                  regexes_of(rules))
+    return scanner.compile_errors(configs_of(rules), regexes_of(rules))
 
 
 def tree(command: str) -> tuple[list[UnitTree], Limit | None]:

@@ -152,7 +152,6 @@ class PatternShapes(AstIsolated):
     def test_every_documented_and_preset_pattern_still_compiles_after_loosening(self) -> None:
         import json
 
-        import rulebuilder
         import scanner
         from helpers import ROOT
 
@@ -164,7 +163,7 @@ class PatternShapes(AstIsolated):
         for pattern in sorted(patterns):
             with self.subTest(pattern=pattern):
                 rule = rule_of({"pattern": pattern})
-                self.assertEqual(scanner.compile_errors({"r": rulebuilder.configs_of(rule)}), {})
+                self.assertEqual(scanner.compile_errors(matching.configs_of({"r": rule})), {})
 
 
 class Units(AstIsolated):
@@ -183,7 +182,7 @@ class Units(AstIsolated):
         rule = policy.Rule.from_json({"match": {"program": K}, "message": "m"})
         with mock.patch.object(scanner, "SgRoot", spy):
             matching.compute(command, {"r": rule}, wrappers.DEFAULTS)
-        return count[0] - 1
+        return count[0]
 
     def test_parse_count_per_command_shape(self) -> None:
         cases = {
@@ -320,7 +319,7 @@ class Caps(AstIsolated):
         import scanner
         from ast_grep_py import SgRoot  # noqa: F401
 
-        configs = {"r": scanner.rulebuilder.configs_of(rule_of({"pattern": f"{K} $$$"}))}
+        configs = matching.configs_of({"r": rule_of({"pattern": f"{K} $$$"})})
         for command, limit in cases:
             with self.subTest(limit=limit):
                 self.assertEqual(scanner.Scanner(configs, wrappers.DEFAULTS).run(command).limit, limit)
@@ -348,10 +347,9 @@ class Text(AstIsolated):
         self.assertEqual(self.verdict(f"echo \ud800; {K} x"), "direct")
 
     def test_the_hit_range_is_in_characters(self) -> None:
-        import rulebuilder
         import scanner
 
-        configs = {"r": rulebuilder.configs_of(rule_of({"pattern": f"{K} $$$"}))}
+        configs = matching.configs_of({"r": rule_of({"pattern": f"{K} $$$"})})
         hit = scanner.Scanner(configs, ()).run(f"echo é; {K} x").hits[0]
         self.assertEqual((hit.kind, hit.start, hit.end), (Kind.DIRECT, 8, 8 + len(f"{K} x")))
 

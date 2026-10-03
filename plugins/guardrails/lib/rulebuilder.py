@@ -119,23 +119,20 @@ def loosened(node: Any) -> Any:
     return out if found and out.get("any", True) else None
 
 
-def found_rule(rule: policy.Rule, plain: bool) -> Rule | None:
-    """Where this rule matches (`plain`: the ast rule exactly as written)."""
+def found_rule(rule: policy.Rule) -> Rule | None:
+    """Where this rule matches: its program/args shorthand and its ast rule, spelling-tolerant."""
     ast = rule.match.ast
-    tolerant = None if plain or not ast else loosened(ast)
+    tolerant = loosened(ast) if ast else None
     parts = [part for part in (shorthand(rule.match), widen(tolerant or ast) if ast else None) if part]
     if not parts:
         return None
     return parts[0] if len(parts) == 1 else {"any": parts}
 
 
-def configs_of(rule: policy.Rule) -> tuple[Config, ...]:
-    """The configs to try for this rule in order: spelling-tolerant first, then the ast rule as written."""
-    first = found_rule(rule, False)
-    if first is None:
-        return ()
-    second = found_rule(rule, True)
-    return ({"rule": first},) if second == first or second is None else ({"rule": first}, {"rule": second})
+def config_of(rule: policy.Rule) -> Config | None:
+    """The ast-grep config that finds this rule's matches, or None when the rule has no parsed matcher."""
+    found = found_rule(rule)
+    return {"rule": found} if found else None
 
 
 def regex_config(rule: policy.Rule) -> Config | None:
