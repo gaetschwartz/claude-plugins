@@ -9,7 +9,7 @@ import json
 import os
 import sys
 from collections.abc import Callable, Iterator
-from typing import Any, TypeVar
+from typing import Any
 
 import bootstrap
 import policy
@@ -25,7 +25,6 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 CLI = os.path.join(os.path.dirname(HERE), "bin", "guardrails")
 
 State = dict[str, Any]
-T = TypeVar("T")
 
 
 class StateError(Exception):

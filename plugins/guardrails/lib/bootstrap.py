@@ -18,7 +18,8 @@ from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict, cast
 
 LIB = Path(__file__).resolve().parent
-BACKOFFS = (600, 3600, 21600)
+REPEAT_SECONDS = 600
+BACKOFFS = (REPEAT_SECONDS, 3600, 21600)
 INSTALL_SECONDS = 60.0
 NETWORK_SECONDS = 10.0
 KEEP_DAYS = 30
@@ -160,6 +161,12 @@ def read_stamp(data: Path) -> Stamp | None:
         return Stamp(path.stat().st_mtime, int(count), cast(Reason, reason), step)
     except (OSError, ValueError):
         return None
+
+
+def session_id(payload: object) -> str:
+    """The session a hook payload belongs to; calls without one share a single bucket."""
+    found = payload.get("session_id") if isinstance(payload, dict) else None
+    return str(found or "nosession")
 
 
 def diagnose(data: Path, pins: Pins | None = None) -> Outcome:

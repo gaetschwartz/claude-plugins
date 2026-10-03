@@ -7,6 +7,10 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NamedTuple, assert_never
 
+import bootstrap
+
+MAX_COMMAND_BYTES = 256 << 10
+
 
 class Kind(StrEnum):
     DIRECT = "direct"
@@ -84,6 +88,6 @@ class Evaluation:
                         (f"[guardrails plugin notice] The rules engine failed on this command ({self.failure}), so rules "
                         "could not be checked and the command was allowed."
                         f"{listed}{managed_note} Tell the user if this keeps "
-                        "happening (this notice repeats every 10 minutes while it does); `guardrails engine status` "
+                        f"happening (this notice repeats every {bootstrap.REPEAT_SECONDS // 60} minutes while it does); `guardrails engine status` "
                         "shows the runtime.")))
         return out

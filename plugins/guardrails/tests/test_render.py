@@ -640,9 +640,9 @@ class NotEvaluated(AstIsolated):
         self.assertIn("Not evaluated", out)
 
     def test_an_oversize_command_is_not_judged_either(self) -> None:
-        import matching
+        import verdict
 
-        out = self.cli("rule", "test", "--json", json.dumps(PKILL), "x" * (matching.MAX_COMMAND + 1))[1]
+        out = self.cli("rule", "test", "--json", json.dumps(PKILL), "x" * (verdict.MAX_COMMAND_BYTES + 1))[1]
         self.assertIn("cannot evaluate the parsing part of this rule: command too large to check", out)
 
 

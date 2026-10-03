@@ -13,7 +13,6 @@ from pathlib import Path
 import bootstrap
 from bootstrap import Outcome, Reason
 
-NOTICE_REPEAT_SECONDS = 600
 REASON_TEXT: dict[Reason, str] = {
     "dns": "a download host could not be resolved (DNS)", "connect": "a connection to a download host failed",
     "timeout": "a download or install step timed out", "tls": "a TLS certificate check failed",
@@ -59,7 +58,7 @@ def spawn_ensure() -> None:
 
 
 def due(data: Path, session: str, found: Outcome) -> bool:
-    """Show the notice once per session, and again every NOTICE_REPEAT_SECONDS while a failure persists."""
+    """Show the notice once per session, and again every bootstrap.REPEAT_SECONDS while a failure persists."""
     if found.state == "unsafe":
         return True
     stamp = data / "notices" / hashlib.sha256(session.encode()).hexdigest()[:16]
@@ -67,7 +66,7 @@ def due(data: Path, session: str, found: Outcome) -> bool:
         seen = stamp.stat().st_mtime
     except OSError:
         seen = None
-    if seen is not None and not (found.state != "missing" and time.time() - seen >= NOTICE_REPEAT_SECONDS):
+    if seen is not None and not (found.state != "missing" and time.time() - seen >= bootstrap.REPEAT_SECONDS):
         return False
     with contextlib.suppress(OSError):
         stamp.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -80,9 +79,9 @@ def hook(stdin_text: str, data: Path) -> str:
     """The PreToolUse answer while the runtime is not ready: allow, loudly and at most once per interval."""
     try:
         payload = json.loads(stdin_text)
-        session = str(payload.get("session_id") or "nosession") if isinstance(payload, dict) else "nosession"
+        session = bootstrap.session_id(payload)
     except ValueError:
-        session = "nosession"
+        session = bootstrap.session_id(None)
     found = bootstrap.diagnose(data)
     if found.state in ("missing", "broken"):
         with bootstrap.locked(data, False) as free:

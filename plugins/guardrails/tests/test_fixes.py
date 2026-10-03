@@ -15,6 +15,7 @@ import bounded
 import engine
 import matching
 import policy
+import verdict
 import wrappers
 from test_corpus import ALLOW, DENY
 from verdict import Kind, Refusal
@@ -225,7 +226,7 @@ class FailurePolicy(AstIsolated):
         assert out is not None
         self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
         self.assertIn("allowed because only warn rules", out["systemMessage"])
-        huge = self.hook("echo " + "y" * (matching.MAX_COMMAND + 1), "huge")
+        huge = self.hook("echo " + "y" * (verdict.MAX_COMMAND_BYTES + 1), "huge")
         assert huge is not None
         self.assertNotIn("permissionDecision", huge["hookSpecificOutput"])
 
@@ -263,8 +264,8 @@ class Oversize(AstIsolated):
         self.put(self.gpath, {"rules": RULES_FOR_OUTAGES})
 
     def test_a_command_over_the_cap_is_denied_and_never_parsed(self) -> None:
-        for command in ("echo " + "y" * matching.MAX_COMMAND, "strings " + "é" * matching.MAX_COMMAND,
-                        "echo " + "a" * matching.MAX_COMMAND + f"; {K} x"):
+        for command in ("echo " + "y" * verdict.MAX_COMMAND_BYTES, "strings " + "é" * verdict.MAX_COMMAND_BYTES,
+                        "echo " + "a" * verdict.MAX_COMMAND_BYTES + f"; {K} x"):
             with mock.patch("scanner.Scanner", side_effect=AssertionError("parsed")):
                 out = self.hook(command, f"big{len(command)}")
             self.assertTrue(is_denied(out))
@@ -272,16 +273,16 @@ class Oversize(AstIsolated):
 
     def test_regex_rules_are_judged_by_the_same_checker_so_size_denies_them_too(self) -> None:
         self.put(self.gpath, {"rules": {"pipe": RULES_FOR_OUTAGES["pipe"]}})
-        out = self.hook("echo " + "y" * (matching.MAX_COMMAND + 10))
+        out = self.hook("echo " + "y" * (verdict.MAX_COMMAND_BYTES + 10))
         self.assertIn("command too large to check", deny_text(out))
 
     def test_just_under_the_cap_is_analysed(self) -> None:
-        out = self.hook("echo " + "y" * (matching.MAX_COMMAND - 100) + f"; {K} x")
+        out = self.hook("echo " + "y" * (verdict.MAX_COMMAND_BYTES - 100) + f"; {K} x")
         self.assertTrue(is_denied(out))
         self.assertIn("No kill.", deny_text(out))
 
     def test_the_cap_counts_bytes(self) -> None:
-        out = self.hook("echo " + "日" * (matching.MAX_COMMAND // 3 + 10))
+        out = self.hook("echo " + "日" * (verdict.MAX_COMMAND_BYTES // 3 + 10))
         self.assertTrue(is_denied(out))
 
 

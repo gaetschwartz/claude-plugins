@@ -7,6 +7,7 @@ import sys
 import time
 from typing import IO, TypedDict
 
+import bootstrap
 import matching
 import policy
 import store
@@ -40,7 +41,7 @@ def remember(items: list[str], value: str) -> bool:
     return True
 
 
-REPEAT_AFTER = 600.0
+REPEAT_AFTER = float(bootstrap.REPEAT_SECONDS)
 
 
 def due(session: policy.Session, key: str) -> bool:
@@ -254,7 +255,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
     if not found.rules and not warnings:
         return
 
-    sid = str(payload.get("session_id") or "nosession")
+    sid = bootstrap.session_id(payload)
     output: Output | None = None
     pre = judge(command, candidates_of(found.rules), wrapper_layers(gstate))
     stateless = not gstate_ok

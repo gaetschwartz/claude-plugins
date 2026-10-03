@@ -18,11 +18,10 @@ from typing import NamedTuple
 
 import rulebuilder
 from ast_grep_py import Config, SgNode, SgRoot
-from verdict import Kind, Limit, UnitTree
+from verdict import MAX_COMMAND_BYTES, Kind, Limit, UnitTree
 
 MAX_DEPTH = 8
 MAX_UNITS = 64
-MAX_SCRIPT_BYTES = 256 << 10
 MAX_VARIANTS = 2048
 MAX_VARIANT_BYTES = 16 << 20
 MAX_COMBINATIONS = 64
@@ -314,7 +313,7 @@ class Scanner:
                     scripts += 1
                     script_bytes += len(new.text)
                     limit = (Limit.DEPTH if new.depth > MAX_DEPTH else Limit.UNITS if scripts > MAX_UNITS
-                             else Limit.SIZE if script_bytes > MAX_SCRIPT_BYTES else None)
+                             else Limit.SIZE if script_bytes > MAX_COMMAND_BYTES else None)
                 if limit is not None:
                     break
                 seen.add(key)
@@ -346,7 +345,7 @@ def units_of(command: str) -> tuple[list[Unit], Limit | None]:
                 continue
             spent += len(text)
             limit = (Limit.DEPTH if unit.depth + 1 > MAX_DEPTH else Limit.UNITS if len(units) > MAX_UNITS
-                     else Limit.SIZE if spent > MAX_SCRIPT_BYTES else None)
+                     else Limit.SIZE if spent > MAX_COMMAND_BYTES else None)
             if limit is not None:
                 return units, limit
             seen.add((text, only))

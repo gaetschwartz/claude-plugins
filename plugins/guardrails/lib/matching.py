@@ -12,12 +12,11 @@ from typing import TYPE_CHECKING, assert_never
 import bounded
 import policy
 import wrappers as wrapper_table
-from verdict import Evaluation, Kind, Limit, Refusal, UnitTree, limit_reason
+from verdict import MAX_COMMAND_BYTES, Evaluation, Kind, Limit, Refusal, UnitTree, limit_reason
 
 if TYPE_CHECKING:
     from ast_grep_py import Config
 
-MAX_COMMAND = 256 << 10
 DEADLINE_SECONDS = 5.0
 PROBE_SECONDS = 3.0
 
@@ -82,8 +81,8 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
     if not rules:
         return ev
     size = len(command.encode("utf-8", "replace"))
-    if size > MAX_COMMAND:
-        ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND // 1024} KiB)"
+    if size > MAX_COMMAND_BYTES:
+        ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND_BYTES // 1024} KiB)"
         ev.refusal_kind = Refusal.OVERSIZE
         ev.unevaluated = set(rules)
         return ev
