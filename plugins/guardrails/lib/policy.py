@@ -90,15 +90,6 @@ class Match:
                 raise Invalid(f"'match.{key}' must be a string")
         return cls(tuple(names or ()), raw.get("args"), raw.get("regex"), ast)
 
-    def to_json(self) -> dict[str, Any]:
-        out: dict[str, Any] = {}
-        if self.program:
-            out["program"] = list(self.program)
-        for key in ("args", "regex", "ast"):
-            if getattr(self, key) is not None:
-                out[key] = getattr(self, key)
-        return out
-
 
 @dataclass(frozen=True, slots=True)
 class Rule:
@@ -136,15 +127,6 @@ class Rule:
         description = raw.get("description")
         return cls(match, message, action, retry, raw.get("enabled", True), modes, requires, raw.get("messageShort"),
                    description if isinstance(description, str) else None)
-
-    def to_json(self) -> dict[str, Any]:
-        out: dict[str, Any] = {"match": self.match.to_json(), "message": self.message, "action": str(self.action),
-                               "retry": str(self.retry), "enabled": self.enabled, "modes": list(self.modes)}
-        for key, value in (("requires", list(self.requires)), ("messageShort", self.message_short),
-                           ("description", self.description)):
-            if value:
-                out[key] = value
-        return out
 
 
 @dataclass(frozen=True, slots=True)
@@ -352,8 +334,8 @@ def _shape_problems(path: str, state: object) -> list[str]:
 def managed_layer(state: object, path: str) -> tuple[dict[str, Any], list[str]]:
     """The managed file as a layer, and what is wrong with it."""
     problems = _shape_problems(path, state)
-    rules: dict[str, Rule] = {}
-    modes = {name: Mode.from_json(raw) for name, raw in _entries(state, "modes").items()}
+    modes = _entries(state, "modes")
+    rules: dict[str, dict[str, Any]] = {}
     for rid, raw in _entries(state, "rules").items():
         try:
             rule = Rule.from_json(raw)
@@ -362,11 +344,8 @@ def managed_layer(state: object, path: str) -> tuple[dict[str, Any], list[str]]:
             continue
         problems += [f"managed rule {rid} lists mode '{m}', which the managed file does not declare, so it cannot "
                      "suspend the rule" for m in rule.modes if m not in modes]
-        rules[rid] = replace(rule, modes=tuple(m for m in rule.modes if m in modes))
-    layer = {"rules": {rid: rule.to_json() for rid, rule in rules.items()},
-             "modes": {name: {"description": m.description, "agentMayEnable": m.agent_may_enable, "active": m.active}
-                       for name, m in modes.items()}}
-    return layer, problems
+        rules[rid] = {**raw, "modes": [m for m in rule.modes if m in modes]}
+    return {"rules": rules, "modes": modes}, problems
 
 
 def active_modes(modes: Mapping[str, Mode], session: Session) -> dict[str, Activation]:
