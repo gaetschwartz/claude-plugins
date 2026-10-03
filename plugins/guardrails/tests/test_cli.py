@@ -208,7 +208,7 @@ class ModeCommands(AstIsolated):
 class Status(AstIsolated):
     def test_lists_rules_modes_and_problems(self) -> None:
         self.put(self.gpath, {"rules": {"no-strings": json.loads(RULE),
-                                        "bad": {"match": {"regex": "("}, "message": "x"}},
+                                        "bad": {"match": {"builtin": "nope"}, "message": "x"}},
                               "modes": {"reverse-engineering": {"description": "RE", "agentMayEnable": True}}})
         self.put(self.ppath, {"rules": {"nm": {"match": {"program": "nm"}, "message": "m", "modes": ["ghost"]}}})
         code, out, _ = self.cli("status")
@@ -452,7 +452,7 @@ class ManagedScope(AstIsolated):
         self.assertIn("fix or remove the file by hand", out)
 
     def test_status_reports_invalid_managed_rule(self) -> None:
-        self.put(self.mpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x"}}})
+        self.put(self.mpath, {"rules": {"bad": {"match": {"builtin": "nope"}, "message": "x"}}})
         out = self.cli("status")[1]
         self.assertEqual(out.count("managed rule bad is invalid and ignored"), 1)
         self.assertNotIn("rule bad: ", out)
@@ -694,7 +694,7 @@ class PathOption(AstIsolated):
         self.put(self.fpath, "{nope")
         out = self.cli("status", "--path", str(self.fpath))[1]
         self.assertIn("unreadable managed state, so its rules are NOT enforced until it is fixed", out)
-        self.put(self.fpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x"}}})
+        self.put(self.fpath, {"rules": {"bad": {"match": {"builtin": "nope"}, "message": "x"}}})
         out = self.cli("status", "--path", str(self.fpath))[1]
         self.assertIn("managed rule bad is invalid and ignored", out)
 

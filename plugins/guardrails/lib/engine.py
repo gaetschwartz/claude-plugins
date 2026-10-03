@@ -292,38 +292,15 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
 
 
 def run_safe(text: str, stdout: IO[str], failure: BaseException) -> None:
-    """After run_hook failed: apply the regex rules (the only ones that need no parser) and allow the rest, loudly."""
+    """After run_hook failed: allow, loudly. No rule is applied: every matcher runs in the bounded checker."""
     payload = json.loads(text)
     tool = payload.get("tool_name") if isinstance(payload, dict) else None
     tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if tool not in TOOLS or not isinstance(command, str) or not command.strip():
         return
-    managed, _ = store.load_managed()
-    try:
-        gstate = store.load(store.global_state_path())
-    except store.StateError:
-        gstate = {}
-    cwd = payload.get("cwd")
-    try:
-        pstate = store.load(store.project_state_path(cwd if isinstance(cwd, str) else None))
-    except store.StateError:
-        pstate = {}
-    killed = gstate.get("enabled", True) is False
-    rules = policy.effective_rules(managed, {} if killed else gstate, {} if killed else pstate)
-    candidates = candidates_of(rules, tool)
-    reason = f"the guardrails hook failed internally ({type(failure).__name__})"
-    hits = {rid: rule for rid, rule in candidates.items() if policy.regex_kind(rule, command)}
-    notice = (f"guardrails: {reason}; only rules with regex were applied, without session state. Rules using program, "
-              "args, builtin or match.ast were not checked.")
-    denied = [(rid, policy.render(r["message"])) for rid, r in hits.items() if r["action"] == "deny"]
-    warned = [(rid, policy.render(r["message"])) for rid, r in hits.items() if r["action"] != "deny"]
-    lines = [f"[guardrails:{rid}] {text}" for rid, text in denied + warned]
-    context = "\n\n".join([*lines, notice])
-    output: Output = {"systemMessage": notice}
-    if denied:
-        output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "permissionDecision": "deny",
-                                        "permissionDecisionReason": context}
-    else:
-        output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "additionalContext": context}
+    notice = (f"[guardrails plugin notice] the guardrails hook failed internally ({type(failure).__name__}), so no rule "
+              "was applied and this command was not checked. Tell the user about this now.")
+    output: Output = {"systemMessage": notice, "hookSpecificOutput": {"hookEventName": "PreToolUse",
+                                                                       "additionalContext": notice}}
     json.dump(output, stdout)

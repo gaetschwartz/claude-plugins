@@ -216,7 +216,7 @@ class ManagedPath(Isolated):
                 self.assertIn(str(self.mpath), problems[0])
 
     def test_invalid_rules_and_undeclared_modes_are_reported(self) -> None:
-        self.put(self.mpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x"},
+        self.put(self.mpath, {"rules": {"bad": {"match": {"builtin": "nope"}, "message": "x"},
                                         "ghosty": {**self.RULE, "modes": ["ghost", "real"]}},
                               "modes": {"real": {}}})
         problems = store.load_managed()[1]

@@ -173,7 +173,7 @@ class Hook(AstIsolated):
 
     def test_invalid_rule_in_state_is_ignored(self) -> None:
         state = self.get(self.gpath)
-        state["rules"]["bad"] = {"match": {"regex": "("}, "message": "x"}
+        state["rules"]["bad"] = {"match": {"builtin": "nope"}, "message": "x"}
         self.put(self.gpath, state)
         self.assertEqual(decision(self.hook("strings a")), "deny")
         self.assertIsNone(self.hook("echo ("))
@@ -305,7 +305,7 @@ class ManagedHook(AstIsolated):
         self.assertIsNone(out)
 
     def test_invalid_managed_rule_is_skipped_and_reported_once_per_session(self) -> None:
-        self.put(self.mpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x"},
+        self.put(self.mpath, {"rules": {"bad": {"match": {"builtin": "nope"}, "message": "x"},
                                         "no-pkill": dict(PKILL)}})
         out, err = self.hook_stderr("pkill node")
         assert out is not None

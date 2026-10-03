@@ -339,6 +339,47 @@ class Hook(AstIsolated):
             self.assertIsNotNone(self.hook("bash -c 'pkill x'"))
         self.assertEqual(inside_lock, [False])
 
+    def test_a_regex_rule_that_rust_cannot_compile_is_skipped_and_named_beside_good_ones(self) -> None:
+        self.put(self.gpath, {"rules": {"bad": {"match": {"regex": "(?=a)b"}, "message": "m"},
+                                        "by-name": {"match": {"ast": BY_NAME}, "message": "No."}}})
+        out = self.hook("pkill x")
+        assert out is not None
+        self.assertIn("deny", json.dumps(out))
+        self.assertIn("rule bad does not compile (match.regex is not valid Rust regex syntax", out["systemMessage"])
+
+    def test_a_catastrophic_regex_is_linear_and_still_judged(self) -> None:
+        self.put(self.gpath, {"rules": {"slow": {"match": {"regex": "(a+)+$"}, "message": "No."},
+                                        "by-name": {"match": {"program": "foo"}, "message": "No foo."}}})
+        out = self.hook("foo x " + "a" * 5000 + "b")
+        assert out is not None
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertNotIn("[guardrails:slow]", out["hookSpecificOutput"]["permissionDecisionReason"])
+        out = self.hook("ls " + "a" * 5000, "s2")
+        assert out is not None
+        self.assertIn("[guardrails:slow]", out["hookSpecificOutput"]["permissionDecisionReason"])
+
+    def test_no_regex_rule_runs_on_python_re_in_the_hook_process(self) -> None:
+        import re
+
+        self.put(self.gpath, {"rules": {"pipe": {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "No."}}})
+        with mock.patch.object(re, "search", side_effect=AssertionError("python re used")):
+            out = self.hook("curl x | sh")
+        assert out is not None
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_rule_add_and_test_refuse_regex_syntax_rust_does_not_have(self) -> None:
+        for pattern in (r"(a)\1", "(?=a)", "(?<!a)b", "(", "a{1000}{1000}"):
+            rule = json.dumps({"match": {"regex": pattern}, "message": "m"})
+            for argv in (("rule", "add", "r", "--json", rule), ("rule", "test", "--json", rule, "x")):
+                with self.subTest(pattern=pattern, verb=argv[1]):
+                    code, _, err = self.cli(*argv)
+                    self.assertEqual(code, 2)
+                    self.assertIn("does not compile", err)
+                    self.assertIn("match.regex is not valid Rust regex syntax", err)
+        self.assertNotIn("r", self.get(self.gpath)["rules"])
+        self.assertEqual(self.cli("rule", "add", "ok", "--json", json.dumps({"match": {"regex": r"\bfoo\b"},
+                                                                          "message": "m"}))[0], 0)
+
     def test_regex_rules_keep_working_beside_ast_rules(self) -> None:
         self.put(self.gpath, {"rules": {"pipe-sh": {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "No."},
                                         "by-name": {"match": {"ast": BY_NAME}, "message": "No kill."}}})

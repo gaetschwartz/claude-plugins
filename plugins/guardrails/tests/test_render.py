@@ -400,7 +400,7 @@ class StatusRender(AstIsolated):
         self.assertNotIn("**Modes**", out)
 
     def test_problems_group_and_problems_flag(self) -> None:
-        self.put(self.gpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x"}}})
+        self.put(self.gpath, {"rules": {"bad": {"match": {"builtin": "nope"}, "message": "x"}}})
         out = self.status()
         self.assertIn("**Problems**\n- ", out)
         self.assertIn("rule bad:", out)
@@ -569,7 +569,7 @@ class Sanitising(AstIsolated):
                     self.assertFalse(line.startswith(("### Forged", "- `fake")), line)
 
     def test_problems_are_neutralised(self) -> None:
-        self.put(self.gpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x\x1b"}}})
+        self.put(self.gpath, {"rules": {"bad": {"match": {"builtin": "nope"}, "message": "x\x1b"}}})
         self.put(self.ppath, {"rules": {"r\x1b": {"match": {"program": "x"}, "message": "m", "modes": ["g\nh"]}}})
         out = self.cli("status")[1]
         self.assertEqual((control_chars(out), "\x1b" in out), ([], False))
@@ -633,13 +633,14 @@ class NotEvaluated(AstIsolated):
         self.assertNotIn("matcher checked", out)
         self.assertIn("cannot evaluate the parsing part of this rule", out)
 
-    def test_a_regex_rule_is_judged_without_the_engine(self) -> None:
-        self.break_engine()
-        code, out, _ = self.cli("rule", "test", "--json", json.dumps({"match": {"regex": "^pkill"}, "message": "m"}),
-                                "pkill a", "ls")
+    def test_a_regex_rule_is_judged_by_the_engine_like_the_rest(self) -> None:
+        rule = json.dumps({"match": {"regex": "^pkill"}, "message": "m"})
+        code, out, _ = self.cli("rule", "test", "--json", rule, "pkill a", "ls")
         self.assertEqual(code, 0)
-        self.assertNotIn("Not evaluated", out)
         self.assertIn("**Block**", out)
+        self.break_engine()
+        out = self.cli("rule", "test", "--json", rule, "pkill a", "ls")[1]
+        self.assertIn("Not evaluated", out)
 
     def test_an_oversize_command_is_not_judged_either(self) -> None:
         import matching

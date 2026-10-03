@@ -144,3 +144,9 @@ def configs_of(rule: policy.Rule) -> tuple[Config, ...]:
         return ()
     second = found_rule(rule, True)
     return ({"rule": first},) if second == first or second is None else ({"rule": first}, {"rule": second})
+
+
+def regex_config(rule: policy.Rule) -> Config | None:
+    """The config that finds `match.regex` in the whole command's text (ast-grep's regex engine runs in linear time)."""
+    pattern = policy.view(rule, "match").get("regex")
+    return {"rule": {"kind": "program", "regex": pattern}} if isinstance(pattern, str) and pattern else None

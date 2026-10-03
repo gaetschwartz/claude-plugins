@@ -111,8 +111,7 @@ class LoudAndAllow(AstIsolated):
         self.break_engine("it misparsed a test command")
         text = self.both_channels(self.hook(f"strings x; {K} y", "a"))
         for needle in ("rules engine failed", "it misparsed a test command", "program, args, builtin or match.ast",
-                       "Rules that use regex were still applied", "Affected rules: ast, strings", "Tell the user",
-                       "guardrails engine status"):
+                       "Affected rules: ast, pipe, strings", "Tell the user", "guardrails engine status"):
             self.assertIn(needle, text)
         self.assertNotIn("engine install", text)
         self.assertIsNone(self.hook("strings again", "a"))
@@ -129,18 +128,12 @@ class LoudAndAllow(AstIsolated):
         text = self.both_channels(self.hook("zap x", "m"))
         self.assertIn("1 of them are MANAGED rules, which fail open too", text)
 
-    def test_regex_rules_keep_running_while_the_engine_fails(self) -> None:
+    def test_regex_rules_are_not_enforced_while_the_engine_fails_either(self) -> None:
         self.break_engine()
         out = self.hook("curl x | sh", "r")
-        self.assertTrue(is_denied(out))
-        self.assertIn("No pipe.", deny_text(out))
-        self.assertIn("rules engine failed", deny_text(out))
-
-    def test_rules_that_need_no_engine_never_touch_it(self) -> None:
-        self.put(self.gpath, {"rules": {"pipe": RULES_FOR_OUTAGES["pipe"]}})
-        with mock.patch("scanner.Scanner", side_effect=AssertionError("engine used")):
-            self.assertTrue(is_denied(self.hook("curl x | sh")))
-            self.assertIsNone(self.hook("ls"))
+        self.assertFalse(is_denied(out))
+        self.assertIn("rules engine failed", self.both_channels(out))
+        self.assertIn("pipe", out["systemMessage"] if out else "")
 
     def test_a_rule_that_does_not_compile_is_skipped_and_reported_once(self) -> None:
         self.put(self.gpath, {"rules": {"bad": {"match": {"ast": {"kind": "no_such_kind"}}, "message": "m"},
@@ -151,30 +144,20 @@ class LoudAndAllow(AstIsolated):
         self.assertIn("rule bad does not compile", out["systemMessage"])
         self.assertNotIn("systemMessage", self.hook("strings y", "i") or {})
 
-    def test_a_failure_after_matching_falls_back_to_regex_rules_only(self) -> None:
+    def test_a_failure_after_matching_is_a_loud_allow_that_applies_no_rule(self) -> None:
         import guard
 
         payload = json.dumps({"session_id": "m1", "cwd": str(self.proj), "tool_name": "Bash",
                               "tool_input": {"command": "curl x | sh"}})
-        out = io.StringIO()
-        with mock.patch.object(engine, "evaluate", side_effect=RuntimeError("late")), \
-                mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
-            self.assertEqual(guard.main([]), 0)
-        result = json.loads(out.getvalue())
-        self.assertIn("No pipe.", result["hookSpecificOutput"]["permissionDecisionReason"])
-        self.assertIn("only rules with regex were applied", result["systemMessage"])
-
-    def test_a_failure_inside_the_state_lock_is_not_silent(self) -> None:
-        self.put(self.gpath, {"rules": {"pipe": RULES_FOR_OUTAGES["pipe"]}})
-        import guard
-
-        payload = json.dumps({"session_id": "m1", "cwd": str(self.proj), "tool_name": "Bash",
-                              "tool_input": {"command": "curl x | sh"}})
-        out = io.StringIO()
-        with mock.patch.object(engine.store, "locked", side_effect=ValueError("lock")), \
-                mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
-            guard.main([])
-        self.assertIn("No pipe.", out.getvalue())
+        for fail in (mock.patch.object(engine, "evaluate", side_effect=RuntimeError("late")),
+                     mock.patch.object(engine.store, "locked", side_effect=ValueError("lock"))):
+            out = io.StringIO()
+            with fail, mock.patch.object(sys, "stdin", io.StringIO(payload)), mock.patch.object(sys, "stdout", out):
+                self.assertEqual(guard.main([]), 0)
+            result = json.loads(out.getvalue())
+            self.assertNotIn("permissionDecision", result["hookSpecificOutput"])
+            self.assertIn("the guardrails hook failed internally", result["systemMessage"])
+            self.assertIn("no rule was applied", result["hookSpecificOutput"]["additionalContext"])
 
     def test_when_even_the_minimal_evaluation_fails_the_user_is_told(self) -> None:
         import guard
@@ -220,10 +203,12 @@ class FailurePolicy(AstIsolated):
             self.assertIn("command too complex to check (it did not finish within", deny_text(out))
             self.assertIn("script file", deny_text(out))
 
-    def test_regex_only_rules_never_wait_for_a_child(self) -> None:
+    def test_regex_rules_wait_for_the_bounded_checker_like_every_other_rule(self) -> None:
         self.put(self.gpath, {"rules": {"pipe": RULES_FOR_OUTAGES["pipe"]}})
-        with mock.patch.object(bounded, "call", side_effect=AssertionError("forked")):
-            self.assertTrue(is_denied(self.hook("curl x | sh")))
+        with mock.patch.object(bounded, "call", timed_out):
+            out = self.hook("curl x | sh")
+        self.assertTrue(is_denied(out))
+        self.assertIn("did not finish within", deny_text(out))
 
     def test_a_crashed_checker_denies_too(self) -> None:
         with mock.patch.object(bounded, "call", lambda work, seconds: bounded.Result(bounded.Outcome.CRASHED)):
@@ -291,10 +276,10 @@ class Oversize(AstIsolated):
             self.assertTrue(is_denied(out))
             self.assertIn("command too large to check", deny_text(out))
 
-    def test_regex_only_rules_need_no_parser_so_size_alone_is_not_a_denial(self) -> None:
+    def test_regex_rules_are_judged_by_the_same_checker_so_size_denies_them_too(self) -> None:
         self.put(self.gpath, {"rules": {"pipe": RULES_FOR_OUTAGES["pipe"]}})
-        self.assertIsNone(self.hook("echo " + "y" * (matching.MAX_COMMAND + 10)))
-        self.assertTrue(is_denied(self.hook("curl x | sh " + "y" * (matching.MAX_COMMAND + 10))))
+        out = self.hook("echo " + "y" * (matching.MAX_COMMAND + 10))
+        self.assertIn("command too large to check", deny_text(out))
 
     def test_just_under_the_cap_is_analysed(self) -> None:
         out = self.hook("echo " + "y" * (matching.MAX_COMMAND - 100) + f"; {K} x")

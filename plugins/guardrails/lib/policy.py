@@ -8,7 +8,6 @@ from collections.abc import Sequence
 from typing import Any
 
 import wrappers as wrapper_table
-from verdict import Kind
 
 Rule = dict[str, Any]
 Mode = dict[str, Any]
@@ -145,11 +144,6 @@ def validate_rule(rule: object) -> None:
     for key in ("args", "regex"):
         if key in match and not isinstance(match[key], str):
             raise Invalid(f"'match.{key}' must be a string")
-    if "regex" in match:
-        try:
-            re.compile(match["regex"])
-        except re.error as exc:
-            raise Invalid(f"'match.regex' is not a valid regex: {exc}") from exc
     if rule.get("action", "deny") not in ACTIONS:
         raise Invalid(f"'action' must be one of {', '.join(ACTIONS)}")
     if rule.get("retry", "none") not in RETRIES:
@@ -344,15 +338,9 @@ def active_modes(modes: dict[str, Mode], session: object) -> dict[str, dict[str,
 
 
 def needs_parse(rule: Rule) -> bool:
-    """True when the rule can only be judged by parsing the command (program, builtin or ast)."""
+    """True when the rule is judged by the ast-grep library (program, builtin, ast and regex all are)."""
     match = view(rule, "match")
-    return any(match.get(key) for key in ("program", "builtin", "ast"))
-
-
-def regex_kind(rule: Rule, command: str) -> Kind | None:
-    """DIRECT when the rule's regex finds the command's raw text, else None."""
-    regex = view(rule, "match").get("regex")
-    return Kind.DIRECT if regex and re.search(regex, command) is not None else None
+    return any(match.get(key) for key in ("program", "builtin", "ast", "regex"))
 
 
 def requirements_met(rule: Rule) -> bool:

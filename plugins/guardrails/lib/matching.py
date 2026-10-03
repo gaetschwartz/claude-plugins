@@ -12,10 +12,10 @@ from typing import TypedDict
 import bounded
 import policy
 import wrappers as wrapper_table
+from ast_grep_py import Config
 from verdict import Evaluation, Kind, Limit, Refusal, UnitTree, limit_reason
 
 MAX_COMMAND = 256 << 10
-INLINE_BYTES = 4 << 10
 DEADLINE_SECONDS = 5.0
 
 
@@ -35,13 +35,15 @@ def parseable(command: str) -> str:
     return command.encode("utf-8", "replace").decode().replace("\x00", " ")
 
 
-def best(a: Kind | None, b: Kind | None) -> Kind | None:
-    return Kind.DIRECT if Kind.DIRECT in (a, b) else (a or b)
+def regexes_of(rules: dict[str, policy.Rule]) -> dict[str, Config]:
+    import rulebuilder
+
+    return {rid: config for rid, rule in rules.items() if (config := rulebuilder.regex_config(rule)) is not None}
 
 
 def compute(command: str, rules: dict[str, policy.Rule], names: wrapper_table.Names, parse: bool) -> Wire:
-    """Every rule's verdict on one command. Regex rules read the raw text; the rest need the parser."""
-    kinds: dict[str, str | None] = {rid: policy.regex_kind(rule, command) for rid, rule in rules.items()}
+    """Every rule's verdict on one command."""
+    kinds: dict[str, str | None] = dict.fromkeys(rules)
     wire: Wire = {"kinds": kinds, "invalid": {}, "limit": None, "failure": None}
     parsed = {rid: rule for rid, rule in rules.items() if policy.needs_parse(rule)}
     if not parsed or not parse:
@@ -57,13 +59,13 @@ def compute(command: str, rules: dict[str, policy.Rule], names: wrapper_table.Na
         wire["failure"] = f"the ast-grep-py self-test failed: {broken}"
         return wire
     try:
-        result = scanner.Scanner({rid: rulebuilder.configs_of(rule) for rid, rule in parsed.items()}, names).run(
-            parseable(command))
+        result = scanner.Scanner({rid: rulebuilder.configs_of(rule) for rid, rule in parsed.items()}, names,
+                                 regexes_of(parsed)).run(parseable(command))
     except Exception as exc:  # noqa: BLE001
         wire["failure"] = f"unexpected error: {type(exc).__name__}"
         return wire
     for rid, kind in result.kinds(list(parsed)).items():
-        kinds[rid] = best(Kind(kinds[rid]) if kinds[rid] else None, kind)
+        kinds[rid] = kind
     wire["invalid"] = result.invalid
     wire["limit"] = str(result.limit) if result.limit else None
     return wire
@@ -80,23 +82,21 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
     parsed = {rid for rid, rule in rules.items() if policy.needs_parse(rule)}
     size = len(command.encode("utf-8", "replace"))
     oversize = size > MAX_COMMAND and bool(parsed)
-    wire: Wire | None
-    if not parsed and size <= INLINE_BYTES:
-        wire = compute(command, rules, names, True)
-    else:
-        result = bounded.call(lambda: json.dumps(compute(command, rules, names, not oversize)), DEADLINE_SECONDS)
-        match result.outcome:
-            case bounded.Outcome.DONE:
-                wire = json.loads(result.payload)
-            case bounded.Outcome.TIMEOUT:
-                wire = None
-                ev.refusal = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "
-                              "split it up or write it to a script file and run that")
-                ev.refusal_kind = Refusal.TIMEOUT
-            case bounded.Outcome.CRASHED:
-                wire = None
-                ev.refusal = "command too complex to check (the checker failed on it)"
-                ev.refusal_kind = Refusal.COMPLEX
+    wire: Wire | None = None
+    ev.kinds = dict.fromkeys(rules)
+    if not parsed:
+        return ev
+    result = bounded.call(lambda: json.dumps(compute(command, rules, names, not oversize)), DEADLINE_SECONDS)
+    match result.outcome:
+        case bounded.Outcome.DONE:
+            wire = json.loads(result.payload)
+        case bounded.Outcome.TIMEOUT:
+            ev.refusal = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "
+                          "split it up or write it to a script file and run that")
+            ev.refusal_kind = Refusal.TIMEOUT
+        case bounded.Outcome.CRASHED:
+            ev.refusal = "command too complex to check (the checker failed on it)"
+            ev.refusal_kind = Refusal.COMPLEX
     if wire is not None:
         ev.kinds = {rid: Kind(kind) if kind else None for rid, kind in wire["kinds"].items()}
         ev.invalid = dict(wire["invalid"])
@@ -104,8 +104,6 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
         if wire["limit"]:
             ev.refusal = f"command too complex to check (it {limit_reason(Limit(wire['limit']))})"
             ev.refusal_kind = Refusal.COMPLEX
-    else:
-        ev.kinds = {rid: policy.regex_kind(rule, command) for rid, rule in rules.items()}
     if oversize:
         ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND // 1024} KiB)"
         ev.refusal_kind = Refusal.OVERSIZE
@@ -135,7 +133,8 @@ def check(rules: dict[str, policy.Rule]) -> dict[str, str]:
     import rulebuilder
     import scanner
 
-    return scanner.compile_errors({rid: rulebuilder.configs_of(rule) for rid, rule in parsed.items()})
+    return scanner.compile_errors({rid: rulebuilder.configs_of(rule) for rid, rule in parsed.items()},
+                                  regexes_of(parsed))
 
 
 def tree(command: str) -> tuple[list[UnitTree], Limit | None]:

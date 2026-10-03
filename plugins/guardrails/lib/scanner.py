@@ -219,8 +219,10 @@ def variants_of(text: str, spans: Sequence[Span]) -> list[str]:
 class Scanner:
     """One evaluation: the rules, the wrapper names and what has been found so far."""
 
-    def __init__(self, rules: dict[str, tuple[Config, ...]], wrapper_names: Sequence[str]) -> None:
+    def __init__(self, rules: dict[str, tuple[Config, ...]], wrapper_names: Sequence[str],
+                 regexes: dict[str, Config] | None = None) -> None:
         self.active = {rid: list(configs) for rid, configs in rules.items() if configs}
+        self.regexes = dict(regexes or {})
         self.invalid: dict[str, str] = {}
         self.found: dict[str, Hit] = {}
         self.wrappers = re.compile(rulebuilder.name_regex(wrapper_names)) if wrapper_names else None
@@ -266,6 +268,18 @@ class Scanner:
                 if kind is Kind.DIRECT:
                     break
 
+    def judge_regexes(self, root: SgNode) -> None:
+        """`match.regex` reads the raw text of the command as written: a hit there is always direct."""
+        for rid, config in self.regexes.items():
+            try:
+                hit = root.find(config)
+            except Exception as exc:  # noqa: BLE001
+                self.invalid[rid] = "match.regex is not valid Rust regex syntax: " + clean_error(str(exc))
+                continue
+            if hit is not None:
+                where = hit.range()
+                self.found[rid] = Hit(rid, Kind.DIRECT, where.start.index, where.end.index)
+
     def run(self, command: str) -> Scan:
         """Scan the command, then its variants and scripts level by level. Hits found before a cap is reached stand."""
         queue = deque([Unit(command, Origin.COMMAND, 0, False)])
@@ -275,6 +289,8 @@ class Scanner:
         while queue and limit is None:
             unit = queue.popleft()
             root = SgRoot(unit.text, "bash").root()
+            if unit.depth == 0 and unit.origin is Origin.COMMAND:
+                self.judge_regexes(root)
             self.judge(unit, root)
             found: list[Unit] = []
             if unit.origin is not Origin.VARIANT and self.wrappers is not None:
@@ -302,12 +318,13 @@ class Scanner:
         return Scan(tuple(self.found.values()), dict(self.invalid), limit)
 
 
-def compile_errors(configs: dict[str, tuple[Config, ...]]) -> dict[str, str]:
-    """The reason per rule id none of whose configs compiles."""
-    scanner = Scanner(configs, ())
+def compile_errors(configs: dict[str, tuple[Config, ...]], regexes: dict[str, Config] | None = None) -> dict[str, str]:
+    """The reason per rule id none of whose configs compiles, or whose regex does not."""
+    scanner = Scanner(configs, (), regexes)
     root = SgRoot("true", "bash").root()
     for rid in list(scanner.active):
         scanner.matches(rid, root, True)
+    scanner.judge_regexes(root)
     return scanner.invalid
 
 

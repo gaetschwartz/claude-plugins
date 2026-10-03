@@ -268,8 +268,8 @@ def snapshot(args: Args) -> Snapshot:
             blind = set(parsed)
             managed_blind = sorted(rid for rid in parsed if "managed" in rule_origins.get(rid, []))
             fails_open = f" MANAGED rules fail open too: {', '.join(managed_blind)}." if managed_blind else ""
-            report(f"rules {', '.join(sorted(parsed))} use program, args, builtin or match.ast and are NOT enforced "
-                   f"while the engine cannot run ({exc}); regex rules still are.{fails_open}", *where)
+            report(f"rules {', '.join(sorted(parsed))} use the ast-grep engine and are NOT enforced "
+                   f"while the engine cannot run ({exc}).{fails_open}", *where)
     return Snapshot(extra, sources, mstate, gstate, pstate, gpath, ppath, gstate.get("enabled", True) is not False,
                     rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers,
                     frozenset(blind))

@@ -32,7 +32,7 @@ class Validate(unittest.TestCase):
             rule(match={"program": 3}),
             rule(match={"program": ["x", ""]}),
             rule(match={"builtin": "nope"}),
-            rule(match={"regex": "("}),
+            rule(match={"builtin": "nope"}),
             rule(match={"program": "x y"}),
             rule(match={"program": "a/b"}),
             rule(action="block"),
