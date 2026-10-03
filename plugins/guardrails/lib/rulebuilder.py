@@ -33,8 +33,12 @@ def command_named(names: Sequence[str]) -> Rule:
 
 
 def orphan_name(names: Sequence[str]) -> Rule:
-    """A command name the parser found but could not build a command around (it sits directly in an ERROR node)."""
-    return {"kind": "command_name", "regex": name_regex(names), "inside": {"kind": "ERROR"}}
+    """A command name the parser found but could not build a command around: a `command_name` directly in an ERROR
+    node, or a bare word there that is not an argument of a word before it."""
+    found = name_regex(names)
+    bare: Rule = {"kind": "word", "regex": found, "inside": {"kind": "ERROR"},
+                  "not": {"follows": {"kind": "word", "stopBy": "neighbor"}}}
+    return {"any": [{"kind": "command_name", "regex": found, "inside": {"kind": "ERROR"}}, bare]}
 
 
 def recursive_flag() -> Rule:

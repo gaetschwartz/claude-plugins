@@ -335,7 +335,7 @@ class Limits(AstIsolated):
         self.assertIsNone(self.hook("sudo true; " * 20 + "ls"))
 
     def test_too_many_wrapper_variants_are_refused_at_any_size(self) -> None:
-        out = self.hook("sudo " * 300 + "ls", "variants")
+        out = self.hook("sudo " * 2100 + "ls", "variants")
         self.assertTrue(is_denied(out))
         self.assertIn("unwraps into too many command variants", deny_text(out))
 

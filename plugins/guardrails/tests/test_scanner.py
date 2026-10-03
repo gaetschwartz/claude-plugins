@@ -157,18 +157,31 @@ class Caps(AstIsolated):
                 self.assertEqual((ev.kinds["r"], ev.refusal), (Kind.WRAPPED, None))
 
     def test_too_many_variants_are_refused_at_any_size(self) -> None:
-        for command in ("sudo " * 300 + "ls", "; ".join(["sudo a b c d"] * 70) + "; ls"):
+        for command in ("sudo " * 2100 + "ls", "; ".join(["sudo a b c d"] * 520) + "; ls"):
             with self.subTest(command=command[:20]):
                 ev = self.evaluate(command)
                 self.assertIn("unwraps into too many command variants", ev.refusal or "")
                 self.assertEqual(ev.unevaluated, {"r"})
 
-    def test_variants_that_add_up_to_too_much_text_are_refused(self) -> None:
-        ev = self.evaluate("echo " + "y" * 6000 + "\n" + "sudo " * 60 + "ls")
-        self.assertIn("unwraps into too much command text", ev.refusal or "")
+    def test_ordinary_commands_with_big_heredocs_and_many_wrappers_are_analysed(self) -> None:
+        heredoc = "cat > /etc/app.conf <<EOF\n" + "key = value\n" * 700 + "EOF\n"
+        cases = {"8 KiB heredoc and 10 sudo lines": heredoc + "".join(f"sudo install -m 644 f{n} /etc/f{n}\n" for n in range(10)),
+                 "15 KiB heredoc and 3 sudo lines": "x = 1\n" * 2500 + "sudo tee a\nsudo chmod 600 a\nsudo chown root a\n",
+                 "200 apt-get lines": "sudo apt-get install -y x;\n" * 200,
+                 "100 systemctl lines": "sudo systemctl restart foo;\n" * 100,
+                 "64 KiB script, 50 wrappers": ("echo " + "y" * 60 + "\n") * 1000 + "sudo ls\n" * 50}
+        for name, command in cases.items():
+            with self.subTest(name):
+                ev = self.evaluate(command + f"{K} x")
+                self.assertEqual((ev.refusal, ev.kinds["r"]), (None, Kind.DIRECT))
+
+    def test_the_work_budget_is_a_cap_of_its_own_with_its_own_message(self) -> None:
+        with mock.patch("scanner.MAX_VARIANT_BYTES", 500):
+            ev = self.evaluate("echo " + "y" * 200 + "\nsudo a b c\n")
+        self.assertIn("unwraps into too much command text to parse", ev.refusal or "")
 
     def test_a_direct_hit_stands_when_the_variants_are_limited(self) -> None:
-        ev = self.evaluate(f"{K} x; " + "sudo " * 300 + "ls")
+        ev = self.evaluate(f"{K} x; " + "sudo " * 2100 + "ls")
         self.assertEqual((ev.kinds["r"], ev.refusal_kind is not None), (Kind.DIRECT, True))
 
     def test_shell_strings_and_variants_have_separate_budgets(self) -> None:
@@ -216,6 +229,16 @@ class Text(AstIsolated):
         configs = {"r": rulebuilder.configs_of(rule_of({"pattern": f"{K} $$$"}))}
         hit = scanner.Scanner(configs, ()).run(f"echo é; {K} x").hits[0]
         self.assertEqual((hit.kind, hit.start, hit.end), (Kind.DIRECT, 8, 8 + len(f"{K} x")))
+
+    def test_a_wrapped_bare_name_after_a_syntax_error_tree_is_still_found(self) -> None:
+        rule = policy.with_defaults({"match": {"program": [K, "killall"]}, "message": "m"})
+        cases = {f"{{ ; }}; xargs -r {K}": "wrapped", "{ ; }; sudo killall": "wrapped", f"{{ ; }}; sudo -n {K}": "wrapped",
+                 f"{{ ; }}; nohup {K}": "wrapped", f"{{ ; }}; {K}": "direct", f"{{ ; }}; sudo {K} x": "wrapped",
+                 f"echo 'x; {K} y": None, f"echo {K} 'unterminated": None, f"{{ ; }}; echo {K}": None,
+                 f"if x; then echo {K}": None, f"man {K} 'x": None}
+        for command, expected in cases.items():
+            with self.subTest(command=command):
+                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
 
     def test_unquote_one_shell_word(self) -> None:
         import scanner

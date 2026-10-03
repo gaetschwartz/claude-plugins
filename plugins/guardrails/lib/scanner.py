@@ -23,8 +23,8 @@ from verdict import Kind, Limit, UnitTree
 MAX_DEPTH = 8
 MAX_UNITS = 64
 MAX_SCRIPT_BYTES = 256 << 10
-MAX_VARIANTS = 256
-MAX_VARIANT_BYTES = 256 << 10
+MAX_VARIANTS = 2048
+MAX_VARIANT_BYTES = 16 << 20
 MAX_COMBINATIONS = 64
 SHELLS = ("bash", "sh", "zsh", "dash", "ksh", "script")
 CONTEXT_KINDS = frozenset({"pipeline", "command_substitution", "process_substitution"})

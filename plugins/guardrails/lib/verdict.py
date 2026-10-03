@@ -50,7 +50,7 @@ def limit_reason(limit: Limit) -> str:
         case Limit.VARIANTS:
             return "unwraps into too many command variants"
         case Limit.VARIANT_BYTES:
-            return "unwraps into too much command text"
+            return "unwraps into too much command text to parse"
         case _:
             assert_never(limit)
 
