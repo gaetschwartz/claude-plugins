@@ -69,7 +69,7 @@ class Match:
     @classmethod
     def from_json(cls, raw: object) -> Self:
         if isinstance(raw, dict) and (unknown := set(raw) - set(MATCH_KEYS)):
-            raise Invalid(f"unknown field match.{sorted(unknown)[0]}: {UNKNOWN_FIELD_HINT}")
+            raise Invalid(f"unknown field match.{min(unknown)}: {UNKNOWN_FIELD_HINT}")
         if not isinstance(raw, dict) or not any(raw.get(k) for k in ("program", "regex", "ast")):
             raise Invalid("'match' needs at least one of 'program', 'regex', 'ast'")
         program = raw.get("program")
@@ -115,7 +115,7 @@ class Rule:
         if not isinstance(raw, dict):
             raise Invalid("a rule must be a JSON object")
         if unknown := set(raw) - set(RULE_KEYS):
-            raise Invalid(f"unknown field {sorted(unknown)[0]}: {UNKNOWN_FIELD_HINT}")
+            raise Invalid(f"unknown field {min(unknown)}: {UNKNOWN_FIELD_HINT}")
         message = raw.get("message")
         if not isinstance(message, str) or not message.strip():
             raise Invalid("'message' is required")
