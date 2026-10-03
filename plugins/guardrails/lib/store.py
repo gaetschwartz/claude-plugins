@@ -7,11 +7,12 @@ import datetime
 import fcntl
 import json
 import os
-import re
+import pathlib
 import sys
 from collections.abc import Callable, Iterator
 from typing import Any, TypeVar
 
+import bootstrap
 import policy
 
 PLUGIN = "guardrails"
@@ -42,13 +43,7 @@ def now() -> str:
 
 
 def plugin_id(here: str = HERE) -> str:
-    """Mirror Claude Code's CLAUDE_PLUGIN_DATA naming: <plugin>-<marketplace>, sanitised."""
-    parts = here.split(os.sep)
-    if "cache" in parts:
-        i = len(parts) - 1 - parts[::-1].index("cache")
-        if i >= 1 and parts[i - 1] == "plugins" and len(parts) > i + 3:
-            return re.sub(r"[^A-Za-z0-9_-]", "-", f"{parts[i + 2]}-{parts[i + 1]}")
-    return f"{PLUGIN}-{MARKETPLACE}"
+    return bootstrap.plugin_id(pathlib.Path(here))
 
 
 def global_state_path() -> str:

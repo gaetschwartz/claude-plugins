@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import bootstrap
+import hostcli
 import matching
 import policy
 import render
@@ -638,27 +639,11 @@ def cmd_rule_ast(args: Args) -> int:
 
 
 def cmd_engine_ensure(args: Args) -> int:
-    return bootstrap.cli_ensure(["--retry-now"] if args.retry_now else [])
+    return hostcli.ensure_command(["--retry-now"] if args.retry_now else [])
 
 
 def cmd_engine_status(args: Args) -> int:
-    info = bootstrap.inspect(bootstrap.data_dir())
-    pins = info.pins
-    print(f"runtime: {'ready' if info.problem is None else 'NOT ready (' + info.problem + ')'}")
-    print(f"pins: uv {pins.uv}, Python {pins.python}, ast-grep-py {pins.ast_grep_py}, bootstrap {pins.bootstrap}")
-    print(f"platform: {render.clean(info.platform)}")
-    print(f"path: {render.clean(str(info.path))}")
-    if info.marker:
-        print(f"installed: Python {info.marker.get('python')} at {render.clean(str(info.marker.get('installedAt')))}")
-    if info.installing:
-        print("an install is running now")
-    if info.failure:
-        print(f"last install failure: {render.clean(info.failure.reason)} (next automatic attempt at "
-              f"{bootstrap.clock(info.failure.at + bootstrap.BACKOFF_SECONDS)}; `guardrails engine ensure "
-              "--retry-now` ignores the wait)")
-    if info.problem is not None:
-        print("rules that use program, args, builtin or match.ast are NOT enforced until the runtime is ready "
-              "(regex rules still are)")
+    print(hostcli.status_text(bootstrap.data_dir()))
     return 0
 
 

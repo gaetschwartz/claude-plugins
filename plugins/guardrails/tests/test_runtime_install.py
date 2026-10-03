@@ -18,18 +18,18 @@ class RealInstall(Isolated):
 
     def test_an_empty_data_dir_becomes_a_working_runtime_and_the_hook_denies_through_it(self) -> None:
         with mock.patch.object(urllib.request, "urlopen", REAL_URLOPEN):
-            outcome = bootstrap.ensure(self.data, project=self.proj, cwd=self.proj)
+            outcome = bootstrap.ensure(self.data)
         if outcome.state != "installed":
             if os.environ.get("GUARDRAILS_REQUIRE_AST") == "1":
                 self.fail(OFFLINE.format(reason=outcome.reason or outcome.state))
             self.skipTest(OFFLINE.format(reason=outcome.reason or outcome.state))
         pins = bootstrap.load_pins()
         rt = bootstrap.runtime_dir(self.data, pins)
-        self.assertIsNone(bootstrap.marker_problem(rt, pins, self.proj, self.proj))
+        self.assertIsNone(bootstrap.marker_problem(rt, pins))
         self.assertFalse((rt / "uv-cache").exists())
         marker = json.loads((rt / "marker.json").read_text())
-        self.assertEqual((marker["astGrepPy"], marker["python"].split(".")[:2]), (pins.ast_grep_py, ["3", "13"]))
-        self.assertEqual(bootstrap.ensure(self.data, project=self.proj, cwd=self.proj).state, "ready")
+        self.assertEqual((marker["runtimeId"], marker["python"].split(".")[:2]), (pins.runtime_id, ["3", "13"]))
+        self.assertEqual(bootstrap.ensure(self.data).state, "ready")
         self.put(self.gpath, {"rules": {"no-pkill": {"match": {"program": "pkill"}, "message": "No pkill.",
                                                       "action": "deny"}}})
         payload = json.dumps({"session_id": "real", "cwd": str(self.proj), "tool_name": "Bash",
