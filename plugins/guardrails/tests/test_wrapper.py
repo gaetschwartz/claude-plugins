@@ -111,25 +111,27 @@ class StubbedCases(Base):
                 self.assertEqual(self.run_script(self.host_stub()).stdout, boot)
         self.assertTrue(self.run_script(self.host_stub(), data=None).stdout.startswith("HOST -I -S "), "no data dir variable")
 
-    def test_a_data_dir_that_is_not_safe_never_runs_anything_from_it(self) -> None:
+    def test_a_relative_data_dir_never_runs_anything_from_it(self) -> None:
         boot = f"HOST -I -S {self.script.parent}/../lib/bootstrap.py hook\n"
         repo = self.proj / ".rt"
         self.ready_runtime(repo)
-        link = self.tmp / "alias"
-        link.symlink_to(self.proj)
-        loose, grouped = self.tmp / "loose", self.tmp / "grouped"
-        for path, mode in ((loose, 0o777), (grouped, 0o775)):
-            self.ready_runtime(path)
-            path.chmod(mode)
-        cases = {"relative": ".rt", "relative from the project root": "./.rt", "aliased through a symlink": f"{link}/.rt",
-                 "dot-dot": f"{self.proj}/../proj/.rt", "world-writable": str(loose), "group-writable": str(grouped),
-                 "trailing slash": f"{repo}/"}
-        for name, value in cases.items():
+        for name, value in {"relative": ".rt", "relative from the project root": "./.rt"}.items():
             with self.subTest(name):
                 out = self.run_script(self.host_stub(), data=value).stdout
                 self.assertEqual(out, boot)
                 self.assertNotIn("READY", out)
-        self.assertTrue(self.run_script(self.host_stub(), data=str(repo)).stdout.startswith("READY"), "the same dir, canonical")
+        self.assertTrue(self.run_script(self.host_stub(), data=str(repo)).stdout.startswith("READY"), "the same dir, absolute")
+
+    def test_a_guard_that_refuses_the_data_dir_falls_through_to_the_bootstrap_in_every_mode(self) -> None:
+        self.ready_runtime(body="exit 111\n")
+        boot = f"HOST -I -S {self.script.parent}/../lib/bootstrap.py"
+        host = self.host_stub()
+        self.assertEqual(self.run_script(host).stdout, f"{boot} hook\n")
+        self.assertEqual(self.run_script(host, "cli", "status").stdout, f"{boot} run status\n")
+
+    def test_the_cli_passes_the_guards_exit_code_through(self) -> None:
+        self.ready_runtime(body="exit 3\n")
+        self.assertEqual(self.run_script(self.host_stub(), "cli", "status").returncode, 3)
 
     def test_the_first_trusted_python3_on_path_is_used_and_each_mode_passes_its_arguments(self) -> None:
         self.stub(self.tmp / "a" / "python3", "a")
@@ -276,6 +278,42 @@ class RealWrapperReady(RealRuntime):
         proc = subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
                               check=False, env=env, cwd=cwd)
         return proc.returncode == 0 and '"permissionDecision": "deny"' in proc.stdout
+
+    def test_a_data_dir_that_is_not_safe_gets_the_notice_and_the_guard_never_reads_or_writes_in_it(self) -> None:
+        payload = self.deny_rule()
+        shutil.copy(self.gpath, self.tmp / "state.json")
+        loose, grouped, alias = self.tmp / "loose", self.tmp / "grouped", self.tmp / "alias"
+        for path, mode in ((loose, 0o777), (grouped, 0o775)):
+            path.mkdir()
+            (path / "runtime").symlink_to(DEV_DATA / "runtime")
+            shutil.copy(self.tmp / "state.json", path / "state.json")
+            path.chmod(mode)
+        alias.symlink_to(self.data)
+        cases = {"world-writable": str(loose), "group-writable": str(grouped), "aliased through a symlink": str(alias),
+                 "dot-dot": f"{self.data}/../data", "relative": "data"}
+        for name, value in cases.items():
+            with self.subTest(name):
+                env = {**os.environ, "CLAUDE_PLUGIN_DATA": value}
+                proc = subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True,
+                                      text=True, check=False, env=env, cwd=self.tmp)
+                self.assertEqual(proc.returncode, 0, proc.stderr)
+                output = json.loads(proc.stdout)
+                self.assertIn("the plugin data directory is not a safe absolute path", output["systemMessage"])
+                self.assertNotIn("permissionDecision", output["hookSpecificOutput"])
+        for path in (loose, grouped):
+            self.assertEqual(sorted(p.name for p in path.iterdir()), ["runtime", "state.json"])
+        self.assertTrue(self.enforced(payload, {**os.environ, "CLAUDE_PLUGIN_DATA": str(self.data)}, self.tmp))
+
+    def test_a_hostile_python_environment_injects_nothing(self) -> None:
+        evil = self.tmp / "evil"
+        evil.mkdir()
+        pwned = self.tmp / "pwned"
+        for name in ("sitecustomize", "usercustomize", "startup"):
+            (evil / f"{name}.py").write_text(f"open({str(pwned)!r}, 'a').write({name!r})\n")
+        env = {**os.environ, "PYTHONPATH": str(evil), "PYTHONHOME": str(evil), "PYTHONSTARTUP": str(evil / "startup.py"),
+               "PYTHONUSERBASE": str(evil), "PYTHONINSPECT": "1", "PYTHONWARNINGS": "error", "PYTHONOPTIMIZE": "2"}
+        self.assertTrue(self.enforced(self.deny_rule(), env, self.proj))
+        self.assertFalse(pwned.exists())
 
     def test_the_hook_enforces_wherever_the_project_and_cwd_are(self) -> None:
         payload = self.deny_rule()

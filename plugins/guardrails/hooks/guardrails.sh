@@ -59,20 +59,16 @@ if [ "$mode" != session-start ] && [ -n "${CLAUDE_PLUGIN_DATA-}" ] && read -r id
   case $d in
     /*)
       if [ -O "$d" ] && [ -f "$rt/marker.json" ] && [ ! -e "$rt/broken" ] && [ -O "$rt/venv/bin/python" ] &&
-        [ -x "$rt/venv/bin/python" ] && [ "$(cd -P "$d" 2>/dev/null && pwd -P)" = "$d" ]; then
-        perms=$(/bin/ls -ldL "$d" 2>/dev/null)
-        case $perms in
-          ?????w* | ????????w*) ;;
-          *)
-            if [ "$mode" = cli ]; then exec "$rt/venv/bin/python" -I "$lib/guard.py" "$@"; fi
-            "$rt/venv/bin/python" -I "$lib/guard.py"
-            code=$?
-            if [ "$code" -ne 0 ]; then
-              say "[guardrails plugin notice] the guardrails hook failed to run (exit $code), so guardrails rules are NOT enforced and this command was not checked. Tell the user about this now."
-            fi
-            exit 0
-            ;;
-        esac
+        [ -x "$rt/venv/bin/python" ]; then
+        "$rt/venv/bin/python" -I "$lib/guard.py" "$@"
+        code=$?
+        if [ "$code" -ne 111 ]; then
+          if [ "$mode" = cli ]; then exit "$code"; fi
+          if [ "$code" -ne 0 ]; then
+            say "[guardrails plugin notice] the guardrails hook failed to run (exit $code), so guardrails rules are NOT enforced and this command was not checked. Tell the user about this now."
+          fi
+          exit 0
+        fi
       fi
       ;;
   esac

@@ -47,16 +47,21 @@ Network hosts: `pypi.org`, `files.pythonhosted.org`, `releases.astral.sh`, and `
 `release-assets.githubusercontent.com` as the Python fallback. `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and `SSL_CERT_FILE/DIR`
 are passed through; mirror and index variables are not.
 
-The hook wrapper runs the runtime's Python only when all of these hold: `CLAUDE_PLUGIN_DATA` is absolute and canonical (no
-`..`, no symlink component), owned by you and not writable by group or others; `marker.json` exists; no `broken` file is
-next to it; the interpreter is owned by you. Each `ensure` also checks that the interpreter and the extension module are
-owned by you, not writable by group or others and inside the runtime dir; any failure reinstalls. The hook runs with
-`python -I`. A data dir that fails the checks gets the notice "the plugin data directory is not a safe absolute path" with a
-fixed reason, nothing is executed or written there, and the notice repeats on every call. No notice, hook answer or
-`engine status` text contains a path or any other text taken from the environment or the repository; the runtime and log
-paths go to the stderr of `guardrails engine status` only. The project directory and the cwd never decide where the runtime
-is. Residual, out of scope: a `CLAUDE_PLUGIN_DATA` that the repository controls and that points at a planted runtime passes
-these checks, because the variable is provided by the harness.
+The hook wrapper starts the runtime's Python only when `CLAUDE_PLUGIN_DATA` is absolute and owned by you, `marker.json`
+exists, no `broken` file is next to it and the interpreter is owned by you (shell builtins only: nothing is spawned to
+decide). Each `ensure` also checks that the interpreter and the extension module are owned by you, not writable by group or
+others and inside the runtime dir; any failure reinstalls. The hook runs with `python -I`. The rest of the data dir check
+is the first thing `lib/guard.py` does, before it reads a rule, a state file or the payload: the path must be canonical (no
+`..`, no symlink component) and the directory not writable by group or others. A data dir that fails gets the notice "the
+plugin data directory is not a safe absolute path" with a fixed reason (the guard exits with code 111 and the wrapper falls
+back to the bootstrap), no plugin code runs from it, nothing is read or written there, and the notice repeats on every call.
+No notice, hook answer or `engine status` text contains a path or any other text taken from the environment or the
+repository; the runtime and log paths go to the stderr of `guardrails engine status` only. The project directory and the cwd
+never decide where the runtime is. Residuals, out of scope: a `CLAUDE_PLUGIN_DATA` that the repository controls and that
+points at a planted runtime passes these checks, because the variable is provided by the harness; and the interpreter
+itself starts before the guard can check the directory it lives in, so another local user who can write into a data dir
+that was made group- or world-writable could redirect that start (a hard-linked interpreter beside a planted standard
+library) before the guard refuses it.
 
 The wrapper picks the host Python from fixed absolute locations first, then `PATH` entries that are absolute, outside the
 project and cwd and not world-writable; each candidate is smoke-tested, and a broken one is reported (its path on stderr),

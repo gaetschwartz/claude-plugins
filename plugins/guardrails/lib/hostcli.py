@@ -21,7 +21,7 @@ TELL = " Tell the user about this now. This notice comes from the plugin itself.
 MEANWHILE = "Rules are NOT enforced meanwhile and commands are not checked."
 TEXTS = {
     "unsupported": "this platform is unsupported ({detail}): the rules engine cannot run here. " + MEANWHILE + TELL,
-    "unsafe": ("the plugin data directory is not a safe absolute path ({detail}). Nothing is run from it. " + MEANWHILE +
+    "unsafe": ("the plugin data directory is not a safe absolute path ({detail}). No plugin code is run from it. " + MEANWHILE +
                TELL),
     "backoff": ("the rules runtime is not installed ({detail}). The next automatic attempt is at {when}. " + MEANWHILE +
                 " `guardrails engine status` shows the details." + TELL),

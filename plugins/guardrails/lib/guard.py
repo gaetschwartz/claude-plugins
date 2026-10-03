@@ -10,7 +10,10 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
+import bootstrap
 import engine
+
+UNSAFE_DATA_DIR = 111
 
 
 def hook(data: str) -> None:
@@ -43,4 +46,6 @@ def main(argv: list[str] | None = None) -> int:
 
 
 if __name__ == "__main__":
+    if bootstrap.data_problem(bootstrap.data_dir()) is not None:
+        sys.exit(UNSAFE_DATA_DIR)
     sys.exit(main())
