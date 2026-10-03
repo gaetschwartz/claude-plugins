@@ -46,17 +46,14 @@ def boom() -> str:
     raise ValueError("x")
 
 
-class Unpicklable:
-    def __reduce__(self) -> tuple[Any, ...]:
-        return (int, ("not a number",))
-
-
 class Call(unittest.TestCase):
     def test_the_answer_comes_back_and_every_failure_is_classified(self) -> None:
         self.assertEqual(bounded.call(lambda: "x" * 300_000, 10), bounded.Result(DONE, "x" * 300_000))
-        for work, outcome in ((spin, TIMEOUT), (crash, CRASHED), (boom, CRASHED), (Unpicklable, bounded.Outcome.GARBLED)):
+        for work, outcome in ((spin, TIMEOUT), (crash, CRASHED), (boom, CRASHED), (object, CRASHED)):
             with self.subTest(work=work.__name__):
                 self.assertEqual(bounded.call(work, 0.5).outcome, outcome)
+        with mock.patch.object(json, "loads", side_effect=ValueError):
+            self.assertEqual(bounded.call(lambda: 1, 5).outcome, bounded.Outcome.GARBLED)
         with self.assertRaises(ChildProcessError):
             os.waitpid(-1, os.WNOHANG)
 

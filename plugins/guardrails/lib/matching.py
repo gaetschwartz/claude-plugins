@@ -8,7 +8,7 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, assert_never
 
@@ -40,6 +40,15 @@ class Computed:
     failure: str | None = None
     micros: dict[str, int] = field(default_factory=dict)
     parse_us: int = 0
+
+    @classmethod
+    def from_json(cls, raw: object) -> Computed:
+        """Rebuild what `asdict` sent; raises KeyError, TypeError or ValueError on anything else."""
+        if not isinstance(raw, dict):
+            raise TypeError("not an object")
+        return cls({rid: Kind(kind) if kind else None for rid, kind in raw["kinds"].items()}, dict(raw["invalid"]),
+                   Limit(raw["limit"]) if raw["limit"] else None, raw["failure"], dict(raw["micros"]),
+                   int(raw["parse_us"]))
 
 
 class Health(StrEnum):
@@ -117,16 +126,21 @@ def evaluate(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[
     started = time.monotonic()
     state = Health.HEALTHY
     try:
-        result = bounded.call(lambda: compute(command, rules), DEADLINE_SECONDS, after_fork)
+        result = bounded.call(lambda: asdict(compute(command, rules)), DEADLINE_SECONDS, after_fork)
         if result.outcome is bounded.Outcome.CRASHED:
             state = health(started)
             ev.runtime_broken = state is Health.BROKEN
     except OSError as exc:
         ev.failure = f"the checker could not be started ({type(exc).__name__})"
     else:
-        match result.outcome:
+        outcome, done = result.outcome, None
+        if outcome is bounded.Outcome.DONE:
+            try:
+                done = Computed.from_json(result.payload)
+            except (KeyError, TypeError, ValueError, AttributeError):
+                outcome = bounded.Outcome.GARBLED
+        match outcome:
             case bounded.Outcome.DONE:
-                done = result.payload
                 assert done is not None
                 ev.kinds |= done.kinds
                 ev.invalid = dict(done.invalid)
@@ -154,7 +168,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[
             case bounded.Outcome.GARBLED:
                 ev.failure = "the checker answered with something unreadable"
             case _:
-                assert_never(result.outcome)
+                assert_never(outcome)
     if ev.failure is not None:
         ev.fault = ev.fault or Fault.ENGINE
     if ev.failure is not None or ev.refusal:
