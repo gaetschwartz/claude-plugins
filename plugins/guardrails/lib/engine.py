@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TypedDict
@@ -13,6 +14,7 @@ import bootstrap
 import matching
 import policy
 import store
+import telemetry
 from verdict import FAILED_PREFIX, Evaluation
 
 
@@ -112,8 +114,8 @@ def report_broken() -> None:
     hostcli.spawn_ensure()
 
 
-def judge(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
-    evaluation = matching.evaluate(command, rules)
+def judge(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[], None] | None = None) -> Evaluation:
+    evaluation = matching.evaluate(command, rules, after_fork)
     if evaluation.runtime_broken:
         report_broken()
     return evaluation
@@ -122,7 +124,8 @@ def judge(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
 def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, policy.Mode],
              session: policy.Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
              warnings: tuple[str, ...] = (), pre: Evaluation | None = None,
-) -> tuple[Output | None, bool]:
+             outcomes: dict[str, telemetry.Outcome] | None = None) -> tuple[Output | None, bool]:
+    outcomes = {} if outcomes is None else outcomes
     active = policy.active_modes(modes, session)
     shown_before = set(session.shown)
     changed = False
@@ -161,9 +164,12 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
 
     for rid, rule in candidates.items():
         if evaluation.kinds.get(rid) is None:
+            if rid not in evaluation.unevaluated:
+                outcomes[rid] = "pass"
             continue
         suspending = [name for name in rule.modes if name in active]
         if suspending:
+            outcomes[rid] = "suspended"
             name = suspending[0]
             record = active[name]
             if record.by is policy.Actor.AGENT and remember(session.reported, f"{rid}:{name}"):
@@ -171,6 +177,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
                 notices.append(f"guardrails: rule {rid} suspended by mode {name} "
                                f"(enabled by agent: {record.reason or 'no reason given'})")
             continue
+        outcomes[rid] = "warn" if rule.action is policy.Action.WARN else "deny"
         if rule.action is policy.Action.WARN:
             warns.append((rid, rule))
             continue
@@ -227,10 +234,23 @@ def parse_call(text: str) -> Call | None:
     return Call(command, Path(cwd) if isinstance(cwd, str) else None, bootstrap.session_id(payload))
 
 
-def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
+def samples_of(outcomes: dict[str, telemetry.Outcome], evaluation: Evaluation,
+               hook_us: int) -> list[telemetry.Sample]:
+    samples = [telemetry.Sample(telemetry.rule_id(rid), outcome, evaluation.micros.get(rid, 0))
+               for rid, outcome in outcomes.items()]
+    if evaluation.fault is not None:
+        samples.append(telemetry.Sample(evaluation.fault.value, "deny", 0))
+    elif evaluation.kinds:
+        samples.append(telemetry.Sample("@parse", "pass", evaluation.parse_us))
+    return [*samples, telemetry.Sample("@hook", "pass", hook_us)]
+
+
+def run_hook(stdin: IO[str], stdout: IO[str]) -> telemetry.Recorder | None:
+    """Answer one PreToolUse call on `stdout`; the recorder holds what to count once the answer is out."""
+    began = time.perf_counter_ns()
     call = parse_call(stdin.read())
     if call is None:
-        return
+        return None
     command, sid = call.command, call.session_id
 
     gpath = store.global_state_path()
@@ -258,10 +278,12 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
     found = policy.effective(*layers(gstate))
     warnings += tuple(f"guardrails: rule {rid} is invalid ({why}) and is skipped" for rid, why in found.problems.items())
     if not found.rules and not warnings:
-        return
+        return None
 
     output: Output | None = None
-    pre = judge(command, candidates_of(found.rules))
+    recorder = telemetry.Recorder(store.global_state_path().parent)
+    outcomes: dict[str, telemetry.Outcome] = {}
+    pre = judge(command, candidates_of(found.rules), recorder.start)
     stateless = not gstate_ok
     if gstate_ok:
         try:
@@ -271,7 +293,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
                 session = policy.Session.from_json(sessions.get(sid))
                 now = layers(gstate)
                 output, changed = evaluate(command, policy.effective_rules(*now), policy.effective_modes(*now), session,
-                                           sid, managed_ids, warnings, pre)
+                                           sid, managed_ids, warnings, pre, outcomes)
                 if changed:
                     sessions[sid] = session.to_json(store.now())
                     gstate["sessions"] = sessions
@@ -279,10 +301,13 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         except OSError:
             stateless = True
     if stateless:
+        outcomes.clear()
         output, _ = evaluate(command, found.rules, policy.effective_modes(*layers(gstate)), policy.Session(), sid,
-                             managed_ids, warnings, pre)
+                             managed_ids, warnings, pre, outcomes)
     if output:
         json.dump(output, stdout)
+    recorder.samples = samples_of(outcomes, pre, (time.perf_counter_ns() - began) // 1000)
+    return recorder
 
 
 def run_safe(text: str, stdout: IO[str], failure: BaseException) -> None:

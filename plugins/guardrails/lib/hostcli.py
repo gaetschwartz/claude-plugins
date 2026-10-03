@@ -13,6 +13,7 @@ from pathlib import Path
 
 import bootstrap
 import installer
+import telemetry
 from bootstrap import Outcome
 
 HEAD = "[guardrails plugin notice] "
@@ -153,6 +154,7 @@ def run_command(args: list[str]) -> int:
 
 def session_start() -> str:
     found = bootstrap.ensure(bootstrap.data_dir())
+    telemetry.prune(bootstrap.data_dir())
     if found.state == "installed":
         return json.dumps({"systemMessage": "guardrails: the rules runtime was installed"})
     return "" if found.state == "ready" else json.dumps({"systemMessage": notice(found)})

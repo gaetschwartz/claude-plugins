@@ -24,6 +24,7 @@ sys.path.insert(0, str(LIB))
 import bootstrap
 import render  # noqa: F401
 import store
+import telemetry
 
 GREP_RECURSIVE = json.loads((ROOT / "presets" / "modern-cli.json").read_text())["rules"]["grep-rg"]["match"]["ast"]
 MAINTAINER = json.loads((ROOT / "tests" / "maintainer_rules.json").read_text())
@@ -58,6 +59,8 @@ SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUD
 class Isolated(unittest.TestCase):
     """Global state under <tmp>/data, the managed file at <tmp>/managed, project root <tmp>/proj, no agent markers."""
 
+    silent_telemetry = True
+
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
         self.addCleanup(tmp.cleanup)
@@ -66,6 +69,10 @@ class Isolated(unittest.TestCase):
         self.proj = self.tmp / "proj"
         self.proj.mkdir()
         self.mpath = self.tmp / "managed" / "guardrails.json"
+        if self.silent_telemetry:
+            quiet = mock.patch.object(telemetry.Recorder, "start")
+            quiet.start()
+            self.addCleanup(quiet.stop)
         patch_managed = mock.patch.object(store, "MANAGED_PATH", self.mpath)
         patch_managed.start()
         self.addCleanup(patch_managed.stop)

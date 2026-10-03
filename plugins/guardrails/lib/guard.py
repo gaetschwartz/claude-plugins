@@ -16,11 +16,15 @@ import engine
 def hook(data: str) -> None:
     out = io.StringIO()
     try:
-        engine.run_hook(io.StringIO(data), out)
+        recorder = engine.run_hook(io.StringIO(data), out)
         sys.stdout.write(out.getvalue())
-        return
+        sys.stdout.flush()
     except Exception as exc:  # noqa: BLE001
         failure = exc
+    else:
+        if recorder is not None:
+            recorder.finish()
+        return
     try:
         engine.run_safe(data, sys.stdout, failure)
     except Exception:  # noqa: BLE001
