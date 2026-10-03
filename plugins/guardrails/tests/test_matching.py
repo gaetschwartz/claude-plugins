@@ -8,7 +8,6 @@ from helpers import GREP_RECURSIVE, AstIsolated
 
 import matching
 import policy
-import wrappers
 
 K = "pk" + "ill"
 ALL_KILLS = [K, "killall"]
@@ -25,10 +24,10 @@ def rule_of(**match: Any) -> policy.Rule:
 
 
 class Matching(AstIsolated):
-    def kinds(self, rule: policy.Rule, commands: dict[str, str | None], names: wrappers.Names | None = None) -> None:
+    def kinds(self, rule: policy.Rule, commands: dict[str, str | None]) -> None:
         for command, expected in commands.items():
             with self.subTest(command=command):
-                self.assertEqual(matching.evaluate(command, {"r": rule}, names).kinds["r"], expected)
+                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
 
     def test_program_forms(self) -> None:
         self.kinds(rule_of(program=K), {
@@ -73,8 +72,6 @@ class Matching(AstIsolated):
 
     def test_wrappers_are_not_looked_through_when_they_are_unknown_or_bare(self) -> None:
         self.kinds(rule_of(program=K), {f"mywrap -x 3 {K} a": None, f"ssh host {K}": None, "sudo": None, "env A=1": None})
-        names = wrappers.resolve([("g", {"wrappers": {"mywrap": {}}})])[0]
-        self.kinds(rule_of(program=K), {f"mywrap -x 3 {K} a": "wrapped"}, names)
 
     def test_wrapper_names_are_programs_too(self) -> None:
         self.kinds(rule_of(program=["sudo", "xargs"]), {"sudo ls": "direct", "xargs ls": "direct", "ls": None})

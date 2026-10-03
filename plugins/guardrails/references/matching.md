@@ -36,7 +36,7 @@ program names, written however the shell allows a plain name: `pkill`, `/usr/bin
 double quotes), in `<(...)`.
 
 Looked through, the wrapper variants: a command that contains a wrapper command (`sudo doas env timeout nice nohup time
-command exec builtin stdbuf setsid ionice xargs watch`, plus your own) is also matched as text variants of the top-level
+command exec builtin stdbuf setsid ionice xargs watch`) is also matched as text variants of the top-level
 statement (a direct child of the program) that holds it, in which that wrapper command is replaced by the text from each of
 its own non-option words onward (an option cannot start the wrapped command): `sudo -u bob pkill x`
 also reads as `bob pkill x`, `pkill x` and `x` (a wrapper's words are read from the parse, never split
@@ -72,8 +72,7 @@ a name held in a variable (`P=pkill; $P x`), an alias or a function; a script wr
 (`bash -c $'pkill x'`, `eval $'pkill x'`) is not unpacked either. Also not looked through: `ssh host pkill x`,
 `find . -exec pkill {} ;`, the contents of a script file (`bash script.sh`), `python -c '...'`, `echo pkill | sh` and
 `cat <<EOF | sh`, `source <(echo pkill)`, `su -c`, `env -S '...'`, and `watch 'pkill x'` (only `bash -c`, `eval`,
-`script -c` and shell-fed heredocs and here-strings are scanned). `find` and similar can be declared a wrapper with
-`guardrails wrapper add`, by word and without arity. A substitution in an unquoted heredoc body that is itself inside
+`script -c` and shell-fed heredocs and here-strings are scanned). A substitution in an unquoted heredoc body that is itself inside
 single quotes in that body is text to the parser. When a rule must not miss these, use `regex` and accept its false
 positives.
 
@@ -163,9 +162,7 @@ Verified with `guardrails rule ast '<command>'`:
 ### Wrappers
 
 tree-sitter sees `sudo pkill -f vite` as a `command` named `sudo` whose arguments are plain words. The wrapper names are
-data: the built-in list above, extended per layer with `guardrails wrapper add <name>` (`--scope global|project|managed`
-and `--path`, like `rule`), `wrapper rm <name>`, `wrapper list`. Look-through only grows: a layer can add names and never
-remove or change a higher layer's; invalid names are skipped and reported.
+the fixed list above (`WRAPPERS` in `lib/scanner.py`); a state file with a `wrappers` key is skipped for that key and `status` and the hook say so.
 
 **False-positive and false-negative risks.** A command that is not valid bash gives a partial tree: `program` and `args` rules still read the bare words the parser left behind, but a `pattern` rule does not see a wrapper's wrapped command there (`{ ; }; xargs -r pkill`: an empty group is valid zsh and a syntax error in bash). A wrapper the list does not know (`mywrap pkill x`) is an ordinary command,
 so the `pkill x` inside is not seen: declare it. A word of a wrapper that merely equals the program name matches

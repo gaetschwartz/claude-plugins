@@ -270,18 +270,6 @@ class Hook(AstIsolated):
         assert out is not None
         self.assertIn("No nested search.", out["hookSpecificOutput"]["additionalContext"])
 
-    def test_user_and_project_wrapper_names_reach_the_hook(self) -> None:
-        self.put(self.gpath, {"rules": {"p": {"match": {"program": PK}, "message": "No."}}})
-        self.assertIsNone(self.hook(f"mywrap -x 1 {PK} a"))
-        self.assertEqual(self.cli("wrapper", "add", "mywrap")[0], 0)
-        out = self.hook(f"mywrap -x 1 {PK} a", session="s9")
-        assert out is not None
-        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.put(self.ppath, {"wrappers": {"projwrap": {}}})
-        out = self.hook(f"projwrap {PK} a", session="p1")
-        assert out is not None
-        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-
     def test_matching_runs_once_and_outside_the_state_lock(self) -> None:
         
         import store

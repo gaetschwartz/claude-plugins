@@ -13,7 +13,6 @@ import bootstrap
 import matching
 import policy
 import store
-import wrappers as wrapper_table
 from verdict import FAILED_PREFIX, Evaluation
 
 
@@ -113,8 +112,8 @@ def report_broken() -> None:
     hostcli.spawn_ensure()
 
 
-def judge(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_table.Names | None) -> Evaluation:
-    evaluation = matching.evaluate(command, rules, wrappers)
+def judge(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
+    evaluation = matching.evaluate(command, rules)
     if evaluation.runtime_broken:
         report_broken()
     return evaluation
@@ -122,8 +121,7 @@ def judge(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_table.N
 
 def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, policy.Mode],
              session: policy.Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
-             warnings: tuple[str, ...] = (), wrappers: wrapper_table.Names | None = None,
-             pre: Evaluation | None = None,
+             warnings: tuple[str, ...] = (), pre: Evaluation | None = None,
 ) -> tuple[Output | None, bool]:
     active = policy.active_modes(modes, session)
     shown_before = set(session.shown)
@@ -138,7 +136,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
 
     candidates = candidates_of(rules)
     evaluation = pre if pre is not None and all(rid in pre.kinds for rid in candidates) \
-        else judge(command, candidates, wrappers)
+        else judge(command, candidates)
     agent_notes: list[str] = []
     for key, warning in evaluation.warnings(managed_ids):
         if due(session, key):
@@ -258,14 +256,15 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         return (managed, {}, {}) if killed else (managed, g, pstate)
 
     if gstate_ok and gstate.get("enabled", True) is not False:
-        warnings += tuple(f"guardrails: {problem}" for problem in policy.wrapper_problems(managed, gstate, pstate))
+        warnings += tuple(f"guardrails: {problem}" for problem in
+                          policy.removed_key_problems(("global", gstate), ("project", pstate)))
     found = policy.effective(*states(gstate))
     warnings += tuple(f"guardrails: rule {rid} is invalid ({why}) and is skipped" for rid, why in found.problems.items())
     if not found.rules and not warnings:
         return
 
     output: Output | None = None
-    pre = judge(command, candidates_of(found.rules), policy.effective_wrappers(*states(gstate)))
+    pre = judge(command, candidates_of(found.rules))
     stateless = not gstate_ok
     if gstate_ok:
         try:
@@ -275,7 +274,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
                 session = policy.Session.from_json(sessions.get(sid))
                 output, changed = evaluate(command, policy.effective_rules(*states(gstate)),
                                            policy.effective_modes(*states(gstate)), session, sid, managed_ids, warnings,
-                                           policy.effective_wrappers(*states(gstate)), pre)
+                                           pre)
                 if changed:
                     sessions[sid] = session.to_json(store.now())
                     gstate["sessions"] = sessions
@@ -284,7 +283,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
             stateless = True
     if stateless:
         output, _ = evaluate(command, found.rules, policy.effective_modes(*states(gstate)), policy.Session(), sid,
-                             managed_ids, warnings, policy.effective_wrappers(*states(gstate)), pre)
+                             managed_ids, warnings, pre)
     if output:
         json.dump(output, stdout)
 

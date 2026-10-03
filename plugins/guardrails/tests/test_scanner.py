@@ -10,7 +10,6 @@ from helpers import GREP_RECURSIVE, MAINTAINER, AstIsolated, real_rules
 
 import matching
 import policy
-import wrappers
 from verdict import MAX_COMMAND_BYTES, Kind, Limit
 
 K = "pk" + "ill"
@@ -31,7 +30,7 @@ class Variants(AstIsolated):
         import scanner
         from ast_grep_py import SgRoot
 
-        spans = scanner.wrapper_spans(SgRoot(command, "bash").root(), wrappers.DEFAULTS)
+        spans = scanner.wrapper_spans(SgRoot(command, "bash").root(), scanner.WRAPPERS)
         return set(scanner.variants_of(command, spans))
 
     def test_a_wrapper_command_is_replaced_by_the_text_from_each_of_its_words_on(self) -> None:
@@ -181,7 +180,7 @@ class Units(AstIsolated):
 
         rule = policy.Rule.from_json({"match": {"program": K}, "message": "m"})
         with mock.patch.object(scanner, "SgRoot", spy):
-            matching.compute(command, {"r": rule}, wrappers.DEFAULTS)
+            matching.compute(command, {"r": rule})
         return count[0]
 
     def test_parse_count_per_command_shape(self) -> None:
@@ -218,7 +217,7 @@ class RealRuleSet(AstIsolated):
             return real(text, language)
 
         with mock.patch.object(scanner, "SgRoot", spy):
-            computed = matching.compute(command, self.rules, wrappers.DEFAULTS)
+            computed = matching.compute(command, self.rules)
         self.assertEqual((computed.limit, computed.failure), (None, None))
         return len(seen), sum(seen)
 
@@ -322,8 +321,8 @@ class Caps(AstIsolated):
         configs = matching.configs_of({"r": rule_of({"pattern": f"{K} $$$"})})
         for command, limit in cases:
             with self.subTest(limit=limit):
-                self.assertEqual(scanner.Scanner(configs, wrappers.DEFAULTS).run(command).limit, limit)
-        clean = scanner.Scanner(configs, wrappers.DEFAULTS).run("bash -c 'true'; " * 600)
+                self.assertEqual(scanner.Scanner(configs).run(command).limit, limit)
+        clean = scanner.Scanner(configs).run("bash -c 'true'; " * 600)
         self.assertIsNone(clean.limit)
 
 
@@ -350,7 +349,7 @@ class Text(AstIsolated):
         import scanner
 
         configs = matching.configs_of({"r": rule_of({"pattern": f"{K} $$$"})})
-        hit = scanner.Scanner(configs, ()).run(f"echo é; {K} x").hits[0]
+        hit = scanner.Scanner(configs).run(f"echo é; {K} x").hits[0]
         self.assertEqual((hit.kind, hit.start, hit.end), (Kind.DIRECT, 8, 8 + len(f"{K} x")))
 
     def test_a_wrapped_bare_name_after_a_syntax_error_tree_is_still_found(self) -> None:

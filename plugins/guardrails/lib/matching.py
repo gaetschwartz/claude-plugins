@@ -13,7 +13,6 @@ from typing import TYPE_CHECKING, assert_never
 
 import bounded
 import policy
-import wrappers as wrapper_table
 from verdict import MAX_COMMAND_BYTES, Evaluation, Kind, Limit, Refusal, UnitTree
 
 if TYPE_CHECKING:
@@ -83,27 +82,26 @@ def configs_of(rules: dict[str, policy.Rule]) -> dict[str, Config]:
     return {rid: config for rid, rule in rules.items() if (config := rulebuilder.config_of(rule)) is not None}
 
 
-def compute(command: str, rules: dict[str, policy.Rule], names: wrapper_table.Names) -> Computed:
+def compute(command: str, rules: dict[str, policy.Rule]) -> Computed:
     """Every rule's verdict on one command; runs in the checker child."""
     try:
         import scanner
     except ImportError as exc:
         return Computed(dict.fromkeys(rules), failure=f"the ast-grep-py library cannot be imported ({type(exc).__name__})")
     try:
-        result = scanner.Scanner(configs_of(rules), names, regexes_of(rules)).run(parseable(command))
+        result = scanner.Scanner(configs_of(rules), regexes_of(rules)).run(parseable(command))
     except Exception as exc:  # noqa: BLE001
         return Computed(dict.fromkeys(rules), failure=f"unexpected error: {type(exc).__name__}")
     return Computed(result.kinds(list(rules)), result.invalid, result.limit)
 
 
-def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_table.Names | None = None) -> Evaluation:
+def evaluate(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
     """How each rule's matcher selects the command: "direct", "wrapped" or None.
 
     What could not be judged (`unevaluated`) and why (`failure`, `refusal`) is kept for the caller to report. Hits
     already found always stand. Never raises.
     """
     ev = Evaluation(kinds=dict.fromkeys(rules))
-    names = wrappers if wrappers is not None else wrapper_table.DEFAULTS
     if not rules:
         return ev
     size = len(command.encode("utf-8", "replace"))
@@ -115,7 +113,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
     started = time.monotonic()
     state = Health.HEALTHY
     try:
-        result = bounded.call(lambda: compute(command, rules, names), DEADLINE_SECONDS)
+        result = bounded.call(lambda: compute(command, rules), DEADLINE_SECONDS)
         if result.outcome is bounded.Outcome.CRASHED:
             state = health(started)
             ev.runtime_broken = state is Health.BROKEN

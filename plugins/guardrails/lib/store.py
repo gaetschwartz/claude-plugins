@@ -58,7 +58,8 @@ def load_managed() -> tuple[State, list[str]]:
         problem = ("unreadable managed state, so its rules are NOT enforced until it is fixed (fix or remove the file "
                    f"by hand; the CLI never overwrites a corrupt state file): {exc}")
         return {"rules": {}, "modes": {}}, [problem]
-    return policy.managed_layer(state, str(MANAGED_PATH))
+    layer, problems = policy.managed_layer(state, str(MANAGED_PATH))
+    return layer, problems + policy.removed_key_problems(("managed", state))
 
 
 def presence(path: Path) -> str:

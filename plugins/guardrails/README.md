@@ -39,7 +39,7 @@ edge-case checklist, the pitfalls), and `references/ast/` is a cookbook of teste
 flags, lists, wrappers); a test runs every example in it against the real engine.
 
 **Wrappers and shell strings.** A command that contains a wrapper command (`sudo doas env timeout nice ionice nohup time
-command exec builtin stdbuf setsid xargs watch`, plus your own) is matched as text variants too: the top-level statement that holds
+command exec builtin stdbuf setsid xargs watch`) is matched as text variants too: the top-level statement that holds
 the wrapper, with the wrapper replaced by the text from each of its own non-option words onward (`sudo -u bob pkill x` also
 reads as `bob pkill x`, `pkill x`, `x`), several wrappers of one statement replaced together while the combinations stay few.
 Pipelines, `&&`/`||` lists, subshells, loops, substitutions and heredocs inside the statement keep their relations; a relation
@@ -51,9 +51,7 @@ of flags that take a value, so any word can start a command: `sudo grep pkill fi
 parsed in total per command (the 5 s deadline bounds the time as well); past that the command is denied ("command too complex to check") whatever its size. The script of
 `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'`, the arguments of `eval`, heredocs and here-strings fed to a shell, and
 the substitutions in unquoted heredoc bodies are unquoted (one shell word, nothing else) and scanned as units of their own
-(depth 8, 64 distinct units, 256 KiB). Add wrapper names with `guardrails wrapper add <name>`
-(`--scope global|project|managed`, `--as-user` for agents, like `rule`); `wrapper rm` and `wrapper list` do the
-rest. Look-through only ever grows: a layer adds names and never removes or changes a higher layer's.
+(depth 8, 64 distinct units, 256 KiB). The wrapper list is fixed.
 Obfuscated or dynamic command names (`$'p\x6bill'`, `p''kill`, variables, aliases, functions) cannot be analysed
 statically and are not matched; `references/matching.md` lists the known limits.
 
@@ -142,8 +140,7 @@ Layers stack managed > global > project. Project entries can add rules, and for 
 suspending modes, and reword `message`/`messageShort`/`description`. What a global rule matches (`match`,
 `requires`) cannot be changed by a project entry; an override that does not validate falls back to the global rule
 unchanged. A project can also switch a declared mode on for itself (`active`), which suspends the rules that list
-that mode. Every layer can also add wrapper names under `wrappers` (an object whose keys are the names; values are
-ignored); names only accumulate. Session state (retry acknowledgements, modes, warnings shown) lives in the global file
+that mode. Session state (retry acknowledgements, modes, warnings shown) lives in the global file
 and is pruned after 7 days.
 
 ## Managed scope
@@ -219,7 +216,7 @@ Claude Code settings; guardrails does not manage these, they are shown here for 
 
 An agent runs the CLI as `guardrails <verb>` (the plugin's `bin/` is on the Bash tool's PATH); from your own terminal
 use `python3 <plugin dir>/lib/guard.py <verb>` (`--help` for the full
-list: `status`, `rule add|set|rm|test|ast`, `wrapper add|rm|list`, `mode declare|undeclare|on|off`,
+list: `status`, `rule add|set|rm|test|ast`, `mode declare|undeclare|on|off`,
 `preset list|show|install`, `enable|disable` (`--scope project` for the project rules); changes take `--scope global|project|managed`). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
 `enable`/`disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample
 commands without changing anything. It checks the matcher only (a row is caught or allowed); it prints a `**Note**` line when the hook

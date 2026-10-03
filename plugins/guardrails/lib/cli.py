@@ -19,7 +19,6 @@ import matching
 import policy
 import render
 import store
-import wrappers as wrapper_table
 from policy import Invalid, view
 from verdict import Evaluation
 
@@ -225,8 +224,9 @@ def snapshot(args: Args) -> Snapshot:
             if m not in modes:
                 report(f"rule {rid}: mode '{m}' is not declared (the rule stays enforced)",
                        *rule_origins.get(rid, []))
-    for text in policy.wrapper_problems(mstate, gstate, pstate):
-        report(text, "managed", "global", "project")
+    for label, state in (("global", gstate), ("project", pstate)):
+        for text in policy.removed_key_problems((label, state)):
+            report(text, label)
     parsed = {rid: rule for rid, rule in rules.items() if rule.enabled
               and not any(p.startswith(f"rule {rid}:") for p in problems)}
     failures = [f for f in (view(v, "engineFailure") for v in view(gstate, "sessions").values()) if f.get("at")]
@@ -567,8 +567,7 @@ def cmd_rule_test(args: Args) -> int:
     if not examples:
         raise Invalid("give at least one command or --examples")
     notes = effect_notes(args, rule, layers, mstate, gstate, pstate)
-    wrappers = policy.effective_wrappers(mstate, gstate, pstate)
-    evaluations = [matching.evaluate(cmd, {rid: rule}, wrappers) for cmd, _, _ in examples]
+    evaluations = [matching.evaluate(cmd, {rid: rule}) for cmd, _, _ in examples]
     broken = {rid_: why for ev in evaluations for rid_, why in ev.invalid.items()}
     if broken:
         raise Invalid(f"the rule does not compile: {broken[rid]}")
@@ -613,60 +612,6 @@ def cmd_engine_ensure(args: Args) -> int:
 
 def cmd_engine_status(args: Args) -> int:
     print(hostcli.status_text(bootstrap.data_dir()))
-    return 0
-
-
-def cmd_wrapper_add(args: Args) -> int:
-    require_user(args, "wrapper add")
-    try:
-        wrapper_table.check_name(args.name)
-    except ValueError as exc:
-        raise Invalid(str(exc)) from exc
-    if args.name in wrapper_table.DEFAULTS:
-        raise Invalid(f"wrapper '{args.name}' is already built in")
-    scope = resolve_scope(args)
-    path = scope_path(scope)
-
-    def change(state: store.State) -> bool:
-        wrappers = table(state, "wrappers")
-        existed = args.name in wrappers
-        wrappers[args.name] = {"setBy": stamp(args.reason)}
-        return existed
-
-    existed = change_state(scope, path, change)
-    print(f"{'replaced' if existed else 'added'} wrapper {args.name} in {path}")
-    return 0
-
-
-def cmd_wrapper_rm(args: Args) -> int:
-    require_user(args, "wrapper rm")
-    scope = resolve_scope(args)
-    path = scope_path(scope)
-
-    def change(state: store.State) -> None:
-        wrappers = table(state, "wrappers")
-        if args.name not in wrappers:
-            built = " (built-in wrappers cannot be removed)" if args.name in wrapper_table.DEFAULTS else ""
-            raise Invalid(f"no wrapper '{args.name}' in {path}{built}")
-        del wrappers[args.name]
-
-    change_state(scope, path, change)
-    print(f"removed wrapper {args.name} from {path}")
-    return 0
-
-
-def cmd_wrapper_list(args: Args) -> int:
-    mstate, gstate, pstate = states()
-    origins = policy.origins("wrappers", mstate, gstate, pstate)
-    shown = False
-    for name in sorted(policy.effective_wrappers(mstate, gstate, pstate)):
-        layers = (["builtin"] if name in wrapper_table.DEFAULTS else []) + origins.get(name, [])
-        if args.scope and args.scope not in layers:
-            continue
-        shown = True
-        print(render.clean(f"{name} [{'+'.join(layers)}]"))
-    if not shown:
-        print(f"no wrappers with a {args.scope} entry")
     return 0
 
 
@@ -895,15 +840,6 @@ def build_parser() -> argparse.ArgumentParser:
                           "its wrappers and shell strings expose")
     ast.add_argument("command", metavar="CMD")
 
-    wrapper = verbs.add_parser("wrapper", help="commands whose own words rules look through (sudo, env, xargs, ...)"
-                               ).add_subparsers(dest="op", required=True)
-    wadd = wrapper.add_parser("add", parents=[common, scoped], help="add a wrapper name")
-    wadd.add_argument("name")
-    wrm = wrapper.add_parser("rm", parents=[common, scoped], help="remove a wrapper name from a scope")
-    wrm.add_argument("name")
-    wlist = wrapper.add_parser("list", parents=[common], help="list the effective wrappers")
-    wlist.add_argument("--scope", choices=SCOPES, help="list only wrappers with an entry in this layer")
-
     mode = verbs.add_parser("mode", help="declare modes and switch them on or off").add_subparsers(dest="op",
                                                                                                 required=True)
     declare = mode.add_parser("declare", parents=[common, scoped], help="declare (or redeclare) a mode")
@@ -946,9 +882,6 @@ HANDLERS: dict[tuple[str, str | None], Callable[[Args], int]] = {
     ("rule", "rm"): cmd_rule_rm,
     ("rule", "test"): cmd_rule_test,
     ("rule", "ast"): cmd_rule_ast,
-    ("wrapper", "add"): cmd_wrapper_add,
-    ("wrapper", "rm"): cmd_wrapper_rm,
-    ("wrapper", "list"): cmd_wrapper_list,
     ("mode", "declare"): cmd_mode_declare,
     ("mode", "undeclare"): cmd_mode_undeclare,
     ("mode", "on"): cmd_mode_on,

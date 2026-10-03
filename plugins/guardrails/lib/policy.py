@@ -9,8 +9,6 @@ from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Self
 
-import wrappers as wrapper_table
-
 MAX_AST_BYTES = 16384  # bounds nesting too: ast-grep overflows its stack past about 4000 levels
 MATCH_KEYS = ("program", "args", "regex", "ast")
 RULE_KEYS = ("match", "message", "messageShort", "action", "retry", "enabled", "modes", "requires", "description",
@@ -38,6 +36,10 @@ class Retry(StrEnum):
 class Actor(StrEnum):
     USER = "user"
     AGENT = "agent"
+
+
+def command_name(name: object) -> bool:
+    return isinstance(name, str) and bool(name) and "/" not in name and not any(c.isspace() for c in name)
 
 
 def view(mapping: object, key: str) -> dict[str, Any]:
@@ -75,7 +77,7 @@ class Match:
         program = raw.get("program")
         names = [program] if isinstance(program, str) else program
         if program is not None and not (isinstance(names, list) and names
-                                        and all(wrapper_table.is_command_name(n) for n in names)):
+                                        and all(command_name(n) for n in names)):
             raise Invalid("'match.program' must be a command name or a list of them (no spaces or '/')")
         ast = raw.get("ast")
         if "ast" in raw:
@@ -328,20 +330,10 @@ def effective_rules(managed: object, global_state: object, project_state: object
     return effective(managed, global_state, project_state).rules
 
 
-def wrapper_layers(managed: object, global_state: object, project_state: object) -> list[tuple[str, object]]:
-    layers = [("managed state", managed), ("global state", global_state)]
-    if project_enabled(project_state):
-        layers.append(("project state", project_state))
-    return layers
-
-
-def effective_wrappers(managed: object, global_state: object, project_state: object) -> wrapper_table.Names:
-    """Built-in wrapper names plus those added by each layer."""
-    return wrapper_table.resolve(wrapper_layers(managed, global_state, project_state))[0]
-
-
-def wrapper_problems(managed: object, global_state: object, project_state: object) -> list[str]:
-    return wrapper_table.resolve(wrapper_layers(managed, global_state, project_state))[1]
+def removed_key_problems(*layers: tuple[str, object]) -> list[str]:
+    """One problem per state that still has the `wrappers` key, which is no longer read."""
+    return [f"{label} state has a 'wrappers' key: user-defined wrappers are no longer supported, so it is ignored "
+            "(remove it)" for label, state in layers if isinstance(state, dict) and "wrappers" in state]
 
 
 def effective_modes(managed: object, global_state: object, project_state: object) -> dict[str, Mode]:
@@ -376,16 +368,6 @@ def managed_layer(state: object, path: str) -> tuple[dict[str, Any], list[str]]:
     problems = _shape_problems(path, state)
     rules: dict[str, Rule] = {}
     modes = {name: Mode.from_json(raw) for name, raw in _entries(state, "modes").items()}
-    wrappers: dict[str, dict[str, Any]] = {}
-    if isinstance(state, dict) and "wrappers" in state and not isinstance(state["wrappers"], dict):
-        problems.append(f"managed state {path}: 'wrappers' must be an object, so all its entries are ignored")
-    for name in view(state, "wrappers"):
-        try:
-            wrapper_table.check_name(name)
-        except ValueError as exc:
-            problems.append(f"managed state {path}: {exc}, so it is ignored")
-            continue
-        wrappers[name] = {}
     for rid, raw in _entries(state, "rules").items():
         try:
             rule = Rule.from_json(raw)
@@ -395,11 +377,9 @@ def managed_layer(state: object, path: str) -> tuple[dict[str, Any], list[str]]:
         problems += [f"managed rule {rid} lists mode '{m}', which the managed file does not declare, so it cannot "
                      "suspend the rule" for m in rule.modes if m not in modes]
         rules[rid] = replace(rule, modes=tuple(m for m in rule.modes if m in modes))
-    layer: dict[str, Any] = {"rules": {rid: rule.to_json() for rid, rule in rules.items()},
-                             "modes": {name: {"description": m.description, "agentMayEnable": m.agent_may_enable,
-                                              "active": m.active} for name, m in modes.items()}}
-    if wrappers:
-        layer["wrappers"] = wrappers
+    layer = {"rules": {rid: rule.to_json() for rid, rule in rules.items()},
+             "modes": {name: {"description": m.description, "agentMayEnable": m.agent_may_enable, "active": m.active}
+                       for name, m in modes.items()}}
     return layer, problems
 
 

@@ -27,6 +27,8 @@ MAX_VARIANTS = 2048
 MAX_VARIANT_BYTES = 512 << 10
 MAX_COMBINATIONS = 64
 SHELLS = ("bash", "sh", "zsh", "dash", "ksh", "script")
+WRAPPERS = ("sudo", "doas", "env", "timeout", "nice", "nohup", "time", "command", "exec", "builtin", "stdbuf", "setsid",
+            "ionice", "xargs", "watch")
 CONTEXT_KINDS = frozenset({"pipeline", "command_substitution", "process_substitution"})
 ARGUMENT_KINDS = frozenset({"raw_string", "string", "word", "number", "concatenation", "simple_expansion", "expansion",
                             "command_substitution", "arithmetic_expansion", "process_substitution"})
@@ -255,15 +257,13 @@ def statement_variants(text: str, spans: Sequence[Span]) -> Iterator[str]:
 
 
 class Scanner:
-    """One evaluation: the rules, the wrapper names and what has been found so far."""
+    """One evaluation: the rules and what has been found so far."""
 
-    def __init__(self, rules: dict[str, Config], wrapper_names: Sequence[str],
-                 regexes: dict[str, Config] | None = None) -> None:
+    def __init__(self, rules: dict[str, Config], regexes: dict[str, Config] | None = None) -> None:
         self.active = dict(rules)
         self.regexes = dict(regexes or {})
         self.invalid: dict[str, str] = {}
         self.found: dict[str, Hit] = {}
-        self.wrappers = tuple(wrapper_names)
 
     def matches(self, rid: str, root: SgNode, first_only: bool) -> list[SgNode]:
         """The nodes a rule selects; a rule whose config does not compile is dropped with the reason."""
@@ -326,9 +326,9 @@ class Scanner:
                 self.judge_regexes(root)
             self.judge(unit, root)
             found: Iterator[Unit] = iter(())
-            if unit.origin is not Origin.VARIANT and self.wrappers:
+            if unit.origin is not Origin.VARIANT:
                 try:
-                    spans = wrapper_spans(root, self.wrappers)
+                    spans = wrapper_spans(root, WRAPPERS)
                 except TooManyVariants:
                     limit = Limit.VARIANTS
                     break
@@ -359,7 +359,7 @@ class Scanner:
 
 def compile_errors(configs: dict[str, Config], regexes: dict[str, Config] | None = None) -> dict[str, str]:
     """The reason per rule id none of whose configs compiles, or whose regex does not."""
-    scanner = Scanner(configs, (), regexes)
+    scanner = Scanner(configs, regexes)
     root = SgRoot("true", "bash").root()
     for rid in list(scanner.active):
         scanner.matches(rid, root, True)

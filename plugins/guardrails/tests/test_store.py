@@ -105,7 +105,7 @@ class CorruptTables(Isolated):
     def test_a_malformed_table_stops_a_write_and_names_the_file_and_key(self) -> None:
         rule = '{"match": {"program": "x"}, "message": "m"}'
         for key, verb in (("rules", ("rule", "add", "r", "--json", rule)), ("modes", ("mode", "declare", "m")),
-                          ("wrappers", ("wrapper", "add", "w")), ("sessions", ("mode", "on", "m", "--session-id", "s"))):
+                          ("sessions", ("mode", "on", "m", "--session-id", "s"))):
             with self.subTest(key=key):
                 state: dict[str, object] = {"modes": {"m": {"description": "d"}}}
                 state[key] = [1, 2]

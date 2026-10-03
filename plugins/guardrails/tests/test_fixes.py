@@ -9,15 +9,13 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from helpers import GREP_RECURSIVE, HOOKS, AstIsolated
+from helpers import HOOKS, AstIsolated
 
 import bounded
 import engine
 import matching
 import policy
 import verdict
-import wrappers
-from test_corpus import ALLOW, DENY
 from verdict import Kind, Refusal
 
 K = "pk" + "ill"
@@ -51,42 +49,16 @@ class Forms(AstIsolated):
 
 
 class Layering(AstIsolated):
-    def managed_rules(self) -> None:
-        self.put(self.mpath, {"rules": {"no-kill": {"match": {"program": K}, "message": "No kill by name."},
-                                        "no-strings": {"match": {"program": "strings", "args": "^strings -n"},
-                                                       "message": "No strings."}}})
-
-    def test_lower_layers_only_add_wrapper_names(self) -> None:
-        self.managed_rules()
-        self.put(self.ppath, {"wrappers": {"mywrap": {}, "sudo": {}, K: {}}})
-        for n, command in enumerate([f"sudo -E {K} x", f"nohup {K} x", f"env -i {K} x", f"mywrap -x {K} x", f"{K} x",
-                                     "strings -n 4 /bin/ls"]):
-            self.assertTrue(is_denied(self.hook(command, f"b{n}")), command)
-
-    def test_a_global_layer_is_held_to_the_same_rule(self) -> None:
-        self.managed_rules()
-        self.put(self.gpath, {"wrappers": {"sudo": {}, K: {}}})
-        self.assertTrue(is_denied(self.hook(f"sudo -E {K} x", "g1")))
-        self.assertTrue(is_denied(self.hook(f"{K} x", "g2")))
-
-    def test_the_cli_takes_names_and_refuses_builtins(self) -> None:
-        code, _, err = self.cli("wrapper", "add", "sudo")
-        self.assertEqual(code, 2)
-        self.assertIn("already built in", err)
-        self.assertFalse(self.gpath.exists())
-
-    def test_adding_names_never_reduces_detection(self) -> None:
-        rules = {"p": PROGRAM_RULE, "s": policy.Rule.from_json({"match": {"program": "strings"}, "message": "m"}),
-                 "g": policy.Rule.from_json({"match": {"ast": GREP_RECURSIVE}, "message": "m"})}
-        corpus = [*DENY, *ALLOW[:20], f"sudo -E {K} x", f"nohup {K} x", f"timeout 5 {K} a", f"bash -c '{K} x'",
-                  "grep -r foo .", "sudo grep -rn foo .", "strings -n 4 /bin/ls"]
-        base = {c: matching.evaluate(c, rules).kinds for c in corpus}
-        names = wrappers.resolve([("g", {"wrappers": {K: {}, "strings": {}, "grep": {}, "mywrap": {}}})])[0]
-        for command in corpus:
-            after = matching.evaluate(command, rules, names).kinds
-            for rid, before in base[command].items():
-                if before is not None:
-                    self.assertIsNotNone(after[rid], f"{rid} stopped matching {command!r}")
+    def test_a_wrappers_key_is_skipped_with_a_warning_naming_it_in_the_hook_and_in_status(self) -> None:
+        self.put(self.mpath, {"wrappers": {"mywrap": {}}, "rules": {"no-kill": {"match": {"program": K}, "message": "No."}}})
+        self.put(self.gpath, {"wrappers": {"g": {}}})
+        self.put(self.ppath, {"wrappers": {"p": {}}})
+        out = self.hook(f"mywrap -x {K} x")
+        assert out is not None
+        self.assertIsNone(out.get("hookSpecificOutput", {}).get("permissionDecision"))
+        for layer in ("managed", "global", "project"):
+            self.assertIn(f"{layer} state has a 'wrappers' key", out["systemMessage"])
+            self.assertIn(f"{layer} state has a 'wrappers' key", self.cli("status", "--problems")[1])
 
 
 RULES_FOR_OUTAGES: dict[str, Any] = {
