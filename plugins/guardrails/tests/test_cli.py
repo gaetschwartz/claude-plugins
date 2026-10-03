@@ -6,6 +6,7 @@ import shlex
 import stat
 from pathlib import Path
 
+import store
 from helpers import AstIsolated, caught
 
 RULE = ('{"match": {"program": "strings"}, "message": "Read the docs.", "retry": "same-command", '
@@ -582,7 +583,7 @@ class ManagedNotWritable(AstIsolated):
     def assert_sudo_hint(self, err: str, *argv: str) -> None:
         self.assertIn("error:", err)
         self.assertIn("not writable", err)
-        self.assertIn("Re-run with sudo: sudo python3", err)
+        self.assertIn(f"Re-run with sudo: sudo {store.CLI} ", err)
         self.assertIn(shlex.join(argv), err)
 
     def test_absent_file_in_read_only_directory(self) -> None:
@@ -746,7 +747,7 @@ class PathNotWritable(AstIsolated):
         argv = ("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", target)
         code, _, err = self.cli(*argv)
         self.assertEqual(code, 2)
-        self.assertIn("Re-run with sudo: sudo python3", err)
+        self.assertIn(f"Re-run with sudo: sudo {store.CLI} ", err)
         self.assertIn(shlex.join(argv), err)
         self.assertFalse((ro / "sub").exists())
 

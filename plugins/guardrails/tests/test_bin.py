@@ -4,6 +4,7 @@ import json
 import os
 import stat
 import subprocess
+import sys
 
 from helpers import ROOT, AstIsolated
 
@@ -17,6 +18,14 @@ class BareCommand(AstIsolated):
     def test_preset_list(self) -> None:
         result = self.run_bin("preset", "list")
         self.assertEqual(result.returncode, 0)
+        self.assertIn("docs-first", result.stdout)
+
+    def test_the_cli_modules_import_and_run_without_the_ast_grep_library(self) -> None:
+        code = ("import sys\nsys.modules['ast_grep_py'] = None\nsys.path.insert(0, sys.argv[1])\n"
+                "import guard, cli, engine, matching, rulebuilder\nraise SystemExit(guard.main(['preset', 'list']))")
+        result = subprocess.run([sys.executable, "-c", code, str(ROOT / "lib")], capture_output=True, text=True,
+                                check=False, env=dict(os.environ))
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
         self.assertIn("docs-first", result.stdout)
 
     def test_help(self) -> None:

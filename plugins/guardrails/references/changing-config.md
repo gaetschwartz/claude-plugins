@@ -6,7 +6,7 @@
 - Pass a rule with `--json @<file>` (or `--json -` for stdin) rather than quoting it inline; `rule set` takes the same
   flag for a JSON object of fields. A missing file or invalid JSON exits 2.
 - Never run `sudo`. When a write fails because the file or its directory is not writable, the CLI exits 2 and prints
-  the message plus a ready-made `sudo python3 … guard.py …` command. Show both to the user and stop; the user runs it
+  the message plus a ready-made `sudo …/bin/guardrails …` command. Show both to the user and stop; the user runs it
   themselves (for example `! sudo …` in the prompt). Do the same for every scope: try the write, and report a
   permission failure with the printed message and sudo command instead of assuming what the user may write.
 - `--scope global|project|managed` picks the file; global is the default. `--scope managed` writes the platform managed

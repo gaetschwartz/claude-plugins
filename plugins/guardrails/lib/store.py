@@ -7,7 +7,6 @@ import datetime
 import fcntl
 import json
 import os
-import pathlib
 import sys
 from collections.abc import Callable, Iterator
 from typing import Any, TypeVar
@@ -15,8 +14,6 @@ from typing import Any, TypeVar
 import bootstrap
 import policy
 
-PLUGIN = "guardrails"
-MARKETPLACE = "gaetans-claude-plugins"
 MANAGED_ENV = "GUARDRAILS_MANAGED_PATH"
 MANAGED_DARWIN = "/Library/Application Support/ClaudeCode/guardrails.json"
 MANAGED_LINUX = "/etc/claude-code/guardrails.json"
@@ -25,6 +22,7 @@ MANAGED_DIR_MODE = 0o755
 SESSION_TTL_DAYS = 7
 MAX_SESSIONS = 50
 HERE = os.path.dirname(os.path.abspath(__file__))
+CLI = os.path.join(os.path.dirname(HERE), "bin", "guardrails")
 
 State = dict[str, Any]
 T = TypeVar("T")
@@ -42,15 +40,11 @@ def now() -> str:
     return datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
 
 
-def plugin_id(here: str = HERE) -> str:
-    return bootstrap.plugin_id(pathlib.Path(here))
-
-
 def global_state_path() -> str:
     data = os.environ.get("CLAUDE_PLUGIN_DATA")
     if data:
         return os.path.join(data, "state.json")
-    return os.path.join(os.path.expanduser("~"), ".claude", "plugins", "data", plugin_id(), "state.json")
+    return os.path.join(os.path.expanduser("~"), ".claude", "plugins", "data", bootstrap.PLUGIN_ID, "state.json")
 
 
 def default_managed_path() -> str:
@@ -145,7 +139,7 @@ def project_root(cwd: str | None = None) -> str | None:
 
 def project_state_path(cwd: str | None = None) -> str | None:
     root = project_root(cwd)
-    return os.path.join(root, ".claude", "plugins", "data", plugin_id(), "state.json") if root else None
+    return os.path.join(root, ".claude", "plugins", "data", bootstrap.PLUGIN_ID, "state.json") if root else None
 
 
 def load(path: str | None) -> State:
@@ -252,6 +246,9 @@ def mutate[T](path: str, fn: Callable[[State], T], mode: int | None = None) -> T
     """Load, apply fn, write back, all under the file lock; nothing is written if fn raises."""
     with locked(path, None if mode is None else MANAGED_DIR_MODE):
         state = load(path)
-        result = fn(state)
+        try:
+            result = fn(state)
+        except StateError as exc:
+            raise StateError(f"{path}: {exc}") from exc
         write(path, state, mode)
     return result

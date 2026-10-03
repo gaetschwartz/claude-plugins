@@ -23,6 +23,7 @@ BACKOFFS = (600, 3600, 21600)
 INSTALL_SECONDS = 60.0
 NETWORK_SECONDS = 10.0
 KEEP_DAYS = 30
+PLUGIN_ID = "guardrails-gaetans-claude-plugins"
 DOWNLOAD_PREFIX = "https://files.pythonhosted.org/"
 ENV_ALLOWED = ("HOME", "LANG", "TMPDIR", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy",
                "https_proxy", "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR")
@@ -89,19 +90,9 @@ def load_pins() -> Pins:
                 (LIB / "runtime-id").read_text().strip())
 
 
-def plugin_id(here: Path = LIB) -> str:
-    """Mirror Claude Code's CLAUDE_PLUGIN_DATA naming: <plugin>-<marketplace>, sanitised."""
-    parts = here.parts
-    if "cache" in parts:
-        i = len(parts) - 1 - parts[::-1].index("cache")
-        if i >= 1 and parts[i - 1] == "plugins" and len(parts) > i + 3:
-            return re.sub(r"[^A-Za-z0-9_-]", "-", f"{parts[i + 2]}-{parts[i + 1]}")
-    return "guardrails-gaetans-claude-plugins"
-
-
 def data_dir() -> Path:
     data = os.environ.get("CLAUDE_PLUGIN_DATA")
-    return Path(data) if data else Path(os.path.realpath(Path.home() / ".claude" / "plugins" / "data" / plugin_id()))
+    return Path(data) if data else Path(os.path.realpath(Path.home() / ".claude" / "plugins" / "data" / PLUGIN_ID))
 
 
 def sanitised(text: str, limit: int = 120) -> str:

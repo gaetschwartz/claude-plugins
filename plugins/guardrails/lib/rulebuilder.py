@@ -5,10 +5,12 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import policy
-from ast_grep_py import Config, Rule
+
+if TYPE_CHECKING:
+    from ast_grep_py import Config, Rule
 
 GREPS = ("grep", "egrep", "fgrep")
 RECURSIVE_FLAG = (r"^(?:-[A-Za-z&&[^efmABCdD]]*[rR][A-Za-z]*|-drecurse|--recursive|--dereference-recursive"

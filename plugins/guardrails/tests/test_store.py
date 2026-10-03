@@ -26,12 +26,6 @@ class Paths(Isolated):
                                 "guardrails-gaetans-claude-plugins", "state.json")
         self.assertEqual(store.global_state_path(), expected)
 
-    def test_plugin_id_follows_the_cache_location(self) -> None:
-        self.assertEqual(store.plugin_id("/u/.claude/plugins/cache/my.market/guardrails/0.2.0/lib"),
-                         "guardrails-my-market")
-        self.assertEqual(store.plugin_id("/src/claude-plugins/plugins/guardrails/lib"),
-                         "guardrails-gaetans-claude-plugins")
-
     def test_project_path_from_env(self) -> None:
         self.assertEqual(store.project_state_path(), str(self.ppath))
 
@@ -108,6 +102,23 @@ class Prune(unittest.TestCase):
         self.assertEqual(len(kept), 50)
         self.assertIn("s0", kept)
         self.assertNotIn("s59", kept)
+
+
+class CorruptTables(Isolated):
+    def test_a_malformed_table_stops_a_write_and_names_the_file_and_key(self) -> None:
+        rule = '{"match": {"program": "x"}, "message": "m"}'
+        for key, verb in (("rules", ("rule", "add", "r", "--json", rule)), ("modes", ("mode", "declare", "m")),
+                          ("wrappers", ("wrapper", "add", "w")), ("sessions", ("mode", "on", "m", "--session-id", "s"))):
+            with self.subTest(key=key):
+                state: dict[str, object] = {"modes": {"m": {"description": "d"}}}
+                state[key] = [1, 2]
+                self.put(self.gpath, state)
+                before = self.gpath.read_text()
+                code, _, err = self.cli(*verb)
+                self.assertEqual(code, 2)
+                self.assertIn(str(self.gpath), err)
+                self.assertIn(f"'{key}' must be an object", err)
+                self.assertEqual(self.gpath.read_text(), before, "the file is untouched")
 
 
 class ManagedPath(Isolated):

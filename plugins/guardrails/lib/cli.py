@@ -65,10 +65,11 @@ def check_name(kind: str, name: str) -> None:
 
 
 def table(mapping: dict[str, Any], key: str) -> dict[str, Any]:
-    """mapping[key] as a dict, created (or replaced if malformed) in place."""
-    value = mapping.get(key)
+    """mapping[key] as a dict, created in place when absent; a value of another type is a corrupt state file."""
+    value = mapping.setdefault(key, {})
     if not isinstance(value, dict):
-        value = mapping[key] = {}
+        raise store.StateError(f"'{key}' must be an object, not {type(value).__name__}; fix the file by hand, the CLI "
+                               "never overwrites a corrupt state file")
     return value
 
 
@@ -1029,8 +1030,7 @@ def main(argv: list[str]) -> int:
         print(f"refused: {exc}", file=sys.stderr)
         return 3
     except store.NotWritable as exc:
-        guard = os.path.join(store.HERE, "guard.py")
-        print(f"error: {exc}. Re-run with sudo: sudo python3 {guard} {sudo_hint(args, argv)}", file=sys.stderr)
+        print(f"error: {exc}. Re-run with sudo: sudo {store.CLI} {sudo_hint(args, argv)}", file=sys.stderr)
         return 2
     except (Invalid, store.StateError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)

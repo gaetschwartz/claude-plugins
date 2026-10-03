@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import os
 import sys
 import time
 from typing import IO, Any, TypedDict
@@ -77,9 +76,8 @@ def hints(rule: policy.Rule, modes: dict[str, policy.Mode], session_id: str) -> 
             text += (f" If this session is genuinely '{name}' work, ask the user; once they confirm, "
                      "enable it with the guardrails:mode skill.")
         else:
-            guard_py = os.path.join(store.HERE, "guard.py")
             text += (f" If this is '{name}' work, the user can enable it from their terminal: "
-                     f"python3 {guard_py} mode on {name} --session-id {session_id}")
+                     f"{store.CLI} mode on {name} --session-id {session_id}")
     return text
 
 

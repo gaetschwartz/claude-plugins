@@ -7,13 +7,15 @@ be interrupted and a hook that runs out of time lets the command through.
 from __future__ import annotations
 
 import json
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import bounded
 import policy
 import wrappers as wrapper_table
-from ast_grep_py import Config
 from verdict import Evaluation, Kind, Limit, Refusal, UnitTree, limit_reason
+
+if TYPE_CHECKING:
+    from ast_grep_py import Config
 
 MAX_COMMAND = 256 << 10
 DEADLINE_SECONDS = 5.0
