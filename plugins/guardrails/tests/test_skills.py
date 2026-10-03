@@ -141,7 +141,7 @@ class SkillFiles(unittest.TestCase):
             text = (SKILLS / name / "SKILL.md").read_text()
             with self.subTest(skill=name):
                 self.assertIn("guardrails rule ast", text)
-                self.assertRegex(text, r"(?s)`program`.{0,80}`program` \+ `args`.{0,80}`builtin`.{0,80}`ast`.{0,200}`regex`")
+                self.assertRegex(text, r"(?s)`program`.{0,80}`program` \+ `args`.{0,80}`ast`.{0,200}`regex`")
 
     def test_presentation_reference_states_the_paste_rule(self) -> None:
         text = (ROOT / "references" / "presentation.md").read_text()

@@ -64,13 +64,13 @@ The layout contract, all of it computed by the CLI:
   that define an installed rule (`global+project`). A draft has no id yet: `--id-name`, else the rule's own `id`
   field, else `new-rule`. For a draft in a managed file that is not the platform default, a `**File**` line follows
   the title.
-- `**Intent**` (only with `--intent`), `**Match**` (`program`, `args`, `regex`, `builtin`, `ast`, whichever the rule
+- `**Intent**` (only with `--intent`), `**Match**` (`program`, `args`, `regex`, `ast`, whichever the rule
   has; `ast = <the rule as compact one-line JSON>`), `**Message**` (with `{which:a|b}` resolved).
 - Groups, each omitted when empty: `**Block**` (the matcher catches it, action deny), `**Warn**` (catches it, action
   warn), `**Allow**` (it does not), `**Not evaluated**` (a rule that needs the engine while it is missing or failing, or a
   command over the size limit; glyph `?`, never to be read as allowed). Rows: `- ✗ <span> <source>` or `- ✓ …`, then ` · wrapped` when only a look-through
   (wrapper such as sudo, xargs or timeout; a `bash -c` string; `$(…)` or backticks; a pipeline member) made the
-  program/args/builtin matcher reach the command; that includes a substitution glued to a word or assignment
+  program/args matcher reach the command; that includes a substitution glued to a word or assignment
   (`foo$(…)`, `x=$(…)`) and `<(…)`. An `ast` match is `wrapped` by the same definition: found through a wrapper or shell
   string, or with the matched node inside a pipeline or a substitution. A `regex` match reads the raw text and is never `wrapped`. A command reached inside
   a list (`;`, `&&`, `||`, a newline), a subshell `( … )` or a `{ …; }` group is not a wrapper, so it is not `wrapped`.

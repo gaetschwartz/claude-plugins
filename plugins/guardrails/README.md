@@ -1,6 +1,6 @@
 # guardrails
 
-A PreToolUse hook for the Bash and Monitor tools whose rules are data (a rule for `Bash` also applies to a `Monitor`
+A PreToolUse hook for the Bash and Monitor tools whose rules are data (every rule also applies to a `Monitor`
 command; a Monitor call with only a `ws` URL has no command and is ignored; monitors a plugin declares in
 `monitors/monitors.json` start without any tool call, so this hook cannot cover them). Each command is parsed in
 process by the `ast-grep-py` library (its tree-sitter Bash grammar does all the lexing and parsing; guardrails has no
@@ -13,7 +13,7 @@ the raw text of the whole command with ast-grep's own regex engine (Rust syntax)
 
 ## Rules
 
-A rule matches a command (`program`, `args`, `builtin`, a syntax-tree rule `ast`, raw `regex`) and says what happens:
+A rule matches a command (`program`, `args`, a syntax-tree rule `ast`, raw `regex`) and says what happens:
 
 - `action`: `deny` (the agent gets the message and the call is blocked) or `warn` (the agent gets the message as
   context, once per session).
@@ -32,7 +32,7 @@ A rule matches a command (`program`, `args`, `builtin`, a syntax-tree rule `ast`
 `has`, `follows`, `precedes`, `not`, `any`, `all`, `stopBy`, `field`) run on the tree-sitter Bash parse, so a rule can
 say "`pgrep`, but only nested in a substitution, pipeline, list or loop" or "`npm publish`, unless inside an `if`" and
 never fires on text inside a heredoc or single quotes. It is an alternative like `regex`: the rule fires when
-`program`/`args`/`builtin`, or `regex`, or `ast` matches. `references/matching.md` has the vocabulary, the node kinds
+`program`/`args`, or `regex`, or `ast` matches. `references/matching.md` has the vocabulary, the node kinds
 (verified), what is code versus data and the idioms; `guardrails rule ast '<command>'` prints the tree of any command,
 including the shell-string units. `references/writing-rules.md` is the full how-to (matcher ladder, test matrix,
 edge-case checklist, the pitfalls), and `references/ast/` is a cookbook of tested rules by shape (context, pipelines,
@@ -140,7 +140,7 @@ path, the installed Python, whether an install is running, and the last install 
 time of the next automatic attempt and where the raw detail is); `guardrails engine ensure --retry-now` installs right away and ignores the wait. `guardrails status
 --problems` and `rule test` say when a rule is not enforced or could not be judged.
 
-**How an evaluation runs.** Every `program`, `args`, `builtin` and `match.ast` rule becomes typed ast-grep rules
+**How an evaluation runs.** Every `program`, `args`, `regex` and `match.ast` rule becomes typed ast-grep rules
 (`lib/rulebuilder.py`); `lib/scanner.py` parses the command as written, then its wrapper variants and each shell string,
 and matches every rule on each; a hit is `wrapped` when it was found in a variant or a script, or when the matched node
 sits inside a pipeline, command substitution or process substitution (read from the node's ancestors). Anything that

@@ -111,7 +111,7 @@ def describe_match(match: dict[str, object], programs: list[str]) -> str:
     parts = []
     if programs:
         parts.append("program = " + words(programs))
-    for key in ("args", "regex", "builtin"):
+    for key in ("args", "regex"):
         value = match.get(key)
         if isinstance(value, str) and value:
             parts.append(f"{key} = {span(value)}")

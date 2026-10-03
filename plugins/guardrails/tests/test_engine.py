@@ -5,7 +5,7 @@ import os
 import unittest
 from typing import Any
 
-from helpers import AstIsolated, RealRuntime
+from helpers import GREP_RECURSIVE, AstIsolated, RealRuntime
 
 import store
 
@@ -158,7 +158,7 @@ class Hook(AstIsolated):
     def test_message_short_after_first_display_and_dedupe(self) -> None:
         sheet = {"message": "SHEET for {which:zz-none|zz-other}", "messageShort": "terse", "retry": "same-command"}
         self.put(self.gpath, {"rules": {"find-fd": {**sheet, "match": {"program": "find"}},
-                                        "grep-rg": {**sheet, "match": {"builtin": "grep-recursive"}}}})
+                                        "grep-rg": {**sheet, "match": {"ast": GREP_RECURSIVE}}}})
         first = reason(self.hook("find . | xargs grep -r x"))
         self.assertEqual(first.count("SHEET for zz-none"), 1)
         self.assertIn("[guardrails:find-fd, grep-rg]", first)

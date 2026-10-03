@@ -43,7 +43,7 @@ opens a `ws` URL has no command, and monitors a plugin declares itself are not c
 ## How to write the rule
 
 - One behavior per rule: split on "and"; a different message, alternative, action or mode is a different rule.
-- Narrowest matcher that separates the examples: `program`, `program` + `args`, `builtin`, `ast`, `regex` (Rust regex syntax: no backreferences or look-around).
+- Narrowest matcher that separates the examples: `program`, `program` + `args`, `ast`, `regex` (Rust regex syntax: no backreferences or look-around).
 - For a structural `ast` rule run `guardrails rule ast '<a command it must catch>'` and use the kinds it prints.
 - Anchor the `pattern` on the dangerous command; put its surroundings in a relation (`inside`, `has`, `follows`,
   `precedes`).
@@ -148,7 +148,7 @@ Read only the file that matches the shape you need.
 that must pass. Skipped when a description was passed.
 
 **1.b.1** Elaborate the rule. Use the narrowest matcher that separates the examples, stopping at the first that does:
-`program` (one name or a list), then `program` + `args`, then `builtin`, then an `ast` rule (a `pattern`, plus
+`program` (one name or a list), then `program` + `args`, then an `ast` rule (a `pattern`, plus
 `inside` / `has` when the question is about context such as "only when nested in a substitution, pipeline or loop"),
 then `regex`. Before writing an `ast` rule with relations, run `guardrails rule ast '<a command it must catch>'` and
 read the node kinds it prints; do not guess kinds. Write a `message` that names the
@@ -157,7 +157,7 @@ alternative (what to do instead). Derive the `id` from the intent (`no-pkill`); 
 A question about what a command is piped into is out of reach for `program`/`args`: use `ast` with `inside` when the
 shape is structural, `regex` for dataflow across commands (`regex` also fires inside heredocs and quoted text). The
 wrappers and shells themselves (`sudo`, `bash`) are programs too (`program: sudo` matches `sudo ls`). A rule with
-`program`, `args`, `builtin` or `match.ast` needs the ast-grep runtime, which guardrails installs by itself (every `guardrails` call ensures it first); if
+`program`, `args`, `regex` or `match.ast` needs the ast-grep runtime, which guardrails installs by itself (every `guardrails` call ensures it first); if
 `rule test` reports `cannot` for a command or prints a note that the engine failed, tell the user before going on
 (`guardrails engine status` shows the state); no rule, `regex` included, works while the engine fails.
 

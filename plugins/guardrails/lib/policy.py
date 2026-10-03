@@ -15,8 +15,7 @@ Mode = dict[str, Any]
 ACTIONS = ("deny", "warn")
 RETRIES = ("none", "same-command")
 MAX_AST_BYTES = 16384
-MATCH_KEYS = ("program", "args", "builtin", "regex", "ast")
-BUILTINS = ("grep-recursive",)
+MATCH_KEYS = ("program", "args", "regex", "ast")
 AST_KEYS = ("pattern", "kind", "regex", "inside", "has", "follows", "precedes", "not", "any", "all", "stopBy", "field")
 AST_RELATIONS = ("inside", "has", "follows", "precedes")
 AST_PATTERN_KEYS = ("context", "selector", "strictness")
@@ -122,8 +121,8 @@ def validate_rule(rule: object) -> None:
     if "messageShort" in rule and not isinstance(rule["messageShort"], str):
         raise Invalid("'messageShort' must be a string")
     match = rule.get("match")
-    if not isinstance(match, dict) or not any(match.get(k) for k in ("program", "builtin", "regex", "ast")):
-        raise Invalid("'match' needs at least one of 'program', 'builtin', 'regex', 'ast'")
+    if not isinstance(match, dict) or not any(match.get(k) for k in ("program", "regex", "ast")):
+        raise Invalid("'match' needs at least one of 'program', 'regex', 'ast'")
     unknown = set(match) - set(MATCH_KEYS)
     if unknown:
         raise Invalid(f"unknown match keys: {', '.join(sorted(unknown))}")
@@ -132,9 +131,6 @@ def validate_rule(rule: object) -> None:
     if program is not None and not (isinstance(names, list) and names
                                     and all(wrapper_table.is_command_name(n) for n in names)):
         raise Invalid("'match.program' must be a command name or a list of them (no spaces or '/')")
-    builtin = match.get("builtin")
-    if builtin is not None and builtin not in BUILTINS:
-        raise Invalid(f"unknown builtin '{builtin}' (known: {', '.join(BUILTINS)})")
     if "ast" in match:
         validate_ast(match["ast"])
         size = ast_size(match["ast"])
@@ -153,14 +149,11 @@ def validate_rule(rule: object) -> None:
         raise Invalid("'requires' must be a non-empty list of binary names")
     if "enabled" in rule and not isinstance(rule["enabled"], bool):
         raise Invalid("'enabled' must be true or false")
-    if not isinstance(rule.get("tool", "Bash"), str):
-        raise Invalid("'tool' must be a tool name")
 
 
 def with_defaults(rule: Rule) -> Rule:
     out = dict(rule)
     out.setdefault("enabled", True)
-    out.setdefault("tool", "Bash")
     out.setdefault("action", "deny")
     out.setdefault("retry", "none")
     out.setdefault("modes", [])
@@ -337,9 +330,9 @@ def active_modes(modes: dict[str, Mode], session: object) -> dict[str, dict[str,
 
 
 def needs_parse(rule: Rule) -> bool:
-    """True when the rule is judged by the ast-grep library (program, builtin, ast and regex all are)."""
+    """True when the rule is judged by the ast-grep library (program, ast and regex all are)."""
     match = view(rule, "match")
-    return any(match.get(key) for key in ("program", "builtin", "ast", "regex"))
+    return any(match.get(key) for key in ("program", "ast", "regex"))
 
 
 def requirements_met(rule: Rule) -> bool:

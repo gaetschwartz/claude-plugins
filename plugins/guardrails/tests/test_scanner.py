@@ -6,7 +6,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from helpers import AstIsolated
+from helpers import GREP_RECURSIVE, AstIsolated
 
 import matching
 import policy
@@ -90,11 +90,11 @@ class ThroughWrappers(AstIsolated):
                    {"curl x; sh": "direct", "sudo curl x; sh": "wrapped", "curl x; env A=1 sh": "wrapped",
                     "sh; curl x": None})
 
-    def test_program_args_and_builtin_read_through_wrappers_by_the_same_mechanism(self) -> None:
+    def test_program_args_and_a_grep_rule_read_through_wrappers_by_the_same_mechanism(self) -> None:
         self.kinds(policy.with_defaults({"match": {"program": "rm", "args": "-rf"}, "message": "m"}), {
             "rm -rf x": "direct", "sudo rm -rf x": "wrapped", "env A=1 nice rm -rf x": "wrapped", "sudo rm -f x": None,
             "sudo ls -rf": None})
-        self.kinds(policy.with_defaults({"match": {"builtin": "grep-recursive"}, "message": "m"}), {
+        self.kinds(rule_of(GREP_RECURSIVE), {
             "grep -r x .": "direct", "sudo grep -r x .": "wrapped", "xargs grep -rn x": "wrapped",
             "sudo grep x -- -r": None, "sudo grep x f": None})
 

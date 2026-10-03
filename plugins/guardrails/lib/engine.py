@@ -105,17 +105,12 @@ def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode],
 TOOLS = ("Bash", "Monitor")
 
 
-def applies(rule: policy.Rule, tool: str) -> bool:
-    """A rule for Bash also covers Monitor, whose command the shell runs the same way."""
-    return rule.get("tool") == tool or (tool == "Monitor" and rule.get("tool") == "Bash")
-
-
-def candidates_of(rules: dict[str, policy.Rule], tool: str = "Bash") -> dict[str, policy.Rule]:
-    """The rules that could act on this command here: enabled, for the tool, valid, binaries installed."""
+def candidates_of(rules: dict[str, policy.Rule]) -> dict[str, policy.Rule]:
+    """The rules that could act on this command here: enabled, valid, binaries installed."""
     out: dict[str, policy.Rule] = {}
     for rid in sorted(rules):
         rule = rules[rid]
-        if rule.get("enabled") is not True or not applies(rule, tool):
+        if rule.get("enabled") is not True:
             continue
         try:
             policy.validate_rule(rule)
@@ -126,9 +121,9 @@ def candidates_of(rules: dict[str, policy.Rule], tool: str = "Bash") -> dict[str
     return out
 
 
-def oversized_of(rules: dict[str, policy.Rule], tool: str = "Bash") -> list[str]:
-    """Enabled rules for this tool whose match.ast is over the size limit (the hook skips them and says so)."""
-    return [rid for rid in sorted(rules) if rules[rid].get("enabled") is True and applies(rules[rid], tool)
+def oversized_of(rules: dict[str, policy.Rule]) -> list[str]:
+    """Enabled rules whose match.ast is over the size limit (the hook skips them and says so)."""
+    return [rid for rid in sorted(rules) if rules[rid].get("enabled") is True
             and (ast := policy.ast_of(rules[rid])) and policy.ast_size(ast) > policy.MAX_AST_BYTES]
 
 
@@ -152,7 +147,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
              session: Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
              warnings: tuple[str, ...] = (), wrappers: wrapper_table.Names | None = None,
              pre: Evaluation | None = None,
-             tool: str = "Bash") -> tuple[Output | None, bool]:
+) -> tuple[Output | None, bool]:
     active = policy.active_modes(modes, session)
     shown = session.get("shown")
     shown_before = {x for x in shown if isinstance(x, str)} if isinstance(shown, list) else set()
@@ -165,13 +160,13 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     denies: list[tuple[str, policy.Rule]] = []
     warns: list[tuple[str, policy.Rule]] = []
 
-    for rid in oversized_of(rules, tool):
+    for rid in oversized_of(rules):
         text = (f"guardrails: match.ast rule {rid} is larger than {policy.MAX_AST_BYTES // 1024} KiB and is skipped; "
                 "split it into several rules")
         if remember(session, "reported", digest(text)):
             changed = True
             notices.append(text)
-    candidates = candidates_of(rules, tool)
+    candidates = candidates_of(rules)
     evaluation = pre if pre is not None and all(rid in pre.kinds for rid in candidates) \
         else judge(command, candidates, wrappers)
     agent_notes: list[str] = []
@@ -226,8 +221,8 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
         text, composed = compose(denies + warns, modes, session, shown_before, session_id, managed_ids)
         changed = changed or composed
         if refused:
-            refusal = (f"[guardrails] Denied: {evaluation.refusal}. Rules that use program, args, builtin or match.ast "
-                       "cannot be evaluated on it. Split it up or put the content in a file.")
+            refusal = (f"[guardrails] Denied: {evaluation.refusal}. Rules cannot be evaluated on it. Split it up or put "
+                       "the content in a file.")
             text = "\n\n".join(filter(None, [refusal, text]))
         output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                         "permissionDecisionReason": text + extra}
@@ -289,7 +284,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
 
     sid = str(payload.get("session_id") or "nosession")
     output: Output | None = None
-    pre = judge(command, candidates_of(layers(gstate)[0], tool), wrapper_layers(gstate))
+    pre = judge(command, candidates_of(layers(gstate)[0]), wrapper_layers(gstate))
     stateless = not gstate_ok
     if gstate_ok:
         try:
@@ -301,7 +296,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
                 session = session_raw if isinstance(session_raw, dict) else {}
                 rules, modes = layers(gstate)
                 output, changed = evaluate(command, rules, modes, session, sid, managed_ids, warnings,
-                                           wrapper_layers(gstate), pre, tool)
+                                           wrapper_layers(gstate), pre)
                 if changed:
                     session["seenAt"] = store.now()
                     sessions[sid] = session
@@ -311,7 +306,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
             stateless = True
     if stateless:
         rules, modes = layers(gstate)
-        output, _ = evaluate(command, rules, modes, {}, sid, managed_ids, warnings, wrapper_layers(gstate), pre, tool)
+        output, _ = evaluate(command, rules, modes, {}, sid, managed_ids, warnings, wrapper_layers(gstate), pre)
     if output:
         json.dump(output, stdout)
 

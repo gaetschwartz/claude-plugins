@@ -18,7 +18,7 @@ def rule(**overrides: Any) -> dict[str, Any]:
 class Validate(unittest.TestCase):
     def test_minimal_rule_is_valid(self) -> None:
         policy.validate_rule(rule())
-        policy.validate_rule(rule(match={"builtin": "grep-recursive"}, requires=["rg"], messageShort="s"))
+        policy.validate_rule(rule(match={"ast": {"kind": "command"}}, requires=["rg"], messageShort="s"))
 
     def test_rejects_malformed(self) -> None:
         bad: list[Any] = [
@@ -41,7 +41,6 @@ class Validate(unittest.TestCase):
             rule(requires=[]),
             rule(enabled="false"),
             rule(messageShort=3),
-            rule(tool=5),
         ]
         for r in bad:
             with self.subTest(rule=r), self.assertRaises(policy.Invalid):
@@ -82,8 +81,8 @@ class Layering(unittest.TestCase):
 
     def test_project_only_rule_gets_defaults(self) -> None:
         eff = policy.effective_rules({}, {}, {"rules": {"p": rule()}})["p"]
-        self.assertEqual((eff["action"], eff["retry"], eff["enabled"], eff["tool"], eff["modes"]),
-                         ("deny", "none", True, "Bash", []))
+        self.assertEqual((eff["action"], eff["retry"], eff["enabled"], eff["modes"]),
+                         ("deny", "none", True, []))
 
     def test_project_disabled_drops_project_entries_only(self) -> None:
         g = {"rules": {"r": rule(action="warn")}}

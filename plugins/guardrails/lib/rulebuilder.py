@@ -1,4 +1,4 @@
-"""Typed ast-grep rules for a guardrails rule: the program/args/builtin shorthand and the user's own match.ast, made
+"""Typed ast-grep rules for a guardrails rule: the program/args shorthand and the user's own match.ast, made
 tolerant of how a command is spelled. All of it is data for ast-grep; nothing here reads shell syntax."""
 
 from __future__ import annotations
@@ -13,9 +13,6 @@ import policy
 if TYPE_CHECKING:
     from ast_grep_py import Config, Rule, SgNode
 
-GREPS = ("grep", "egrep", "fgrep")
-RECURSIVE_FLAG = (r"^(?:-[A-Za-z&&[^efmABCdD]]*[rR][A-Za-z]*|-drecurse|--recursive|--dereference-recursive"
-                  r"|--directories=recurse)$")
 PLAIN_NAME = frozenset(string.ascii_letters + string.digits + "_.+-")
 SUBSTITUTIONS = ("command_substitution", "process_substitution")
 ASSIGNMENT_OR_REDIRECT = ("variable_assignment", "file_redirect", "herestring_redirect", "heredoc_redirect")
@@ -41,26 +38,13 @@ def orphan_name(names: Sequence[str]) -> Rule:
     return {"any": [{"kind": "command_name", "regex": found, "inside": {"kind": "ERROR"}}, bare]}
 
 
-def recursive_flag() -> Rule:
-    """A recursive flag among grep's words, not after a `--` that follows the grep word."""
-    grep = name_regex(GREPS)
-    after_grep = {"follows": {"regex": grep, "stopBy": "end"}}
-    before_double_dash = {"not": {"follows": {"regex": "^--$", "stopBy": {"regex": grep}}}, **after_grep}
-    glued = {"regex": "^(?:-d|--directories)$", "precedes": {"regex": "^recurse$"}}
-    return {"any": [{"has": {"regex": RECURSIVE_FLAG, **before_double_dash}},
-                    {"has": {**glued, **before_double_dash}}]}
-
-
 def shorthand(match: dict[str, Any]) -> Rule | None:
-    """The rule for program/args/builtin, or None when the rule has none of them."""
-    programs, builtin = policy.programs_of({"match": match}), match.get("builtin")
-    if not programs and not builtin:
+    """The rule for program/args, or None when the rule has no program."""
+    programs = policy.programs_of({"match": match})
+    if not programs:
         return None
     extra: list[Rule] = [{"regex": match["args"]}] if match.get("args") else []
-    if builtin:
-        extra.append(recursive_flag())
-    name_sets = [names for names in (programs, list(GREPS) if builtin else []) if names]
-    rule: Rule = {"all": [command_named(names) for names in name_sets] + extra}
+    rule: Rule = {"all": [command_named(programs), *extra]}
     return rule if extra else {"any": [rule, orphan_name(programs)]}
 
 

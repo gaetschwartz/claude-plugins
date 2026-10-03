@@ -7,7 +7,7 @@ import re
 import unittest
 from unittest import mock
 
-from helpers import ROOT, AstIsolated, render
+from helpers import GREP_RECURSIVE, ROOT, AstIsolated, render
 
 PRESENTATION = (ROOT / "references" / "presentation.md").read_text()
 SPAN = re.compile(r"^- [✗✓] (?:⚠ )?(?P<fence>`+)(?P<body>.*?)(?P=fence)(?!`) ", re.MULTILINE)
@@ -226,13 +226,10 @@ class Card(AstIsolated):
         both = self.card({"match": {"program": "x", "args": "-f", "regex": "zz"}, "message": "m"}, [{"cmd": "x"}])
         self.assertTrue(both.rstrip("\n").endswith("**Raw** `zz`"))
         self.assertNotIn("**Raw**", self.card(PKILL, [{"cmd": "ls"}]))
-        builtin = self.card({"match": {"builtin": "grep-recursive"}, "message": "m"}, [{"cmd": "grep -r x"}])
-        self.assertIn("**Match** builtin = `grep-recursive`", builtin)
-        self.assertNotIn("**Raw**", builtin)
 
     def test_match_line_shows_every_field(self) -> None:
-        rule = {"match": {"program": "grep", "args": "-r", "builtin": "grep-recursive", "regex": "zz"}, "message": "m"}
-        self.assertIn("**Match** program = `grep`; args = `-r`; regex = `zz`; builtin = `grep-recursive`\n",
+        rule = {"match": {"program": "grep", "args": "-r", "regex": "zz"}, "message": "m"}
+        self.assertIn("**Match** program = `grep`; args = `-r`; regex = `zz`\n",
                       self.card(rule, [{"cmd": "ls"}]))
 
     def test_intent_only_when_given(self) -> None:
@@ -605,7 +602,7 @@ class WrappedForms(AstIsolated):
         import policy
 
         rules = [{"match": {"program": "pkill"}}, {"match": {"regex": r"curl [^|]*\| *sh"}},
-                 {"match": {"program": "grep", "args": "-r"}}, {"match": {"builtin": "grep-recursive"}},
+                 {"match": {"program": "grep", "args": "-r"}}, {"match": {"ast": GREP_RECURSIVE}},
                  {"match": {"program": "pkill", "regex": "zz"}}]
         commands = ["pkill x", "sudo pkill x", "echo foo$(pkill x)", "cat <(pkill x)", "a | pkill x", "curl x | sh",
                     "bash -c 'curl y | sh'", "grep -r x", "grep x", "grep -R y .", "echo pkill", "man pkill",

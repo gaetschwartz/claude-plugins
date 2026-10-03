@@ -4,7 +4,7 @@ import shlex
 import unittest
 from typing import Any
 
-from helpers import AstIsolated
+from helpers import GREP_RECURSIVE, AstIsolated
 
 import matching
 import policy
@@ -94,8 +94,8 @@ class Matching(AstIsolated):
         rule = rule_of(program="kill", regex="zzz")
         self.kinds(rule, {"kill 1": "direct", "echo zzz": "direct", "ls": None})
 
-    def test_builtin_grep_recursive(self) -> None:
-        self.kinds(rule_of(builtin="grep-recursive"), {
+    def test_the_recursive_grep_rule_of_the_modern_cli_preset(self) -> None:
+        self.kinds(rule_of(ast=GREP_RECURSIVE), {
             "grep -r foo .": "direct", "grep -rn foo .": "direct", "grep -nr foo .": "direct", "grep -R foo .": "direct",
             "egrep -r foo .": "direct", "fgrep -rl foo .": "direct", "grep --recursive foo .": "direct",
             "grep --dereference-recursive foo": "direct", "grep -d recurse foo .": "direct",
@@ -107,10 +107,6 @@ class Matching(AstIsolated):
             "grep -d skip foo": None, "grep foo -- -r": None, "rg -r x": None, "git grep -n x": None,
             "echo grep -r": None, "grep -A3 foo file": None,
         })
-
-    def test_builtin_with_program_and_args_is_an_and(self) -> None:
-        self.kinds(rule_of(builtin="grep-recursive", args="foo"), {"grep -r foo .": "direct", "grep -r bar .": None})
-        self.kinds(rule_of(program="egrep", builtin="grep-recursive"), {"egrep -r x": "direct", "grep -r x": None})
 
     def test_ast_alternatives_and_regex_combine(self) -> None:
         rule = rule_of(program="kill", ast={"pattern": f"{K} $$$"}, regex="zzz")
@@ -245,7 +241,7 @@ class PatternShapes(AstIsolated):
             self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected, command)
 
     def test_wrapper_options_are_not_grep_options(self) -> None:
-        rule = rule_of(builtin="grep-recursive")
+        rule = rule_of(ast=GREP_RECURSIVE)
         for command, expected in {"find . | xargs -r grep -l foo": None, "xargs -0 -r grep foo": None,
                                   "xargs -r -- grep x": None, "sudo -r role grep foo f": None,
                                   "xargs -r grep -r foo": "wrapped", "sudo -r role grep -rn foo .": "wrapped",

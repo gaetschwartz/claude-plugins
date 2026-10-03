@@ -24,7 +24,7 @@ from verdict import Evaluation, limit_reason
 
 PRESETS_DIR = os.path.join(os.path.dirname(store.HERE), "presets")
 SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description",
-            "program", "args", "builtin", "regex", "ast", "requires")
+            "program", "args", "regex", "ast", "requires")
 SCOPES = ("global", "project", "managed")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
@@ -551,10 +551,10 @@ def example_list(data: Any) -> list[Example]:
 
 
 def cannot_evaluate_note(ev: Evaluation) -> str:
-    """Why this rule's program/args/builtin/ast part could not be judged, when it could not."""
+    """Why this rule's program/args/regex/ast part could not be judged, when it could not."""
     if ev.refusal:
         return f"cannot evaluate the parsing part of this rule: {ev.refusal}; the hook denies such a command"
-    return (f"cannot evaluate the parsing part of this rule (program, args, builtin, match.ast): the engine failed "
+    return (f"cannot evaluate the parsing part of this rule (program, args, regex, match.ast): the engine failed "
             f"({ev.failure}); the hook allows the command and warns the session")
 
 
@@ -935,7 +935,7 @@ def build_parser() -> argparse.ArgumentParser:
                           "its wrappers and shell strings expose")
     ast.add_argument("command", metavar="CMD")
 
-    wrapper = verbs.add_parser("wrapper", help="commands whose own words program/builtin rules look through (sudo, env, xargs, ...)"
+    wrapper = verbs.add_parser("wrapper", help="commands whose own words rules look through (sudo, env, xargs, ...)"
                                ).add_subparsers(dest="op", required=True)
     wadd = wrapper.add_parser("add", parents=[common, scoped], help="add a wrapper name")
     wadd.add_argument("name")
@@ -965,7 +965,7 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("name")
     install.add_argument("--only", help="comma-separated rule ids to install")
 
-    engine = verbs.add_parser("engine", help="the managed runtime (uv, Python, ast-grep-py) behind program, args, builtin "
+    engine = verbs.add_parser("engine", help="the managed runtime (uv, Python, ast-grep-py) behind rules "
                               "and match.ast; installed automatically, so this is for diagnosis (not a "
                               "configuration change, so --as-user does not apply)").add_subparsers(dest="op",
                                                                                                      required=True)

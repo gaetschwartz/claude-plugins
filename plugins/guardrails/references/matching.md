@@ -6,10 +6,10 @@ variants, shell strings), `lib/bounded.py` (the hard deadline) and `lib/policy.p
 test` before stating it, but know what it checks.
 
 ast-grep does all the lexing and parsing, in process through the `ast-grep-py` library: guardrails writes no shell parser.
-`program`, `args`, `builtin` and `match.ast` become typed ast-grep rules and are matched on the tree-sitter Bash parse of the
+`program`, `args`, `regex` and `match.ast` become typed ast-grep rules and are matched on the tree-sitter Bash parse of the
 command as written, of its wrapper variants and of each shell string; `regex` reads the raw text of the whole command with ast-grep's own regex engine, inside the same bounded checker.
 
-Matcher ladder, narrowest first: `program`, then `program` + `args`, then `builtin`, then an `ast` rule (a `pattern`,
+Matcher ladder, narrowest first: `program`, then `program` + `args`, then an `ast` rule (a `pattern`,
 plus `inside` / `has` when context matters), then `regex`. Before writing an `ast` rule with relations, run
 `guardrails rule ast '<command>'` to see the node kinds.
 
@@ -28,7 +28,7 @@ substitution, a pipeline member), as opposed to being the command the rule names
 it is never tagged `wrapped`, and a regex hit wins over a look-through hit on the same command. A row that could not be judged is listed
 under **Not evaluated**. Paste the card; do not retell it.
 
-## `program`, `args`, `builtin`
+## `program`, `args`
 
 These compile to ast-grep rules over the parse tree. The matched node is a `command`; its name must be one of the
 program names, written however the shell allows a plain name: `pkill`, `/usr/bin/pkill`, `'pkill'`, `"pkill"`, after
@@ -78,19 +78,14 @@ positives.
   programs too: `program: sudo` matches `sudo ls`.
 - `match.args`: a Rust regex (ast-grep's `regex`, so no look-around or back-references) over the matched command's whole
   text, name included (for a hit behind a wrapper: the command as the variant reads it, without the wrapper's words), so
-  anchor with `(^|\s)`. It narrows `program` or `builtin` (AND); on its own,
-  or next to `regex` only, it has no effect and a rule whose `match` has none of `program`, `builtin`, `regex`, `ast`
-  is rejected.
-- `match.builtin`: `grep-recursive`: a command named grep, egrep or fgrep (behind a wrapper too) with a recursive flag
-  among its words: `-r`, `-R`, a cluster such as `-rn` or `-nr` (not when an option that takes a value, `e f m A B C d D`, comes
-  first: `-er` is pattern `r`), `--recursive`, `--dereference-recursive`, `--directories=recurse`, `-d recurse`,
-  `--directories recurse`. Words after `--` are ignored. ANDed with `program` and `args`.
+  anchor with `(^|\s)`. It narrows `program` (AND); on its own,
+  or next to `regex` only, it has no effect and a rule whose `match` has none of `program`, `regex`, `ast` is rejected.
 - `match.regex`: a Rust regex (ast-grep's engine: linear time, no backreferences or look-around; `rule add/set/test` reject
   those with exit 2, and a state rule that does not compile is skipped and named) searched in the command's whole text, quotes,
   heredocs and pipelines included. The text is the parse root's: it starts at the first token (leading blanks are not part of
   it) and `$` matches only at its very end, not before a trailing newline.
 - `match.ast`: an ast-grep rule object over the parsed syntax tree; see below.
-- The matchers are alternatives: the rule fires when the program/args/builtin part matches OR `regex` matches OR `ast`
+- The matchers are alternatives: the rule fires when the program/args part matches OR `regex` matches OR `ast`
   matches; `program` and `args` are ANDed with each other.
 
 ## `match.ast`: the syntax tree matcher
@@ -287,8 +282,7 @@ imported or fails its self-test, rules cannot be evaluated, so the hook allows t
 `rule test` and `status` say the same: a rule that needs the engine is reported as `cannot` evaluate, and
 `status --problems` lists the rules that are not enforced and why.
 
-Bash and Monitor: the hook matches `Bash|Monitor`. A rule for `Bash` applies to a Monitor command too (a rule with
-`"tool": "Monitor"` applies to Monitor only), retry acknowledgements and warn-once work the same, and a Monitor call
+Bash and Monitor: the hook matches `Bash|Monitor`. Every rule applies to a Monitor command too, retry acknowledgements and warn-once work the same, and a Monitor call
 with no `command` (only a `ws` URL) is ignored. Monitors declared by a plugin start without a tool call and are not
 covered.
 
@@ -347,16 +341,15 @@ Check these in order when a command the matcher selects still runs:
 5. A listed mode is active (switched on persistently, or for this session), so the rule is suspended.
 6. `retry: same-command` and the identical command was already blocked once this session.
 7. `action: warn`: the command runs, the agent only gets the message.
-8. The rule is invalid (bad regex, unknown builtin, an `ast` rule that does not compile): a global or project rule is
+8. The rule is invalid (an unknown `match` key, a regex or an `ast` rule that does not compile): a global or project rule is
    skipped and only `status` reports it (a non-compiling rule also warns once per session); an invalid managed
    rule is skipped with a warning.
 9. The runtime was not installed yet (the first seconds of the first session, or after a failed install), or the rule uses
-   `program`, `args`, `builtin` or `match.ast` and the engine failed on this call: the command was allowed and the session
+   `program`, `args`, `regex` or `match.ast` and the engine failed on this call: the command was allowed and the session
    got a notice.
 10. The command is one of the documented limits: an obfuscated or dynamic name, a wrapper the list does not know, a script
     file, a heredoc substitution the parser leaves as text.
-11. The rule's `tool` is not `Bash`.
-12. A lower layer cannot loosen a higher one: a global or project entry with `enabled: false` or `action: warn` over a
+11. A lower layer cannot loosen a higher one: a global or project entry with `enabled: false` or `action: warn` over a
     managed or global rule has no effect, so a rule that "should have been turned off" may still be enforced.
 
 Hook failures never pass silently: if the hook itself errors, the `regex` rules still apply and the user is told.

@@ -30,7 +30,7 @@ class Presets(AstIsolated):
             self.assertNotIn(leftover, sheet)
         self.assertIn("{which:fd|fdfind} -e py", sheet)
         self.assertEqual(rules["find-fd"]["requires"], ["fd", "fdfind"])
-        self.assertEqual(rules["grep-rg"]["match"], {"builtin": "grep-recursive"})
+        self.assertEqual(set(rules["grep-rg"]["match"]), {"ast"})
 
     def test_list_and_show(self) -> None:
         code, out, _ = self.cli("preset", "list")

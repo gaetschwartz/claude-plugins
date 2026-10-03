@@ -32,7 +32,6 @@ Take the first rung that separates your examples. Each rung down costs precision
 |---|---|---|
 | `program` | the command name alone decides | `program: pkill` |
 | `program` + `args` | one command's own words decide (regex over its arguments) | `program: docker`, `args: "\\bsystem prune\\b"` |
-| `builtin` | a named shape the engine knows (`grep-recursive`) | `builtin: grep-recursive` |
 | `ast` | structure decides: nesting, pipelines, order, a flag on one command among several, a wrapper or shell itself | [ast/index.md](ast/index.md) |
 | `regex` | only raw text can say it, across nodes the tree cannot relate | text of one shell line, or unparseable input |
 

@@ -9,7 +9,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from helpers import HOOKS, AstIsolated
+from helpers import GREP_RECURSIVE, HOOKS, AstIsolated
 
 import bounded
 import engine
@@ -76,7 +76,7 @@ class Layering(AstIsolated):
 
     def test_adding_names_never_reduces_detection(self) -> None:
         rules = {"p": PROGRAM_RULE, "s": policy.with_defaults({"match": {"program": "strings"}, "message": "m"}),
-                 "g": policy.with_defaults({"match": {"builtin": "grep-recursive"}, "message": "m"})}
+                 "g": policy.with_defaults({"match": {"ast": GREP_RECURSIVE}, "message": "m"})}
         corpus = [*DENY, *ALLOW[:20], f"sudo -E {K} x", f"nohup {K} x", f"timeout 5 {K} a", f"bash -c '{K} x'",
                   "grep -r foo .", "sudo grep -rn foo .", "strings -n 4 /bin/ls"]
         base = {c: matching.evaluate(c, rules).kinds for c in corpus}
@@ -110,7 +110,7 @@ class LoudAndAllow(AstIsolated):
     def test_a_failed_self_test_allows_with_its_reason_once_per_session_and_names_the_rules(self) -> None:
         self.break_engine("it misparsed a test command")
         text = self.both_channels(self.hook(f"strings x; {K} y", "a"))
-        for needle in ("rules engine failed", "it misparsed a test command", "program, args, builtin or match.ast",
+        for needle in ("rules engine failed", "it misparsed a test command", "could not be checked",
                        "Affected rules: ast, pipe, strings", "Tell the user", "guardrails engine status"):
             self.assertIn(needle, text)
         self.assertNotIn("engine install", text)
@@ -357,12 +357,6 @@ class MonitorCoverage(AstIsolated):
                                                "retry": "same-command"}}})
         self.assertTrue(is_denied(self.hook("sed -i x", "sh", tool="Bash")))
         self.assertIsNone(self.hook("sed -i x", "sh", tool="Monitor"))
-
-    def test_rules_for_monitor_only(self) -> None:
-        self.put(self.gpath, {"rules": {"m": {"match": {"program": "sed"}, "message": "Monitor only.",
-                                               "tool": "Monitor"}}})
-        self.assertIsNone(self.hook("sed x", "b", tool="Bash"))
-        self.assertTrue(is_denied(self.hook("sed x", "m", tool="Monitor")))
 
     def test_hooks_json_matches_bash_and_monitor(self) -> None:
         hooks = json.loads((HOOKS / "hooks.json").read_text())["hooks"]

@@ -82,7 +82,7 @@ class Evaluation:
             managed_note = f" {fail_open} of them are MANAGED rules, which fail open too." if fail_open else ""
             out.append((FAILED_PREFIX + "engine",
                         (f"[guardrails plugin notice] The rules engine failed on this command ({self.failure}), so rules "
-                        "that use program, args, builtin or match.ast could not be checked and the command was allowed. "
+                        "could not be checked and the command was allowed."
                         f"{listed}{managed_note} Tell the user if this keeps "
                         "happening (this notice repeats every 10 minutes while it does); `guardrails engine status` "
                         "shows the runtime.")))
