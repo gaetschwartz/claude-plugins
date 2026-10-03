@@ -128,7 +128,7 @@ class Units(AstIsolated):
 
         rule = policy.with_defaults({"match": {"program": K}, "message": "m"})
         with mock.patch.object(scanner, "SgRoot", spy):
-            matching.compute(command, {"r": rule}, wrappers.DEFAULTS, True)
+            matching.compute(command, {"r": rule}, wrappers.DEFAULTS)
         return count[0] - 1
 
     def test_parse_count_per_command_shape(self) -> None:

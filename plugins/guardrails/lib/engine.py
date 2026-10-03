@@ -132,6 +132,22 @@ def oversized_of(rules: dict[str, policy.Rule], tool: str = "Bash") -> list[str]
             and (ast := policy.ast_of(rules[rid])) and policy.ast_size(ast) > policy.MAX_AST_BYTES]
 
 
+def report_broken() -> None:
+    """The library crashes even on a trivial command: mark the runtime broken and rebuild it in the background."""
+    import bootstrap
+    import hostcli
+
+    bootstrap.mark_broken(bootstrap.data_dir())
+    hostcli.spawn_ensure()
+
+
+def judge(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_table.Names | None) -> Evaluation:
+    evaluation = matching.evaluate(command, rules, wrappers)
+    if evaluation.runtime_broken:
+        report_broken()
+    return evaluation
+
+
 def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, policy.Mode],
              session: Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
              warnings: tuple[str, ...] = (), wrappers: wrapper_table.Names | None = None,
@@ -157,7 +173,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
             notices.append(text)
     candidates = candidates_of(rules, tool)
     evaluation = pre if pre is not None and all(rid in pre.kinds for rid in candidates) \
-        else matching.evaluate(command, candidates, wrappers)
+        else judge(command, candidates, wrappers)
     agent_notes: list[str] = []
     for key, warning in evaluation.warnings(managed_ids):
         if due(session, key):
@@ -273,7 +289,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
 
     sid = str(payload.get("session_id") or "nosession")
     output: Output | None = None
-    pre = matching.evaluate(command, candidates_of(layers(gstate)[0], tool), wrapper_layers(gstate))
+    pre = judge(command, candidates_of(layers(gstate)[0], tool), wrapper_layers(gstate))
     stateless = not gstate_ok
     if gstate_ok:
         try:

@@ -66,6 +66,7 @@ class Evaluation:
     failure: str | None = None
     refusal: str | None = None
     refusal_kind: Refusal | None = None
+    runtime_broken: bool = False
 
     def failure_kind(self) -> str:
         return str(self.refusal_kind) if self.refusal_kind else ("engine" if self.failure else "")

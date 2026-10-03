@@ -3,11 +3,13 @@ from __future__ import annotations  # noqa: I001
 import os
 import time
 import unittest
+from typing import Any
 from unittest import mock
 
 from helpers import AstIsolated, Isolated
 
 import bounded
+import engine
 import matching
 
 K = "pk" + "ill"
@@ -56,6 +58,13 @@ class Call(unittest.TestCase):
         for work in (crash, boom):
             with self.subTest(work=work.__name__):
                 self.assertEqual(bounded.call(work, 5).outcome, bounded.Outcome.CRASHED)
+
+    def test_an_unreadable_answer_is_garbled_not_a_crash(self) -> None:
+        class Unpicklable:
+            def __reduce__(self) -> tuple[Any, ...]:
+                return (int, ("not a number",))
+
+        self.assertEqual(bounded.call(Unpicklable, 5).outcome, bounded.Outcome.GARBLED)
 
     def test_the_parent_keeps_no_state_from_the_child(self) -> None:
         box: list[int] = []
@@ -109,7 +118,7 @@ class Crashes(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         self.put(self.gpath, {"rules": {"no-kill": {"match": {"program": K}, "message": "No kill."}}})
-        self.broken = mock.patch.object(matching, "REPORT_BROKEN", mock.Mock())
+        self.broken = mock.patch.object(engine, "report_broken", mock.Mock())
         self.reported = self.broken.start()
         self.addCleanup(self.broken.stop)
 
@@ -117,7 +126,7 @@ class Crashes(AstIsolated):
         return mock.patch.object(bounded, "call", side_effect=list(results))
 
     def test_a_command_that_crashes_a_healthy_parser_is_denied_alone(self) -> None:
-        crash, ok = bounded.Result(bounded.Outcome.CRASHED), bounded.Result(bounded.Outcome.DONE, "ok")
+        crash, ok = bounded.Result(bounded.Outcome.CRASHED), bounded.Result(bounded.Outcome.DONE, True)
         with self.sequence(crash, ok):
             out = self.hook("ls")
         assert out is not None

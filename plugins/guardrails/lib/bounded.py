@@ -1,78 +1,60 @@
 """Run a function in a forked child that is killed at a deadline.
 
-A native call into ast-grep holds the GIL, so neither a signal nor a watchdog thread can interrupt it; a child
-process can be killed whatever it is doing, and the parent always gets control back.
+A native call into ast-grep holds the GIL, so neither a signal nor a watchdog thread can interrupt it; a child process
+can be killed whatever it is doing, and the parent always gets control back.
 """
 
 from __future__ import annotations
 
-import contextlib
+import multiprocessing
 import os
 import resource
-import select
-import signal
-import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from enum import StrEnum
+from multiprocessing.connection import Connection
 
 
 class Outcome(StrEnum):
     DONE = "done"
     TIMEOUT = "timeout"
     CRASHED = "crashed"
-    BROKEN = "broken"
+    GARBLED = "garbled"
 
 
 @dataclass(frozen=True, slots=True)
-class Result:
+class Result[T]:
     outcome: Outcome
-    payload: str = ""
+    payload: T | None = None
 
 
-def child_main(work: Callable[[], str], writer: int, seconds: float) -> None:
-    """In the child: cap CPU time (so an orphan cannot spin on), compute, write the answer, leave without cleanup."""
-    status = 1
+def child_main[T](work: Callable[[], T], tx: Connection, seconds: float) -> None:
+    """In the child: cap CPU time (so an orphan cannot spin on), compute, send the answer, never print a traceback."""
     try:
         cap = int(seconds) + 2
         resource.setrlimit(resource.RLIMIT_CPU, (cap, cap))
-        data = work().encode()
-        while data:
-            data = data[os.write(writer, data):]
-        status = 0
-    finally:
-        os._exit(status)
+        tx.send(work())
+    except BaseException:  # noqa: BLE001
+        os._exit(1)
 
 
-def call(work: Callable[[], str], seconds: float) -> Result:
-    """The string `work` returns, or TIMEOUT when it takes longer than `seconds`, CRASHED when the child dies."""
-    reader, writer = os.pipe()
-    pid = os.fork()
-    if pid == 0:
-        os.close(reader)
-        child_main(work, writer, seconds)
-    os.close(writer)
-    end = time.monotonic() + seconds
-    chunks: list[bytes] = []
+def call[T](work: Callable[[], T], seconds: float) -> Result[T]:
+    """What `work` returns, or TIMEOUT after `seconds`, CRASHED when the child dies, GARBLED for an unreadable answer."""
+    context = multiprocessing.get_context("fork")
+    rx, tx = context.Pipe(duplex=False)
+    proc = context.Process(target=child_main, args=(work, tx, seconds), daemon=True)
+    proc.start()
+    tx.close()
     try:
-        while True:
-            left = end - time.monotonic()
-            if left <= 0 or not select.select([reader], [], [], left)[0]:
-                os.kill(pid, signal.SIGKILL)
-                os.waitpid(pid, 0)
-                return Result(Outcome.TIMEOUT)
-            chunk = os.read(reader, 1 << 16)
-            if not chunk:
-                break
-            chunks.append(chunk)
-    except BaseException:
-        with contextlib.suppress(ProcessLookupError):
-            os.kill(pid, signal.SIGKILL)
-        os.waitpid(pid, 0)
-        raise
+        if not rx.poll(seconds):
+            return Result(Outcome.TIMEOUT)
+        try:
+            return Result(Outcome.DONE, rx.recv())
+        except EOFError:
+            return Result(Outcome.CRASHED)
+        except Exception:  # noqa: BLE001
+            return Result(Outcome.GARBLED)
     finally:
-        os.close(reader)
-    _, status = os.waitpid(pid, 0)
-    if status != 0:
-        return Result(Outcome.CRASHED)
-    return Result(Outcome.DONE, b"".join(chunks).decode())
+        proc.kill()
+        proc.join()
+        rx.close()

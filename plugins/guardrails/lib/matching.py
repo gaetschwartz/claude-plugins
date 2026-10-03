@@ -6,8 +6,8 @@ be interrupted and a hook that runs out of time lets the command through.
 
 from __future__ import annotations
 
-import json
-from typing import TYPE_CHECKING, TypedDict
+from dataclasses import dataclass, field
+from typing import TYPE_CHECKING, assert_never
 
 import bounded
 import policy
@@ -26,30 +26,21 @@ class EngineError(Exception):
     """The ast-grep library is not usable here."""
 
 
-class Wire(TypedDict):
-    kinds: dict[str, str | None]
-    invalid: dict[str, str]
-    limit: str | None
-    failure: str | None
+@dataclass(frozen=True, slots=True)
+class Computed:
+    """What the checker child sends back: every rule's verdict on one command."""
+
+    kinds: dict[str, Kind | None]
+    invalid: dict[str, str] = field(default_factory=dict)
+    limit: Limit | None = None
+    failure: str | None = None
 
 
-def probe() -> str:
-    """In a fresh child: does the library handle a trivial command? ("ok" or "bad")"""
+def probe() -> bool:
+    """In a fresh child: does the library handle a trivial command?"""
     import scanner
 
-    return "ok" if scanner.self_test() is None else "bad"
-
-
-def report_broken() -> None:
-    """The library crashes even on a trivial command: mark the runtime broken and rebuild it in the background."""
-    import bootstrap
-    import hostcli
-
-    bootstrap.mark_broken(bootstrap.data_dir())
-    hostcli.spawn_ensure()
-
-
-REPORT_BROKEN = report_broken
+    return scanner.self_test() is None
 
 
 def parseable(command: str) -> str:
@@ -63,34 +54,21 @@ def regexes_of(rules: dict[str, policy.Rule]) -> dict[str, Config]:
     return {rid: config for rid, rule in rules.items() if (config := rulebuilder.regex_config(rule)) is not None}
 
 
-def compute(command: str, rules: dict[str, policy.Rule], names: wrapper_table.Names, parse: bool) -> Wire:
-    """Every rule's verdict on one command."""
-    kinds: dict[str, str | None] = dict.fromkeys(rules)
-    wire: Wire = {"kinds": kinds, "invalid": {}, "limit": None, "failure": None}
-    parsed = {rid: rule for rid, rule in rules.items() if policy.needs_parse(rule)}
-    if not parsed or not parse:
-        return wire
+def compute(command: str, rules: dict[str, policy.Rule], names: wrapper_table.Names) -> Computed:
+    """Every rule's verdict on one command; runs in the checker child."""
     try:
         import rulebuilder
         import scanner
     except ImportError as exc:
-        wire["failure"] = f"the ast-grep-py library cannot be imported ({type(exc).__name__})"
-        return wire
-    broken = scanner.self_test()
-    if broken is not None:
-        wire["failure"] = f"the ast-grep-py self-test failed: {broken}"
-        return wire
+        return Computed(dict.fromkeys(rules), failure=f"the ast-grep-py library cannot be imported ({type(exc).__name__})")
+    if (broken := scanner.self_test()) is not None:
+        return Computed(dict.fromkeys(rules), failure=f"the ast-grep-py self-test failed: {broken}")
     try:
-        result = scanner.Scanner({rid: rulebuilder.configs_of(rule) for rid, rule in parsed.items()}, names,
-                                 regexes_of(parsed)).run(parseable(command))
+        result = scanner.Scanner({rid: rulebuilder.configs_of(rule) for rid, rule in rules.items()}, names,
+                                 regexes_of(rules)).run(parseable(command))
     except Exception as exc:  # noqa: BLE001
-        wire["failure"] = f"unexpected error: {type(exc).__name__}"
-        return wire
-    for rid, kind in result.kinds(list(parsed)).items():
-        kinds[rid] = kind
-    wire["invalid"] = result.invalid
-    wire["limit"] = str(result.limit) if result.limit else None
-    return wire
+        return Computed(dict.fromkeys(rules), failure=f"unexpected error: {type(exc).__name__}")
+    return Computed(result.kinds(list(rules)), result.invalid, result.limit)
 
 
 def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_table.Names | None = None) -> Evaluation:
@@ -99,47 +77,47 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
     What could not be judged (`unevaluated`) and why (`failure`, `refusal`) is kept for the caller to report. Hits
     already found always stand. Never raises.
     """
-    ev = Evaluation()
+    ev = Evaluation(kinds=dict.fromkeys(rules))
     names = wrappers if wrappers is not None else wrapper_table.DEFAULTS
-    parsed = {rid for rid, rule in rules.items() if policy.needs_parse(rule)}
-    size = len(command.encode("utf-8", "replace"))
-    oversize = size > MAX_COMMAND and bool(parsed)
-    wire: Wire | None = None
-    ev.kinds = dict.fromkeys(rules)
+    parsed = {rid: rule for rid, rule in rules.items() if policy.needs_parse(rule)}
     if not parsed:
         return ev
-    try:
-        result = bounded.call(lambda: json.dumps(compute(command, rules, names, not oversize)), DEADLINE_SECONDS)
-        if result.outcome is bounded.Outcome.CRASHED:
-            healthy = bounded.call(probe, PROBE_SECONDS) == bounded.Result(bounded.Outcome.DONE, "ok")
-            result = result if healthy else bounded.Result(bounded.Outcome.BROKEN)
-    except OSError as exc:
-        ev.failure = f"the checker could not be started ({type(exc).__name__})"
-        ev.unevaluated = set(parsed)
-        return ev
-    match result.outcome:
-        case bounded.Outcome.DONE:
-            wire = json.loads(result.payload)
-        case bounded.Outcome.TIMEOUT:
-            ev.refusal = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "
-                          "split it up or write it to a script file and run that")
-            ev.refusal_kind = Refusal.TIMEOUT
-        case bounded.Outcome.CRASHED:
-            ev.refusal = "this command crashes the parser"
-            ev.refusal_kind = Refusal.CRASH
-        case bounded.Outcome.BROKEN:
-            REPORT_BROKEN()
-            ev.failure = "the ast-grep-py library crashes even on a trivial command; the runtime is being rebuilt"
-    if wire is not None:
-        ev.kinds = {rid: Kind(kind) if kind else None for rid, kind in wire["kinds"].items()}
-        ev.invalid = dict(wire["invalid"])
-        ev.failure = wire["failure"]
-        if wire["limit"]:
-            ev.refusal = f"command too complex to check (it {limit_reason(Limit(wire['limit']))})"
-            ev.refusal_kind = Refusal.COMPLEX
-    if oversize:
+    size = len(command.encode("utf-8", "replace"))
+    if size > MAX_COMMAND:
         ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND // 1024} KiB)"
         ev.refusal_kind = Refusal.OVERSIZE
+        ev.unevaluated = set(parsed)
+        return ev
+    try:
+        result = bounded.call(lambda: compute(command, parsed, names), DEADLINE_SECONDS)
+        if result.outcome is bounded.Outcome.CRASHED and bounded.call(probe, PROBE_SECONDS).payload is not True:
+            ev.runtime_broken = True
+    except OSError as exc:
+        ev.failure = f"the checker could not be started ({type(exc).__name__})"
+    else:
+        match result.outcome:
+            case bounded.Outcome.DONE:
+                done = result.payload
+                assert done is not None
+                ev.kinds |= done.kinds
+                ev.invalid = dict(done.invalid)
+                ev.failure = done.failure
+                if done.limit is not None:
+                    ev.refusal = f"command too complex to check (it {limit_reason(done.limit)})"
+                    ev.refusal_kind = Refusal.COMPLEX
+            case bounded.Outcome.TIMEOUT:
+                ev.refusal = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "
+                              "split it up or write it to a script file and run that")
+                ev.refusal_kind = Refusal.TIMEOUT
+            case bounded.Outcome.CRASHED if ev.runtime_broken:
+                ev.failure = "the ast-grep-py library crashes even on a trivial command; the runtime is being rebuilt"
+            case bounded.Outcome.CRASHED:
+                ev.refusal = "this command crashes the parser"
+                ev.refusal_kind = Refusal.CRASH
+            case bounded.Outcome.GARBLED:
+                ev.failure = "the checker answered with something unreadable"
+            case _:
+                assert_never(result.outcome)
     if ev.failure is not None or ev.refusal:
         ev.unevaluated = {rid for rid in parsed if ev.kinds.get(rid) is None}
     ev.unevaluated |= {rid for rid in ev.invalid if ev.kinds.get(rid) is None}
