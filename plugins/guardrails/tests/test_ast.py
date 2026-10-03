@@ -161,19 +161,42 @@ class RuleSize(AstIsolated):
 
 
 
+BAD_ASTS: dict[str, dict[str, Any]] = {
+    "an unknown key": {"bogus": 1}, "a wrong type": {"kind": 5}, "an empty relation": {"inside": "x"},
+    "a bad stopBy": {"inside": {"kind": "command"}, "stopBy": "sideways"}, "a bad pattern": {"pattern": {"selector": "x"}},
+    "no matcher": {"stopBy": "end"}, "an unknown kind": {"kind": "no_such_kind"}, "a bad list": {"any": [1]},
+}
+
+
 class Validation(AstIsolated):
-    def test_static_validation(self) -> None:
-        ok = {"pattern": "a $$$", "inside": {"kind": "pipeline", "stopBy": "end"}, "not": {"kind": "list"},
-              "any": [{"kind": "command"}], "all": [{"regex": "x"}], "follows": {"kind": "command", "field": "name"},
-              "precedes": {"kind": "word"}, "has": {"kind": "word", "stopBy": {"kind": "command"}}}
-        policy.validate_rule({"match": {"ast": ok}, "message": "m"})
-        policy.validate_rule({"match": {"ast": {"pattern": {"context": "a $$$", "selector": "command"}}},
-                              "message": "m"})
-        for ast in ({}, [], "x", {"pattern": ""}, {"pattern": 3}, {"bogus": 1}, {"kind": ""}, {"inside": "x"},
-                    {"any": []}, {"any": [1]}, {"all": "x"}, {"stopBy": "sideways"}, {"nthChild": 1}, {"matches": "x"},
-                    {"inside": {"range": {}}}, {"pattern": {"selector": "x"}}):
-            with self.subTest(ast=ast), self.assertRaises(policy.Invalid):
+    """ast-grep itself judges a match.ast rule: a bad one is refused when added and skipped when loaded."""
+
+    def test_a_bad_ast_rule_is_refused_at_add_time_with_ast_greps_message(self) -> None:
+        for name, ast in BAD_ASTS.items():
+            rule = json.dumps({"match": {"ast": ast}, "message": "m"})
+            for argv in (("rule", "add", "r", "--json", rule), ("rule", "test", "--json", rule, "x")):
+                with self.subTest(name, verb=argv[1]):
+                    code, _, err = self.cli(*argv)
+                    self.assertEqual(code, 2)
+                    self.assertIn("the rule does not compile: ", err)
+                    self.assertGreater(len(err.split("compile: ", 1)[1].strip()), 10)
+        self.assertFalse(self.gpath.exists())
+
+    def test_a_bad_ast_rule_in_state_is_skipped_with_a_warning_and_the_others_run(self) -> None:
+        for n, (name, ast) in enumerate(BAD_ASTS.items()):
+            self.put(self.gpath, {"rules": {"bad": {"match": {"ast": ast}, "message": "m"},
+                                            "good": {"match": {"program": "pkill"}, "message": "No."}}})
+            with self.subTest(name):
+                out = self.hook("pkill x", session=f"v{n}")
+                assert out is not None
+                self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+                self.assertIn("rule bad does not compile", out["systemMessage"])
+
+    def test_the_shape_of_match_ast_and_its_size_are_checked_before_ast_grep_sees_it(self) -> None:
+        for ast in ({}, [], "x", {"kind": "command", "regex": "x" * 20000}):
+            with self.subTest(ast=str(ast)[:20]), self.assertRaises(policy.Invalid):
                 policy.validate_rule({"match": {"ast": ast}, "message": "m"})
+        policy.validate_rule({"match": {"ast": {"pattern": "a $$$", "inside": {"kind": "pipeline"}}}, "message": "m"})
 
     def test_ast_alone_is_a_matcher(self) -> None:
         policy.validate_rule({"match": {"ast": {"kind": "command"}}, "message": "m"})
@@ -225,7 +248,7 @@ class Cli(AstIsolated):
         self.assertIn("does not compile", err)
         code, _, err = self.cli("rule", "set", "r", "--json", '{"ast": {"bogus": 1}}')
         self.assertEqual(code, 2)
-        self.assertIn("unsupported keys", err)
+        self.assertIn("unknown field `bogus`", err)
         self.assertEqual(self.cli("rule", "set", "r", "--json", '{"ast": {"pattern": "killall $$$"}}')[0], 0)
         self.assertEqual(self.get(self.gpath)["rules"]["r"]["match"]["ast"], {"pattern": "killall $$$"})
 

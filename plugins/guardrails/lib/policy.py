@@ -14,12 +14,8 @@ Mode = dict[str, Any]
 
 ACTIONS = ("deny", "warn")
 RETRIES = ("none", "same-command")
-MAX_AST_BYTES = 16384
+MAX_AST_BYTES = 16384  # bounds nesting too: ast-grep overflows its stack past about 4000 levels
 MATCH_KEYS = ("program", "args", "regex", "ast")
-AST_KEYS = ("pattern", "kind", "regex", "inside", "has", "follows", "precedes", "not", "any", "all", "stopBy", "field")
-AST_RELATIONS = ("inside", "has", "follows", "precedes")
-AST_PATTERN_KEYS = ("context", "selector", "strictness")
-AST_MAX_DEPTH = 12
 PLACEHOLDER = re.compile(r"\{which:([^{}]+)\}")
 
 
@@ -47,45 +43,6 @@ def modes_of(rule: Rule) -> list[str]:
 
 def _str_list(value: object) -> bool:
     return isinstance(value, list) and all(isinstance(x, str) and x for x in value)
-
-
-def validate_ast(node: object, path: str = "match.ast", depth: int = 0) -> None:
-    """Structural check of an ast-grep rule object (supported keys only); compiling it needs ast-grep itself."""
-    if depth > AST_MAX_DEPTH:
-        raise Invalid(f"'{path}' is nested too deeply")
-    if not isinstance(node, dict) or not node:
-        raise Invalid(f"'{path}' must be a non-empty object")
-    unknown = set(node) - set(AST_KEYS)
-    if unknown:
-        raise Invalid(f"'{path}' has unsupported keys: {', '.join(sorted(unknown))} (supported: {', '.join(AST_KEYS)})")
-    pattern = node.get("pattern")
-    if "pattern" in node:
-        if isinstance(pattern, dict):
-            if not isinstance(pattern.get("context"), str) or set(pattern) - set(AST_PATTERN_KEYS) \
-                    or not all(isinstance(v, str) for v in pattern.values()):
-                raise Invalid(f"'{path}.pattern' object needs a string 'context' and only "
-                              f"{', '.join(AST_PATTERN_KEYS)}")
-        elif not isinstance(pattern, str) or not pattern.strip():
-            raise Invalid(f"'{path}.pattern' must be a non-empty string or a {{context, selector}} object")
-    for key in ("kind", "regex", "field"):
-        if key in node and not (isinstance(node[key], str) and node[key]):
-            raise Invalid(f"'{path}.{key}' must be a non-empty string")
-    for key in AST_RELATIONS + ("not",):
-        if key in node:
-            validate_ast(node[key], f"{path}.{key}", depth + 1)
-    for key in ("any", "all"):
-        if key in node:
-            items = node[key]
-            if not isinstance(items, list) or not items:
-                raise Invalid(f"'{path}.{key}' must be a non-empty list of rules")
-            for i, item in enumerate(items):
-                validate_ast(item, f"{path}.{key}[{i}]", depth + 1)
-    if "stopBy" in node:
-        stop = node["stopBy"]
-        if isinstance(stop, dict):
-            validate_ast(stop, f"{path}.stopBy", depth + 1)
-        elif stop not in ("neighbor", "end"):
-            raise Invalid(f"'{path}.stopBy' must be \"neighbor\", \"end\" or a rule")
 
 
 def ast_size(ast: object) -> int:
@@ -132,7 +89,8 @@ def validate_rule(rule: object) -> None:
                                     and all(wrapper_table.is_command_name(n) for n in names)):
         raise Invalid("'match.program' must be a command name or a list of them (no spaces or '/')")
     if "ast" in match:
-        validate_ast(match["ast"])
+        if not isinstance(match["ast"], dict) or not match["ast"]:
+            raise Invalid("'match.ast' must be a non-empty object")
         size = ast_size(match["ast"])
         if size > MAX_AST_BYTES:
             raise Invalid(f"'match.ast' is {size} bytes, over the {MAX_AST_BYTES // 1024} KiB limit; split it into rules")
