@@ -1,6 +1,6 @@
 {
   "name": "guardrails",
-  "version": "0.14.0",
+  "version": "0.14.1",
   "description": "Data-driven guardrails for agent Bash commands: rules (deny or warn, per-command retry, session modes) live in global or per-project state and are enforced by one PreToolUse hook that parses each command in process with ast-grep-py from a runtime it installs by itself (program, args and match.ast rules; regex rules read the raw text). Nothing is active until you install presets with the setup skill.",
   "keywords": ["hooks", "bash", "guardrails", "pretooluse", "rules", "fd", "ripgrep", "pkill"]
 }

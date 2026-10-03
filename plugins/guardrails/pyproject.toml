@@ -1,6 +1,6 @@
 [project]
 name = "guardrails"
-version = "0.14.0"
+version = "0.14.1"
 description = "Claude Code PreToolUse guardrails for Bash: data-driven rules, modes and presets; commands are parsed in process by ast-grep-py from a managed, automatically installed runtime"
 requires-python = ">=3.13"
 
