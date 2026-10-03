@@ -97,7 +97,7 @@ is a configuration change and needs the user's explicit request (`--as-user`).
 
 An agent runs `guardrails <verb>` (the plugin's `bin/` is on the Bash tool's PATH); from your own terminal use `python3
 <plugin dir>/lib/guard.py <verb>`. Verbs: `status`, `rule add|set|rm|test|ast`, `mode declare|undeclare|on|off`, `preset
-list|show|install`, `engine status|ensure`, `enable|disable` (`--scope project` for the project rules); changes take `--scope
+list|show|install`, `stats`, `engine status|ensure`, `enable|disable` (`--scope project` for the project rules); changes take `--scope
 global|project|managed`. When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user` and `enable` /
 `disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample commands without
 changing anything; it checks the matcher only and prints a `**Note**` line when the hook would not act on a match.
@@ -108,21 +108,29 @@ backticks and `$(` never has to survive shell quoting; `--examples` takes the sa
 markdown (the rule card, the status listing) and the skills paste it unchanged: the layout contract is
 [references/presentation.md](references/presentation.md).
 
+## Telemetry
+
+Every hook call counts, per rule id, how often the rule denied, warned, passed or was suspended and how long it took, in
+`${CLAUDE_PLUGIN_DATA}/telemetry.db` on this machine only. Never a command, argument, path or message, and nothing is sent
+anywhere. `guardrails stats` shows it (`guardrails stats --reset` deletes it); what is recorded, the cost and the failure
+behaviour are in [references/runtime.md](references/runtime.md#telemetry).
+
 ## Skills
 
-Six skills; arguments are free text, each skill parses its own flags, and every long flag has a short form. Shared material
+Seven skills; arguments are free text, each skill parses its own flags, and every long flag has a short form. Shared material
 lives in `references/` and is read only when a skill needs it.
 
 | skill | arguments |
 |---|---|
 | `guardrails:status` | `[-s/--scope global\|project\|managed] [-p/--problems]` |
+| `guardrails:stats` | `[-d/--days N] [-s/--slow] [<rule>]` |
 | `guardrails:explain` | `[<id>] [-c/--command '<cmd>'] [-s/--scope ...]` |
 | `guardrails:new` | `[-B/--block <cmd>]... [-A/--allow <cmd>]... [-s/--scope ...] [-a/--action deny\|warn] [-R/--retry] [-m/--modes a,b] [-i/--id <id>] [-y/--yes] [description]` |
 | `guardrails:edit` | `<id> [enable\|disable\|rm\|key=value ...] [-s/--scope ...] [-y/--yes]` |
 | `guardrails:mode` | `[on\|off\|declare\|undeclare] [<name>] [-s/--scope ...] [-e/--agent-may-enable]` |
 | `guardrails:setup` | `[<preset>...] [-s/--scope ...] [-y/--yes]` |
 
-`status` and `explain` run forked (Haiku and Sonnet) and need no conversation: callers, other agents included, must pass the
+`status`, `stats` and `explain` run forked (Haiku, Haiku and Sonnet) and need no conversation: callers, other agents included, must pass the
 rule id or the exact command to `explain`. `new` interviews, tests the rule on your examples and on edge cases it thinks of,
 shows the `rule test` card for confirmation and writes the very rule it tested. `edit`, `mode` and `setup` change
 configuration only when you ask, always with `--as-user` and your own words in `--reason`, and never run `sudo`: a

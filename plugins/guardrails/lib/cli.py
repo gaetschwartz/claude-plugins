@@ -19,6 +19,7 @@ import matching
 import policy
 import render
 import store
+import telemetry
 from policy import Invalid, view
 from verdict import Evaluation
 
@@ -313,6 +314,24 @@ def print_status(args: Args, snap: Snapshot) -> None:
 
 def cmd_status(args: Args) -> int:
     print_status(args, snapshot(args))
+    return 0
+
+
+def cmd_stats(args: Args) -> int:
+    path = store.global_state_path().parent / telemetry.DB
+    if args.reset:
+        require_user(args, "stats --reset")
+        telemetry.reset(path)
+        print("Telemetry deleted.")
+        return 0
+    days = max(args.days, 1)
+    rows = telemetry.read(path, telemetry.hour_now() - days * 24, args.rule)
+    if not rows:
+        print(f"No telemetry for {args.rule or 'any rule'} in the last {render.plural(days, 'day')}.")
+    elif args.rule:
+        print(render.rule_days(rows, args.rule, days))
+    else:
+        print(render.stats_card(rows, sorted(policy.effective(*states()).rules), days, args.slow))
     return 0
 
 
@@ -812,6 +831,13 @@ def build_parser() -> argparse.ArgumentParser:
     status.add_argument("--problems", action="store_true", help="print only the problems")
     status.add_argument("--rule", metavar="ID", help="print only this rule's row")
 
+    stats = verbs.add_parser("stats", help="how often each rule denied, warned, passed or was suspended, and how long it took")
+    stats.add_argument("rule", nargs="?", help="show this rule's days")
+    stats.add_argument("-d", "--days", type=int, default=7, help="window in days (default 7)")
+    stats.add_argument("-s", "--slow", action="store_true", help="sort rules by average time")
+    stats.add_argument("--reset", action="store_true", help="delete all telemetry")
+    stats.add_argument("--as-user", action="store_true", help="agents only: the user explicitly asked for this change")
+
     rule = verbs.add_parser("rule", help="add, change or remove rules").add_subparsers(dest="op", required=True)
     add = rule.add_parser("add", parents=[common, scoped], help="add or replace a rule")
     add.add_argument("id")
@@ -873,6 +899,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 HANDLERS: dict[tuple[str, str | None], Callable[[Args], int]] = {
     ("status", None): cmd_status,
+    ("stats", None): cmd_stats,
     ("rule", "add"): cmd_rule_add,
     ("rule", "set"): cmd_rule_set,
     ("rule", "rm"): cmd_rule_rm,

@@ -5,10 +5,13 @@ from __future__ import annotations
 import json
 import re
 import unicodedata
+from collections.abc import Callable
 from dataclasses import dataclass, field
+from datetime import UTC, datetime
 from enum import StrEnum
 
 import policy
+import telemetry
 
 MAX_WIDTH = 40
 NEWLINE = "⏎"
@@ -226,3 +229,87 @@ def problems_listing(problems: list[str]) -> str:
 
 def rule_row(row: RuleRow) -> str:
     return f"- {span(row.id)} {clean(row.action)} · {'+'.join(row.layers)} · {clean(row.state)}"
+
+
+@dataclass(slots=True)
+class Total:
+    key: str
+    deny: int = 0
+    warn: int = 0
+    passed: int = 0
+    suspended: int = 0
+    micros: int = 0
+    peak: int = 0
+    last: int = 0
+
+    def add(self, row: telemetry.Row) -> None:
+        self.deny += row.deny
+        self.warn += row.warn
+        self.passed += row.passed
+        self.suspended += row.suspended
+        self.micros += row.micros
+        self.peak = max(self.peak, row.peak)
+        if row.deny or row.warn:
+            self.last = max(self.last, row.hour)
+
+    @property
+    def runs(self) -> int:
+        return self.deny + self.warn + self.passed + self.suspended
+
+    @property
+    def average(self) -> float:
+        return self.micros / self.runs if self.runs else 0
+
+
+def local_hour(hour: int) -> str:
+    return datetime.fromtimestamp(hour * 3600, UTC).astimezone().strftime("%Y-%m-%d %H:00")
+
+
+def fold(rows: list[telemetry.Row], key: Callable[[telemetry.Row], str]) -> dict[str, Total]:
+    totals: dict[str, Total] = {}
+    for row in rows:
+        totals.setdefault(key(row), Total(key(row))).add(row)
+    return totals
+
+
+def timing(total: Total) -> str:
+    return f"avg {total.average / 1000:.2f} ms · max {total.peak / 1000:.2f} ms"
+
+
+def counts(total: Total) -> str:
+    fired = f" · last fired {local_hour(total.last)}" if total.last else ""
+    return (f"{total.deny} deny · {total.warn} warn · {total.passed} pass · {total.suspended} suspended · "
+            f"{timing(total)}{fired}")
+
+
+def stats_card(rows: list[telemetry.Row], known: list[str], days: int, slow: bool) -> str:
+    totals = fold(rows, lambda row: row.rule)
+    rules = [t for t in totals.values() if not t.key.startswith("@")]
+    rules.sort(key=(lambda t: -t.average) if slow else (lambda t: (-(t.deny + t.warn), -t.runs, t.key)))
+    calls = totals["@hook"].passed if "@hook" in totals else 0
+    lines = [f"### Guardrails stats · last {plural(days, 'day')} · {plural(calls, 'call')}"]
+    if rules:
+        width = common_width([t.key for t in rules])
+        lines += ["", "**Rules**", *(f"- {span(t.key, width)} {counts(t)}" for t in rules)]
+    quiet = sorted({*known, *(t.key for t in rules)} - {t.key for t in rules if t.deny or t.warn})
+    if quiet:
+        width = common_width(quiet)
+        lines += ["", "**Never fired**", *(f"- {span(rid, width)} " + (f"{totals[rid].passed} pass" if rid in totals
+                                                                       else "no data") for rid in quiet)]
+    slowest = sorted((t for t in rules if t.runs), key=lambda t: -t.average)[:3]
+    if slowest:
+        width = common_width([t.key for t in slowest])
+        lines += ["", "**Slowest**", *(f"- {span(t.key, width)} {timing(t)}" for t in slowest)]
+    ops = sorted((t for t in totals.values() if t.key.startswith("@")), key=lambda t: t.key)
+    if ops:
+        width = common_width([t.key for t in ops])
+        lines += ["", "**Operational**", *(f"- {span(t.key, width)} {plural(t.deny + t.passed, 'time')}"
+                                           + (f" · {timing(t)}" if t.micros else "") for t in ops)]
+    return "\n".join(lines)
+
+
+def rule_days(rows: list[telemetry.Row], rule: str, days: int) -> str:
+    by_day = fold(rows, lambda row: local_hour(row.hour)[:10])
+    width = common_width(list(by_day))
+    return "\n".join([f"### {clean(rule)} · last {plural(days, 'day')}", "", "**Days**",
+                      *(f"- {span(day, width)} {counts(by_day[day])}" for day in sorted(by_day, reverse=True))])

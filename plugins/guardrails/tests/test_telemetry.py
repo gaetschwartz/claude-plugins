@@ -168,6 +168,30 @@ class Harmless(Fixture):
             self.assertEqual(self.run_hook("kill 1", "ro"), expected)
 
 
+class Stats(Fixture):
+    def test_the_card_names_every_group_and_a_named_rule_shows_its_days(self) -> None:
+        for command in CORPUS:
+            self.run_hook(command)
+        self.put(self.gpath, {"rules": {**RULES, "fresh": {"match": {"program": "zz"}, "message": "m"}}})
+        code, out, _ = self.cli("stats", "--days", "3")
+        self.assertEqual(code, 0)
+        for needle in ("last 3 days · 6 calls", "**Rules**", "`no-kill", "**Never fired**", "`fresh", "no data",
+                       "**Slowest**", "**Operational**", "`@hook"):
+            self.assertIn(needle, out)
+        self.assertIn("last fired", out.split("**Never fired**")[0])
+        code, out, _ = self.cli("stats", "no-kill")
+        self.assertRegex(out, r"(?s)### no-kill · last 7 days\n\n\*\*Days\*\*\n- `\d{4}-\d\d-\d\d` 2 deny")
+        self.assertIn("No telemetry for ghost", self.cli("stats", "ghost")[1])
+
+    def test_reset_is_for_the_user_and_deletes_everything(self) -> None:
+        self.run_hook("kill 1")
+        self.assertEqual(self.cli("stats", "--reset", agent=True)[0], 3)
+        self.assertTrue((self.data / telemetry.DB).exists())
+        self.assertEqual(self.cli("stats", "--reset", "--as-user", agent=True)[0], 0)
+        self.assertEqual(list(self.data.glob("telemetry.db*")), [])
+        self.assertIn("No telemetry", self.cli("stats")[1])
+
+
 class Parallel(RealRuntime):
     def test_thirty_hooks_at_once_write_whole_calls_or_nothing(self) -> None:
         self.put(self.gpath, {"rules": RULES})

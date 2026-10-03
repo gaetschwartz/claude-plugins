@@ -132,6 +132,32 @@ Output:
   or `No problems.`. `--rule <id>` prints just that rule's row (used after a write). A `**Note**` line follows the
   header when the hook is off.
 
+## Stats: `guardrails stats`
+
+    guardrails stats [--days N] [--slow] [<rule>]
+
+Output (times are local; `--slow` sorts **Rules** by average time instead of by deny + warn):
+
+    ### Guardrails stats · last 7 days · 50 calls
+
+    **Rules**
+    - `warn-pgrep-full-cmdline` 0 deny · 2 warn · 48 pass · 0 suspended · avg 0.26 ms · max 0.64 ms · last fired 2026-10-03 19:00
+    - `no-pgrep-status       ` 0 deny · 0 warn · 50 pass · 0 suspended · avg 1.44 ms · max 3.54 ms
+
+    **Never fired**
+    - `no-pgrep-status` 50 pass
+    - `old-unused     ` no data
+
+    **Slowest**
+    - `no-pgrep-status` avg 1.44 ms · max 3.54 ms
+
+    **Operational**
+    - `@hook ` 50 times · avg 12.01 ms · max 17.20 ms
+    - `@parse` 50 times · avg 0.23 ms · max 0.46 ms
+
+A rule id argument prints `### <id> · last 7 days` and one row per local day under **Days**. With nothing recorded the
+output is one line.
+
 ## Explain
 
 `explain` pastes the rule card of `guardrails rule test --id <id> …` verbatim. After a blank line it adds

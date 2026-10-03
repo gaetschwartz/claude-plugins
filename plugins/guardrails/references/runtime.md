@@ -91,6 +91,29 @@ There is no degraded parsing and no rule runs outside the engine; the hook allow
 `rule test` and `status --problems` say the same: a rule that needs the engine is reported as not evaluated, never as "no
 match".
 
+## Telemetry
+
+Per-rule counters in `${CLAUDE_PLUGIN_DATA}/telemetry.db` (SQLite, mode 0600, local only: nothing is ever sent). One row per
+rule id and hour: how many calls the rule `deny`-ed or `warn`-ed (it matched), let `pass` (evaluated, no match) or had
+`suspended` by an active mode (it matched), plus the summed and the largest evaluation time in microseconds. A rule that was
+not evaluated (disabled, `requires` missing, engine failure) writes no row. Rule ids are user text, so they are reduced to
+at most 64 printable ASCII characters and never start with `@`. Rows older than 365 days are deleted at SessionStart.
+
+Reserved `@` rows count what is not a rule: `@hook` (calls, and the time in the hook process; interpreter start-up is not
+included), `@parse` (calls, and the time spent parsing and unwrapping, shared by all rules), and failures, counted in
+`deny`: `@oversize`, `@complexity`, `@timeout`, `@crash`, `@engine-failure`.
+
+**Never recorded:** the command or any part of it, arguments, paths, the project or working directory, session ids, host
+names, message text, who enabled a mode. Only rule ids, counts, times and the hour.
+
+The hook forks the checker first, then starts one thread that opens the database while the checker works; the counts are
+written only after the answer is out, and the hook waits at most 20 ms for that write. A busy lock, a read-only or full disk,
+a missing `sqlite3` or any error drops the sample silently and never changes an answer or an exit code; a file that is not a
+database is renamed `telemetry.db.corrupt` and recreated. A hook whose runtime is not ready records nothing.
+
+`guardrails stats [-d/--days N] [-s/--slow] [<rule>]` (default 7 days; the layout is in
+[presentation.md](presentation.md#stats-guardrails-stats)); `guardrails stats --reset`, user only, deletes the database.
+
 ## Troubleshooting and kill switches
 
 `guardrails engine status` needs no runtime and works offline: whether the runtime is ready (or why not), the pins, the
