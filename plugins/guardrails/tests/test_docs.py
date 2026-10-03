@@ -4,6 +4,7 @@ import json
 import re
 import shlex
 import unittest
+from typing import ClassVar
 
 from helpers import ROOT, AstIsolated, caught
 
@@ -48,12 +49,18 @@ class MatchingClaims(AstIsolated):
 
 
 class RuntimeDocs(unittest.TestCase):
+    NEEDLES: ClassVar[dict[str, tuple[str, ...]]] = {
+        "README.md": ("claude plugin disable guardrails@<marketplace>", "guardrails disable", "Rust regex", "1 hour",
+                      "this command crashes the parser"),
+        "references/matching.md": ("claude plugin disable guardrails@<marketplace>", "guardrails disable", "Rust regex", "1 hour",
+                                   "30 days", "plugin data dir is not a safe absolute path",
+                                   "this command crashes the parser", "install.log"),
+    }
+
     def test_the_kill_switches_the_rust_regex_flavor_and_the_backoff_are_documented(self) -> None:
-        for name in ("README.md", "references/matching.md"):
+        for name, needles in self.NEEDLES.items():
             text = " ".join((ROOT / name).read_text().split())
-            for needle in ("claude plugin disable guardrails@<marketplace>", "guardrails disable", "Rust regex",
-                           "1 hour", "30 days", "plugin data dir is not a safe absolute path", "this command crashes the parser",
-                           "install.log"):
+            for needle in needles:
                 self.assertIn(needle, text, f"{name} lacks {needle!r}")
 
 

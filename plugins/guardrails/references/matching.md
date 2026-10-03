@@ -193,18 +193,18 @@ on text that only mentions the command, including heredocs, and it needs the sam
 `${CLAUDE_PLUGIN_DATA}/runtime/<id>/` holds a portable `uv` binary (`bin/`), a managed CPython 3.13 (`python/`), a venv with
 the hash-pinned library (`venv/`) and a `marker.json` written last (about 140 MB; about 46 MB downloaded; the uv cache is
 deleted after the install). `<id>` is `lib/runtime-id`, a digest of `lib/runtime-manifest.json` and
-`lib/runtime-requirements.txt`, so a pin change installs a new runtime and removes the old one.
+`lib/runtime-requirements.txt`, so a pin change installs a new runtime (the old one is removed once it is 30 days old).
 
 Automatic install, no user command: (1) SessionStart runs `ensure` synchronously (timeout 120 s; first ever install about
 3 to 10 s, later sessions about 0.1 s); (2) the PreToolUse hook, when the runtime is not ready, allows the command with a
 loud notice (once per session, repeated every 10 minutes while a failure persists) and starts a detached `ensure`;
 (3) every `guardrails` CLI call runs at once on a ready runtime and otherwise ensures first, in the foreground, with
-progress on stderr; (4) the `setup` skill's first step runs `guardrails engine ensure`. Limits: a 10 s connect timeout, a
+progress on stderr. Limits: a 10 s connect timeout, a
 60 s budget per install, every tool step in its own process group killed at the deadline. A failed attempt is stamped with a
 class and a step, and the next attempt is 10 minutes later, then 1 hour, then 6 hours (reset by a success); while a stamp is
 fresh SessionStart and the hot path do not try, they say when the next attempt is. `guardrails engine ensure --retry-now`
 ignores the wait. Raw failure detail goes to `runtime/install.log`; notices carry only the class (dns, connect, timeout,
-tls, proxy, http, hash, disk, tool, crash).
+tls, http, hash, disk, tool, crash).
 
 **What is enforced while the runtime is not ready: nothing.** `regex` rules included, because every rule runs on the managed
 Python. The window is the first seconds of the first session, or until an install works after a failure. Managed rules fail

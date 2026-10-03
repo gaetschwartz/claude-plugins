@@ -32,15 +32,6 @@ def skill_files() -> list[Path]:
 
 
 class SkillFiles(unittest.TestCase):
-    def test_setup_ensures_the_runtime_before_anything_else_and_stops_on_failure(self) -> None:
-        fields, body = frontmatter(SKILLS / "setup" / "SKILL.md")
-        self.assertIn("Bash(guardrails engine ensure)", fields["allowed-tools"])
-        first = body.index("## First step: the runtime")
-        self.assertLess(first, body.index("## Interview"))
-        step = body[first:body.index("## Current state")]
-        for needle in ("guardrails engine ensure", "Report its result", "precise reason", "stop"):
-            self.assertIn(needle, step)
-
     def test_no_text_tells_anyone_to_install_the_engine_by_hand(self) -> None:
         stale = ("engine install", "engine verify", "npm ci", "package.json", "SARIF", "GUARDRAILS ENGINE MISSING",
                  "astbin", "astrun", "astcli", "astworker", "astrules", "engine-manifest")
