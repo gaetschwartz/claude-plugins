@@ -31,12 +31,8 @@ CONTEXT_KINDS = frozenset({"pipeline", "command_substitution", "process_substitu
 ARGUMENT_KINDS = frozenset({"raw_string", "string", "word", "number", "concatenation", "simple_expansion", "expansion",
                             "command_substitution", "arithmetic_expansion", "process_substitution"})
 LEAF_KINDS = frozenset({"word", "command_name", "raw_string", "number"})
-COMMAND_STRING_FLAG = re.compile(r"^-[A-Za-z]*c[A-Za-z]*$")
-UNQUOTED_DELIMITER = re.compile(r"[A-Za-z0-9_]+")
 ESCAPED_IN_DOUBLE_QUOTES = re.compile(r'\\([\\"$`])')
 WORD_PIECE = re.compile(r"""'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)|([^'"\\]+)""", re.DOTALL)
-SHELL_NAME = re.compile(rulebuilder.name_regex(SHELLS))
-EVAL_NAME = re.compile(rulebuilder.name_regex(["eval"]))
 SELF_TEST_COMMAND = "echo a | cat"
 
 
@@ -88,6 +84,7 @@ class Span(NamedTuple):
 
 def unquote(word: str) -> str:
     """The text one shell word stands for: its single-quoted, double-quoted, backslashed and bare pieces joined."""
+    # not shlex: it keeps `\$` inside double quotes, so `bash -c "\$(x)"` would read as harmless text (fail-open)
 
     def piece(found: re.Match[str]) -> str:
         single, double, escaped, bare = found.groups()
@@ -99,7 +96,7 @@ def unquote(word: str) -> str:
 
 
 def clean_error(text: str) -> str:
-    lines = [re.sub(r"^\d+:\s*", "", line.strip()) for line in text.splitlines() if line.strip()]
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
     return lines[-1] if lines else "invalid rule"
 
 
@@ -112,9 +109,13 @@ def self_test() -> str | None:
     return None if found is not None and found.text() == SELF_TEST_COMMAND else "it misparsed a test command"
 
 
-def name_of(command: SgNode) -> str:
-    name = command.field("name")
-    return name.text() if name is not None else ""
+def commands_named(root: SgNode, names: Sequence[str]) -> list[SgNode]:
+    return root.find_all({"rule": rulebuilder.command_named(names)})
+
+
+def is_command_flag(word: str) -> bool:
+    """`-c`, `-lc`, `-ec`: a short-option cluster that contains c."""
+    return word.startswith("-") and word[1:].isalpha() and word.isascii() and "c" in word[1:]
 
 
 def arguments(command: SgNode) -> list[SgNode]:
@@ -132,7 +133,7 @@ def script_after_flag(words: list[SgNode]) -> list[str]:
     """The script word after each `-c` style flag (or after a `--` that follows it), unquoted."""
     found = []
     for at, word in enumerate(words):
-        if not COMMAND_STRING_FLAG.match(word.text()):
+        if not is_command_flag(word.text()):
             continue
         following = words[at + 1:at + 3]
         if following and following[0].text() == "--":
@@ -162,18 +163,16 @@ def scripts_in(root: SgNode, restricted: bool) -> list[Script]:
     the shell does), heredocs and here-strings fed to a shell, and the bodies of unquoted heredocs that contain a
     substitution, which only count inside their substitutions. A restricted unit only yields scripts inside its own."""
     found: list[Script] = []
-    for command in root.find_all(kind="command"):
-        if restricted and not inside_substitution(command):
-            continue
-        name = name_of(command)
-        if SHELL_NAME.search(name):
+    for command in commands_named(root, SHELLS):
+        if not restricted or inside_substitution(command):
             found += [Script(script, False) for script in shell_scripts(command)]
-        elif EVAL_NAME.search(name):
+    for command in commands_named(root, ["eval"]):
+        if not restricted or inside_substitution(command):
             words = [unquote(arg.text()) for arg in arguments(command) if arg.kind() in ARGUMENT_KINDS]
             found.append(Script(" ".join(words), False))
     for redirect in root.find_all(kind="heredoc_redirect"):
         start = next((n for n in redirect.named_children() if n.kind() == "heredoc_start"), None)
-        if start is None or not UNQUOTED_DELIMITER.fullmatch(start.text()):
+        if start is None or not (start.text().isascii() and start.text().replace("_", "").isalnum()):
             continue
         if restricted and not inside_substitution(redirect):
             continue
@@ -184,12 +183,10 @@ def scripts_in(root: SgNode, restricted: bool) -> list[Script]:
     return [script for script in found if script.text.strip()]
 
 
-def wrapper_spans(root: SgNode, wrappers: re.Pattern[str]) -> list[Span]:
+def wrapper_spans(root: SgNode, wrappers: Sequence[str]) -> list[Span]:
     """Each command named by a wrapper: its byte range and where each of its words after the first node starts."""
     spans = []
-    for command in root.find_all(kind="command"):
-        if not wrappers.search(name_of(command)):
-            continue
+    for command in commands_named(root, wrappers):
         words = command.named_children()[1:]
         if words:
             where = command.range()
@@ -232,7 +229,7 @@ class Scanner:
         self.regexes = dict(regexes or {})
         self.invalid: dict[str, str] = {}
         self.found: dict[str, Hit] = {}
-        self.wrappers = re.compile(rulebuilder.name_regex(wrapper_names)) if wrapper_names else None
+        self.wrappers = tuple(wrapper_names)
 
     def matches(self, rid: str, root: SgNode, first_only: bool) -> list[SgNode]:
         """The nodes a rule selects; a rule whose configs all fail to compile is dropped with the reason."""
@@ -300,7 +297,7 @@ class Scanner:
                 self.judge_regexes(root)
             self.judge(unit, root)
             found: list[Unit] = []
-            if unit.origin is not Origin.VARIANT and self.wrappers is not None:
+            if unit.origin is not Origin.VARIANT and self.wrappers:
                 found += [Unit(text, Origin.VARIANT, unit.depth, unit.restricted)
                           for text in variants_of(unit.text, wrapper_spans(root, self.wrappers))]
             found += [Unit(text, Origin.SCRIPT, unit.depth + 1, only) for text, only in scripts_in(root, unit.restricted)]

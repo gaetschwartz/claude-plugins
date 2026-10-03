@@ -31,8 +31,7 @@ class Variants(AstIsolated):
         import scanner
         from ast_grep_py import SgRoot
 
-        pattern = re.compile(scanner.rulebuilder.name_regex(wrappers.DEFAULTS))
-        spans = scanner.wrapper_spans(SgRoot(command, "bash").root(), pattern)
+        spans = scanner.wrapper_spans(SgRoot(command, "bash").root(), wrappers.DEFAULTS)
         return set(scanner.variants_of(command, spans))
 
     def test_a_wrapper_command_is_replaced_by_the_text_from_each_of_its_words_on(self) -> None:
@@ -111,6 +110,48 @@ class ThroughWrappers(AstIsolated):
         rule = policy.with_defaults({"match": {"program": K}, "message": "m"})
         self.kinds(rule, {f"{K} x | head": "wrapped", f"sudo {K} x | head": "wrapped", f"{K} x": "direct",
                           f"sudo {K} x": "wrapped"})
+
+
+class PatternShapes(AstIsolated):
+    """Which patterns are one simple command (so spelling-tolerant) is the parser's call, not a regex's."""
+
+    def test_the_parser_decides_what_is_a_single_command_pattern(self) -> None:
+        import rulebuilder
+
+        cases = {
+            "git push -f $$$": "git", "pkill -9 $$$": "pkill", "echo 'a|b' $$$": "echo", "time ls -l $$$": "time",
+            "coproc ls x": "coproc", "rm -rf $A": "rm", "curl $$$ | sh": None, "zap x > /dev/null": None,
+            "for i in x; do zap $i; done": None, "while zap x; do :; done": None, "echo $(zap x)": None,
+            "cd $A && rm $$$": None, "ls x; ls y": None, "FOO=1 cmd a": None, "$CMD x": None, "(ls x)": None,
+            "'git' push -f $$$": None, "ls": None,
+        }
+        for pattern, name in cases.items():
+            with self.subTest(pattern=pattern):
+                self.assertEqual(rulebuilder.simple_command_name(pattern), name)
+
+    def test_time_and_coproc_patterns_are_tolerant_like_any_other_command(self) -> None:
+        rule = rule_of({"pattern": "time ls -l $$$"})
+        for command, expected in {"time ls -l x": "direct", "/usr/bin/time ls -l x": "direct",
+                                  "FOO=1 time ls -l x": "direct", "sudo time ls -l x": "wrapped", "time ls x": None}.items():
+            with self.subTest(command=command):
+                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
+
+    def test_every_documented_and_preset_pattern_still_compiles_after_loosening(self) -> None:
+        import json
+
+        import rulebuilder
+        import scanner
+        from helpers import ROOT
+
+        patterns: set[str] = set()
+        for path in [*(ROOT / "references").rglob("*.md"), *(ROOT / "presets").glob("*.json"), ROOT / "README.md"]:
+            for match in re.finditer(r'"pattern":\s*"((?:[^"\\]|\\.)*)"', path.read_text()):
+                patterns.add(json.loads('"' + match.group(1) + '"'))
+        self.assertGreater(len(patterns), 20)
+        for pattern in sorted(patterns):
+            with self.subTest(pattern=pattern):
+                rule = rule_of({"pattern": pattern})
+                self.assertEqual(scanner.compile_errors({"r": rulebuilder.configs_of(rule)}), {})
 
 
 class Units(AstIsolated):

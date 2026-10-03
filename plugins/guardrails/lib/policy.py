@@ -21,7 +21,6 @@ AST_KEYS = ("pattern", "kind", "regex", "inside", "has", "follows", "precedes", 
 AST_RELATIONS = ("inside", "has", "follows", "precedes")
 AST_PATTERN_KEYS = ("context", "selector", "strictness")
 AST_MAX_DEPTH = 12
-PROGRAM = re.compile(r"[^\s/]+")
 PLACEHOLDER = re.compile(r"\{which:([^{}]+)\}")
 
 
@@ -131,7 +130,7 @@ def validate_rule(rule: object) -> None:
     program = match.get("program")
     names = [program] if isinstance(program, str) else program
     if program is not None and not (isinstance(names, list) and names
-                                    and all(isinstance(n, str) and PROGRAM.fullmatch(n) for n in names)):
+                                    and all(wrapper_table.is_command_name(n) for n in names)):
         raise Invalid("'match.program' must be a command name or a list of them (no spaces or '/')")
     builtin = match.get("builtin")
     if builtin is not None and builtin not in BUILTINS:

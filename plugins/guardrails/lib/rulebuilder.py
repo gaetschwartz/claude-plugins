@@ -4,23 +4,21 @@ tolerant of how a command is spelled. All of it is data for ast-grep; nothing he
 from __future__ import annotations
 
 import re
+import string
 from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import policy
 
 if TYPE_CHECKING:
-    from ast_grep_py import Config, Rule
+    from ast_grep_py import Config, Rule, SgNode
 
 GREPS = ("grep", "egrep", "fgrep")
 RECURSIVE_FLAG = (r"^(?:-[A-Za-z&&[^efmABCdD]]*[rR][A-Za-z]*|-drecurse|--recursive|--dereference-recursive"
                   r"|--directories=recurse)$")
-TRAILING_HOLE = re.compile(r"^(.*\S)\s+\$\$\$$", re.DOTALL)
-QUOTED = re.compile(r"'[^']*'|\"(?:[^\"\\]|\\.)*\"")
-COMMAND_LIST = re.compile(r"[|;&\n]")
-SIMPLE_COMMAND = re.compile(r"[A-Za-z0-9_.+-]+(?: [^|&;<>(){}`\n]*)?")
-KEYWORDS = frozenset({"if", "then", "else", "elif", "fi", "for", "while", "until", "do", "done", "case", "esac", "in",
-                      "function", "select", "time", "coproc"})
+PLAIN_NAME = frozenset(string.ascii_letters + string.digits + "_.+-")
+SUBSTITUTIONS = ("command_substitution", "process_substitution")
+ASSIGNMENT_OR_REDIRECT = ("variable_assignment", "file_redirect", "herestring_redirect", "heredoc_redirect")
 ASSIGNMENTS = 3
 
 
@@ -74,25 +72,34 @@ def widen(rule: Any) -> Any:
         return rule
     out = {key: value if key == "pattern" else widen(value) for key, value in rule.items()}
     pattern = rule.get("pattern")
-    found = TRAILING_HOLE.match(pattern.strip()) if isinstance(pattern, str) else None
-    if not found:
+    words = pattern.split() if isinstance(pattern, str) else []
+    if len(words) < 2 or words[-1] != "$$$":
         return out
-    head = found.group(1)
-    several = COMMAND_LIST.search(QUOTED.sub("", head))
-    bare = head if several else {"context": head, "selector": "command"}
+    head = pattern.rstrip()[:-3].rstrip()
+    bare = {"context": head, "selector": "command"} if single_command(head) is not None else head
     either = {"any": [{"pattern": pattern}, {"pattern": bare}]}
     keep = {k: v for k, v in out.items() if k in ("stopBy", "field")}
     rest = {k: v for k, v in out.items() if k not in ("pattern", "stopBy", "field")}
     return {"all": [either, rest] if rest else [either], **keep}
 
 
+def single_command(text: str) -> SgNode | None:
+    """The `command` node when the text parses as exactly one command (no list, pipeline, redirect or compound)."""
+    from ast_grep_py import SgRoot
+
+    kids = SgRoot(text, "bash").root().children()
+    return kids[0] if len(kids) == 1 and kids[0].kind() == "command" else None
+
+
 def simple_command_name(text: str) -> str | None:
     """The command name when a pattern is exactly one simple command with arguments, else None."""
     text = text.strip()
-    head, _, rest = text.partition(" ")
-    if not rest or head in KEYWORDS or not SIMPLE_COMMAND.fullmatch(text):
+    command = single_command(text) if " " in text else None
+    if command is None or any(child.kind() in ASSIGNMENT_OR_REDIRECT for child in command.children()) \
+            or command.find({"rule": {"any": [{"kind": kind} for kind in SUBSTITUTIONS]}}) is not None:
         return None
-    return head
+    name = command.field("name")
+    return name.text() if name is not None and name.text() and set(name.text()) <= PLAIN_NAME else None
 
 
 def loosened(node: Any) -> Any:

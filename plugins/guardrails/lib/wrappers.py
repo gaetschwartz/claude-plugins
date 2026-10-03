@@ -8,9 +8,13 @@ DEFAULTS: Names = ("sudo", "doas", "env", "timeout", "nice", "nohup", "time", "c
                    "setsid", "ionice", "xargs", "watch")
 
 
+def is_command_name(name: object) -> bool:
+    return isinstance(name, str) and bool(name) and "/" not in name and not any(c.isspace() for c in name)
+
+
 def check_name(name: object) -> None:
     """Raise ValueError when a wrapper name is malformed."""
-    if not isinstance(name, str) or not name or "/" in name or any(c.isspace() for c in name):
+    if not is_command_name(name):
         raise ValueError(f"wrapper name {name!r} must be a command name without '/' or spaces")
 
 
