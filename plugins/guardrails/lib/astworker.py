@@ -121,9 +121,7 @@ def admissible(rules: dict[str, policy.Rule]) -> tuple[dict[str, policy.Rule], d
     for rid, rule in rules.items():
         ast = policy.ast_of(rule)
         size = policy.ast_size(ast) if ast else 0
-        if size > policy.MAX_AST_BYTES:
-            errors[rid] = f"match.ast is larger than {policy.MAX_AST_BYTES // 1024} KiB ({size} bytes)"
-        elif total + size > MAX_RULES_BYTES:
+        if total + size > MAX_RULES_BYTES:
             errors[rid] = f"the enabled rules together exceed {MAX_RULES_BYTES // 1024} KiB of match.ast; this one is skipped"
         else:
             total += size

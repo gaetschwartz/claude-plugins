@@ -271,13 +271,6 @@ class RuleSize(AstIsolated):
         self.put(self.ppath, {"rules": {"huge": {"match": {"ast": self.HUGE}, "message": "m"}}})
         self.assertIn("rule huge: 'match.ast' is", self.cli("status", "--problems")[1])
 
-    def test_the_worker_skips_an_oversized_rule_by_name_and_runs_the_rest(self) -> None:
-        response = self.call({"op": "eval", "command": "echo $(ls)",
-                              "rules": {"a": rule_of(self.HUGE), "b": rule_of({"kind": "command_substitution"})}})
-        self.assertEqual(response["verdicts"], {"b": "direct"})
-        self.assertEqual(list(response["errors"]), ["a"])
-        self.assertIn("larger than 16 KiB", response["errors"]["a"])
-
     def test_many_rules_are_capped_in_order_and_never_put_on_the_command_line(self) -> None:
         rules = {f"r{i:04d}": rule_of({"pattern": f"tool{i} --flag-{'y' * 100} $$$"}) for i in range(2500)}
         rules["r9999"] = rule_of({"kind": "command_substitution"})
