@@ -5,10 +5,12 @@ import os
 import unittest
 from typing import Any
 
-from helpers import GREP_RECURSIVE, AstIsolated, RealRuntime
+from helpers import GREP_RECURSIVE, HOOKS, AstIsolated, RealRuntime
 
+import matching
 import store
 
+K = "pk" + "ill"
 STRINGS: dict[str, Any] = {"match": {"program": "strings"}, "message": "Read the docs.", "retry": "same-command",
                            "modes": ["reverse-engineering"]}
 MODES: dict[str, Any] = {"reverse-engineering": {"description": "RE", "agentMayEnable": True}}
@@ -354,6 +356,66 @@ class ManagedHook(AstIsolated):
         assert out is not None
         self.assertEqual(decision(out), "deny")
         self.assertIn("NOT enforced", out["systemMessage"])
+
+
+class Layering(AstIsolated):
+    def test_a_wrappers_key_is_skipped_with_a_warning_naming_it_in_the_hook_and_in_status(self) -> None:
+        self.put(self.mpath, {"wrappers": {"mywrap": {}}, "rules": {"no-kill": {"match": {"program": K}, "message": "No."}}})
+        self.put(self.gpath, {"wrappers": {"g": {}}})
+        self.put(self.ppath, {"wrappers": {"p": {}}})
+        out = self.hook(f"mywrap -x {K} x")
+        assert out is not None
+        self.assertIsNone(out.get("hookSpecificOutput", {}).get("permissionDecision"))
+        for layer in ("managed", "global", "project"):
+            self.assertIn(f"{layer} state has a 'wrappers' key", out["systemMessage"])
+            self.assertIn(f"{layer} state has a 'wrappers' key", self.cli("status", "--problems")[1])
+
+
+class MonitorCoverage(AstIsolated):
+    def setUp(self) -> None:
+        super().setUp()
+        self.put(self.mpath, {"rules": {"no-strings": {"match": {"program": "strings"}, "message": "No strings."},
+                                        "soft": {"match": {"program": "nm"}, "message": "Prefer otool.",
+                                                 "action": "warn"}}})
+
+    def test_a_managed_rule_denies_a_monitor_command(self) -> None:
+        out = self.hook("strings /bin/ls", tool="Monitor")
+        self.assertEqual(decision(out), "deny")
+        self.assertIn("[guardrails:no-strings (managed)]", reason(out))
+
+    def test_a_monitor_call_with_only_ws_is_ignored(self) -> None:
+        for tool_input in ({"ws": "ws://localhost:1/x"}, {}, None, [], {"command": ""}, {"command": 3}):
+            self.assertIsNone(self.hook("x", tool="Monitor", tool_input=tool_input) if tool_input is not None
+                              else self.hook("x", tool="Monitor", tool_input=[]))
+
+    def test_other_tools_are_ignored(self) -> None:
+        self.assertIsNone(self.hook("strings x", tool="Read"))
+        self.assertIsNone(self.hook("strings x", tool="Write"))
+
+    def test_warn_once_and_retry_behave_the_same(self) -> None:
+        first = self.hook("nm a.out", tool="Monitor")
+        assert first is not None
+        self.assertIn("Prefer otool.", first["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(self.hook("nm b.out", tool="Monitor"))
+        self.assertIsNotNone(self.hook("nm b.out", session="other", tool="Monitor"))
+        self.put(self.gpath, {"rules": {"r": {"match": {"program": "sed"}, "message": "No sed.",
+                                               "retry": "same-command"}}})
+        self.assertEqual(decision(self.hook("sed -i x", "rr", tool="Monitor")), "deny")
+        self.assertIsNone(self.hook("sed -i x", "rr", tool="Monitor"))
+        self.assertEqual(decision(self.hook("sed -i y", "rr", tool="Monitor")), "deny")
+
+    def test_a_monitor_acknowledgement_is_shared_with_bash(self) -> None:
+        self.put(self.gpath, {"rules": {"r": {"match": {"program": "sed"}, "message": "No sed.",
+                                               "retry": "same-command"}}})
+        self.assertEqual(decision(self.hook("sed -i x", "sh", tool="Bash")), "deny")
+        self.assertIsNone(self.hook("sed -i x", "sh", tool="Monitor"))
+
+    def test_hooks_json_matches_bash_and_monitor_and_the_deadlines_fit_its_timeout(self) -> None:
+        hooks = json.loads((HOOKS / "hooks.json").read_text())["hooks"]["PreToolUse"][0]
+        self.assertEqual(hooks["matcher"], "Bash|Monitor")
+        self.assertEqual(hooks["hooks"][0]["timeout"], matching.HOOK_SECONDS)
+        self.assertLessEqual(matching.DEADLINE_SECONDS + matching.PROBE_SECONDS + matching.HEADROOM_SECONDS,
+                             matching.HOOK_SECONDS)
 
 
 class EndToEnd(RealRuntime):

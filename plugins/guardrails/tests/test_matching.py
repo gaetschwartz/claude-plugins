@@ -42,6 +42,17 @@ class Matching(AstIsolated):
             "bash script.sh": None, f"python -c '{K} x'": None,
         })
 
+    def test_program_sees_these_forms_and_quoted_heredocs_stay_data(self) -> None:
+        forms = ["xargs -I{} KILL {}", "xargs -I{} sh -c 'KILL {}'", "env - KILL x", 'env "A=1 B" KILL x',
+                 "bash -c -- 'KILL x'", "sudo -nu bob KILL x", "sudo -Eu bob KILL x", "sudo -iu bob KILL x",
+                 "xargs -i KILL {}", "cat <<EOF\n$(KILL x)\nEOF", "echo $(cat <<EOF\n$(KILL x)\nEOF\n)",
+                 'echo "$(nm $(KILL z))"', "sudo -u bob -- KILL x"]
+        rule = rule_of(program=[K, "killall"])
+        for command in forms:
+            with self.subTest(command=command):
+                self.assertIsNotNone(matching.evaluate(command.replace("KILL", K), {"r": rule}).kinds["r"])
+        self.kinds(rule, {f"cat <<'EOF'\n$({K} x)\nEOF": None, f"cat <<\"EOF\"\n`{K} x`\nEOF": None})
+
     def test_obfuscated_and_dynamic_names_cannot_be_analysed(self) -> None:
         self.kinds(rule_of(program=K), {f"$'p\\x6b{K[2:]}' x": None, f"p''{K[1:]} x": None, f"p\\{K[1:]} x": None,
                                         f"P={K}; $P x": None, f"alias k={K}; k x": None, f"bash -c $'{K} x'": None,
