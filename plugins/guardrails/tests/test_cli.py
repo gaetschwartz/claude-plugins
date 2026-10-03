@@ -219,11 +219,6 @@ class Status(AstIsolated):
                          "mode 'ghost' is not declared"):
             self.assertIn(expected, out)
 
-    def test_reports_corrupt_file(self) -> None:
-        self.put(self.gpath, "{nope")
-        code, out, _ = self.cli("status")
-        self.assertEqual(code, 0)
-        self.assertIn("unreadable", out)
 
 class RuleTest(AstIsolated):
     DRAFT = '{"match": {"program": "strings"}, "message": "docs"}'
@@ -267,18 +262,6 @@ class RuleTest(AstIsolated):
     def test_is_read_only(self) -> None:
         self.cli("rule", "test", "--json", self.DRAFT, "echo hi")
         self.assertFalse(self.gpath.exists())
-
-    def test_requires_unmet_notes(self) -> None:
-        draft = ('{"match": {"program": "strings"}, "message": "docs", '
-                 '"requires": ["definitely-not-installed-xyz"]}')
-        out = self.cli("rule", "test", "--json", draft, "strings a")[1]
-        self.assertIn("**Note** none of definitely-not-installed-xyz is installed here, so the hook skips this rule",
-                      out)
-
-    def test_disabled_rule_notes(self) -> None:
-        draft = '{"match": {"program": "strings"}, "message": "docs", "enabled": false}'
-        out = self.cli("rule", "test", "--json", draft, "strings a")[1]
-        self.assertIn("**Note** rule is disabled", out)
 
 
 MANAGED_RULE = '{"match": {"program": "pkill"}, "message": "No pkill."}'

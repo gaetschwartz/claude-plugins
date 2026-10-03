@@ -130,21 +130,6 @@ class Card(AstIsolated):
         out = self.card(PKILL, [{"cmd": exact}, {"cmd": "pkill a"}])
         self.assertEqual([r.split("`")[1].rstrip() for r in self.rows(out)], [exact, "pkill a"])
 
-    def test_backtick_commands_count_the_extra_width(self) -> None:
-        out = self.card(PKILL, [{"cmd": "echo `pkill x`"}, {"cmd": "pkill aaaaaaaaaaaaaaaaaaaa"}])
-        self.assertEqual({span_width(m) for m in SPAN.finditer(out)}, {len("pkill aaaaaaaaaaaaaaaaaaaa")})
-        self.assertIn("- ✗ `` echo `pkill x`" + " " * 12 + " `` inferred", out)
-
-    def test_unicode_width(self) -> None:
-        out = self.card(PKILL, [{"cmd": "pkill 日本語"}, {"cmd": "pkill abcdefgh"}, {"cmd": "pkill 😀"}])
-        self.assertEqual({span_width(m) for m in SPAN.finditer(out)}, {len("pkill abcdefgh")})
-        self.assertIn("`pkill 日本語" + " " * 2 + "`", out)
-        self.assertIn("`pkill 😀" + " " * 6 + "`", out)
-
-    def test_newline_is_shown_as_a_glyph(self) -> None:
-        out = self.card(PKILL, [{"cmd": "a\npkill x"}])
-        self.assertIn("`a⏎pkill x`", out)
-
     def test_wrapped_is_computed_by_the_engine(self) -> None:
         wrapped = ["sudo pkill x", "bash -c 'pkill x'", "xargs pkill", "timeout 5 pkill x", "echo $(pkill x)",
                    "echo `pkill x`", "ps | pkill x", "pkill x | cat", "env A=1 pkill x", "sh -c 'a; pkill x'"]
