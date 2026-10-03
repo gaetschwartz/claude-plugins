@@ -21,7 +21,7 @@ import render
 import store
 import wrappers as wrapper_table
 from policy import Invalid, view
-from verdict import Evaluation, limit_reason
+from verdict import Evaluation
 
 PRESETS_DIR = store.HERE.parent / "presets"
 SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description",
@@ -637,7 +637,7 @@ def cmd_rule_ast(args: Args) -> int:
     print(render.clean(f"command: {args.command}"))
     print(f"units: {len(units)} (1 as written, {len(units) - 1} from shell strings)")
     if limit:
-        print(f"note: the command {limit_reason(limit)}; the hook denies it and deeper units are not shown")
+        print(f"note: the command {limit}; the hook denies it and deeper units are not shown")
     for unit in units:
         print()
         if unit.label:

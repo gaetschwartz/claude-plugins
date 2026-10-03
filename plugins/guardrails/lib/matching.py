@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING, assert_never
 import bounded
 import policy
 import wrappers as wrapper_table
-from verdict import MAX_COMMAND_BYTES, Evaluation, Kind, Limit, Refusal, UnitTree, limit_reason
+from verdict import MAX_COMMAND_BYTES, Evaluation, Kind, Limit, Refusal, UnitTree
 
 if TYPE_CHECKING:
     from ast_grep_py import Config
@@ -101,7 +101,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
                 ev.invalid = dict(done.invalid)
                 ev.failure = done.failure
                 if done.limit is not None:
-                    ev.refusal = f"command too complex to check (it {limit_reason(done.limit)})"
+                    ev.refusal = f"command too complex to check (it {done.limit})"
                     ev.refusal_kind = Refusal.COMPLEX
             case bounded.Outcome.TIMEOUT:
                 ev.refusal = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "

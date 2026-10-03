@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections.abc import Collection
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import NamedTuple, assert_never
+from typing import NamedTuple
 
 import bootstrap
 
@@ -18,11 +18,13 @@ class Kind(StrEnum):
 
 
 class Limit(StrEnum):
-    DEPTH = "depth"
-    UNITS = "units"
-    SIZE = "size"
-    VARIANTS = "variants"
-    VARIANT_BYTES = "variant-bytes"
+    """Which bound a command ran into; the value reads after "the command"."""
+
+    DEPTH = "nests shell strings too deeply"
+    UNITS = "unpacks into too many shell strings"
+    SIZE = "unpacks into too much shell text"
+    VARIANTS = "unwraps into too many command variants"
+    VARIANT_BYTES = "unwraps into too much command text to parse"
 
 
 class Refusal(StrEnum):
@@ -42,22 +44,6 @@ class UnitTree(NamedTuple):
     src: str
     rows: list[tuple[int, str, str | None]]
     broken: bool
-
-
-def limit_reason(limit: Limit) -> str:
-    match limit:
-        case Limit.DEPTH:
-            return "nests shell strings too deeply"
-        case Limit.UNITS:
-            return "unpacks into too many shell strings"
-        case Limit.SIZE:
-            return "unpacks into too much shell text"
-        case Limit.VARIANTS:
-            return "unwraps into too many command variants"
-        case Limit.VARIANT_BYTES:
-            return "unwraps into too much command text to parse"
-        case _:
-            assert_never(limit)
 
 
 @dataclass(slots=True)
