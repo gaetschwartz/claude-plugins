@@ -6,9 +6,8 @@ import json
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from pathlib import Path
-from typing import IO, TypedDict
+from typing import IO, NamedTuple, TypedDict
 
 import bootstrap
 import matching
@@ -211,8 +210,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     return (output or None), changed
 
 
-@dataclass(frozen=True, slots=True)
-class Call:
+class Call(NamedTuple):
     command: str
     cwd: Path | None
     session_id: str

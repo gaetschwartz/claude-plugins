@@ -15,8 +15,8 @@ import signal
 import sys
 import time
 from collections.abc import Callable
-from dataclasses import dataclass
 from enum import StrEnum
+from typing import NamedTuple
 
 CHUNK = 1 << 16
 
@@ -28,8 +28,7 @@ class Outcome(StrEnum):
     GARBLED = "garbled"
 
 
-@dataclass(frozen=True, slots=True)
-class Result:
+class Result(NamedTuple):
     outcome: Outcome
     payload: object = None
 

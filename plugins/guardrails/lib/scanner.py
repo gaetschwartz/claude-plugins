@@ -14,7 +14,6 @@ import re
 import time
 from collections import defaultdict, deque
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
 from enum import StrEnum
 from typing import NamedTuple
 
@@ -52,24 +51,21 @@ class Origin(StrEnum):
     SCRIPT = "script"
 
 
-@dataclass(frozen=True, slots=True)
-class Unit:
+class Unit(NamedTuple):
     text: str
     origin: Origin
     depth: int
     restricted: bool
 
 
-@dataclass(frozen=True, slots=True)
-class Hit:
+class Hit(NamedTuple):
     rule: str
     kind: Kind
     start: int
     end: int
 
 
-@dataclass(frozen=True, slots=True)
-class Scan:
+class Scan(NamedTuple):
     hits: tuple[Hit, ...]
     invalid: dict[str, str]
     limit: Limit | None

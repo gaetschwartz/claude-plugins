@@ -8,9 +8,8 @@ from __future__ import annotations
 
 import time
 from collections.abc import Callable
-from dataclasses import asdict, dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, assert_never
+from typing import TYPE_CHECKING, NamedTuple, assert_never
 
 import bounded
 import policy
@@ -30,20 +29,19 @@ class EngineError(Exception):
     """The ast-grep library is not usable here."""
 
 
-@dataclass(frozen=True, slots=True)
-class Computed:
+class Computed(NamedTuple):
     """What the checker child sends back: every rule's verdict on one command."""
 
     kinds: dict[str, Kind | None]
-    invalid: dict[str, str] = field(default_factory=dict)
-    limit: Limit | None = None
-    failure: str | None = None
-    micros: dict[str, int] = field(default_factory=dict)
-    parse_us: int = 0
+    invalid: dict[str, str]
+    limit: Limit | None
+    failure: str | None
+    micros: dict[str, int]
+    parse_us: int
 
     @classmethod
     def from_json(cls, raw: object) -> Computed:
-        """Rebuild what `asdict` sent; raises KeyError, TypeError or ValueError on anything else."""
+        """Rebuild what `_asdict` sent; raises KeyError, TypeError or ValueError on anything else."""
         if not isinstance(raw, dict):
             raise TypeError("not an object")
         return cls({rid: Kind(kind) if kind else None for rid, kind in raw["kinds"].items()}, dict(raw["invalid"]),
@@ -99,13 +97,13 @@ def compute(command: str, rules: dict[str, policy.Rule]) -> Computed:
     try:
         import scanner
     except ImportError as exc:
-        return Computed(dict.fromkeys(rules), failure=f"the ast-grep-py library cannot be imported ({type(exc).__name__})")
+        return Computed(dict.fromkeys(rules), {}, None,
+                        f"the ast-grep-py library cannot be imported ({type(exc).__name__})", {}, 0)
     try:
         result = scanner.Scanner(configs_of(rules), regexes_of(rules)).run(parseable(command))
     except Exception as exc:  # noqa: BLE001
-        return Computed(dict.fromkeys(rules), failure=f"unexpected error: {type(exc).__name__}")
-    return Computed(result.kinds(list(rules)), result.invalid, result.limit, micros=result.micros,
-                    parse_us=result.parse_us)
+        return Computed(dict.fromkeys(rules), {}, None, f"unexpected error: {type(exc).__name__}", {}, 0)
+    return Computed(result.kinds(list(rules)), result.invalid, result.limit, None, result.micros, result.parse_us)
 
 
 def evaluate(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[], None] | None = None) -> Evaluation:
@@ -126,7 +124,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[
     started = time.monotonic()
     state = Health.HEALTHY
     try:
-        result = bounded.call(lambda: asdict(compute(command, rules)), DEADLINE_SECONDS, after_fork)
+        result = bounded.call(lambda: compute(command, rules)._asdict(), DEADLINE_SECONDS, after_fork)
         if result.outcome is bounded.Outcome.CRASHED:
             state = health(started)
             ev.runtime_broken = state is Health.BROKEN

@@ -13,7 +13,6 @@ import os
 import sys
 import time
 from collections.abc import Iterator
-from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict
 
@@ -32,8 +31,7 @@ class Wheel(TypedDict):
     member: str
 
 
-@dataclass(frozen=True)
-class Pins:
+class Pins(NamedTuple):
     python: str
     ast_grep_py: str
     uv: str

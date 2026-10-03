@@ -5,9 +5,8 @@ from __future__ import annotations
 import json
 import re
 from collections.abc import Mapping
-from dataclasses import dataclass, field, replace
 from enum import StrEnum
-from typing import Any, Self
+from typing import Any, NamedTuple, Self
 
 MAX_AST_BYTES = 16384  # bounds nesting too: ast-grep overflows its stack past about 4000 levels
 MATCH_KEYS = ("program", "args", "regex", "ast")
@@ -61,8 +60,7 @@ def json_modes(raw: object) -> list[str]:
     return [m for m in modes if isinstance(m, str)] if isinstance(modes, list) else []
 
 
-@dataclass(frozen=True, slots=True)
-class Match:
+class Match(NamedTuple):
     program: tuple[str, ...] = ()
     args: str | None = None
     regex: str | None = None
@@ -91,8 +89,7 @@ class Match:
         return cls(tuple(names or ()), raw.get("args"), raw.get("regex"), ast)
 
 
-@dataclass(frozen=True, slots=True)
-class Rule:
+class Rule(NamedTuple):
     match: Match
     message: str
     action: Action = Action.DENY
@@ -129,8 +126,7 @@ class Rule:
                    description if isinstance(description, str) else None)
 
 
-@dataclass(frozen=True, slots=True)
-class Mode:
+class Mode(NamedTuple):
     description: str = ""
     agent_may_enable: bool = False
     active: bool = False
@@ -140,13 +136,12 @@ class Mode:
         return cls(str(raw.get("description", "")), raw.get("agentMayEnable") is True, raw.get("active") is True)
 
     def tightened_by(self, override: Mapping[str, Any], trust_active: bool = True) -> Self:
-        return replace(self, description=str(override.get("description") or self.description),
-                       agent_may_enable=self.agent_may_enable and override.get("agentMayEnable", True) is not False,
-                       active=self.active or (trust_active and override.get("active") is True))
+        return self._replace(description=str(override.get("description") or self.description),
+                             agent_may_enable=self.agent_may_enable and override.get("agentMayEnable", True) is not False,
+                             active=self.active or (trust_active and override.get("active") is True))
 
 
-@dataclass(frozen=True, slots=True)
-class Activation:
+class Activation(NamedTuple):
     """How a mode came to be on: who said so and why."""
 
     by: Actor
@@ -163,16 +158,18 @@ class Activation:
         return {key: value for key, value in (("by", str(self.by)), ("at", self.at), ("reason", self.reason)) if value}
 
 
-@dataclass(slots=True)
 class Session:
     """What the hook remembers about one session; every list is a set of things already said or acknowledged."""
 
-    reported: list[str] = field(default_factory=list)
-    shown: list[str] = field(default_factory=list)
-    acknowledged: list[str] = field(default_factory=list)
-    warned: list[str] = field(default_factory=list)
-    reported_at: dict[str, float] = field(default_factory=dict)
-    modes: dict[str, Activation] = field(default_factory=dict)
+    __slots__ = ("acknowledged", "modes", "reported", "reported_at", "shown", "warned")
+
+    def __init__(self) -> None:
+        self.reported: list[str] = []
+        self.shown: list[str] = []
+        self.acknowledged: list[str] = []
+        self.warned: list[str] = []
+        self.reported_at: dict[str, float] = {}
+        self.modes: dict[str, Activation] = {}
 
     @classmethod
     def from_json(cls, raw: object) -> Self:
@@ -180,9 +177,12 @@ class Session:
             value = raw.get(key) if isinstance(raw, dict) else None
             return [x for x in value if isinstance(x, str)] if isinstance(value, list) else []
 
-        return cls(strings("reported"), strings("shown"), strings("acknowledged"), strings("warned"),
-                   {k: float(v) for k, v in view(raw, "reportedAt").items() if isinstance(v, (int, float))},
-                   {k: Activation.from_json(v) for k, v in view(raw, "modes").items() if isinstance(v, dict)})
+        session = cls()
+        session.reported, session.shown = strings("reported"), strings("shown")
+        session.acknowledged, session.warned = strings("acknowledged"), strings("warned")
+        session.reported_at = {k: float(v) for k, v in view(raw, "reportedAt").items() if isinstance(v, (int, float))}
+        session.modes = {k: Activation.from_json(v) for k, v in view(raw, "modes").items() if isinstance(v, dict)}
+        return session
 
     def to_json(self, seen_at: str) -> dict[str, Any]:
         out: dict[str, Any] = {"seenAt": seen_at}
@@ -236,7 +236,7 @@ def merge_rule(base: Rule, override: Mapping[str, Any], reword: bool = True) -> 
         changes["enabled"] = True
     if isinstance(override.get("modes"), list):
         changes["modes"] = tuple(m for m in base.modes if m in override["modes"])
-    return replace(base, **changes)
+    return base._replace(**changes)
 
 
 def _entries(state: object, key: str) -> dict[str, dict[str, Any]]:
@@ -252,8 +252,7 @@ def origins(key: str, managed: object, global_state: object, project_state: obje
     return out
 
 
-@dataclass(frozen=True, slots=True)
-class Effective:
+class Effective(NamedTuple):
     rules: dict[str, Rule]
     problems: dict[str, str]
 
@@ -282,7 +281,7 @@ def effective(managed: object, global_state: object, project_state: object) -> E
     for rid, raw in managed_rules.items():
         add(rid, raw)
         if rid in rules:
-            rules[rid] = replace(rules[rid], modes=tuple(m for m in rules[rid].modes if m in declared))
+            rules[rid] = rules[rid]._replace(modes=tuple(m for m in rules[rid].modes if m in declared))
     for state in [global_state, *([project_state] if project_enabled(project_state) else [])]:
         for rid, raw in _entries(state, "rules").items():
             if rid in problems:

@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Collection
-from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import NamedTuple
 
@@ -54,19 +53,21 @@ class UnitTree(NamedTuple):
     broken: bool
 
 
-@dataclass(slots=True)
 class Evaluation:
     """How each rule's matcher selects one command, and what kept a rule from being judged."""
 
-    kinds: dict[str, Kind | None] = field(default_factory=dict)
-    unevaluated: set[str] = field(default_factory=set)
-    invalid: dict[str, str] = field(default_factory=dict)
-    failure: str | None = None
-    refusal: str | None = None
-    runtime_broken: bool = False
-    fault: Fault | None = None
-    micros: dict[str, int] = field(default_factory=dict)
-    parse_us: int = 0
+    __slots__ = ("failure", "fault", "invalid", "kinds", "micros", "parse_us", "refusal", "runtime_broken", "unevaluated")
+
+    def __init__(self, kinds: dict[str, Kind | None]) -> None:
+        self.kinds = kinds
+        self.unevaluated: set[str] = set()
+        self.invalid: dict[str, str] = {}
+        self.failure: str | None = None
+        self.refusal: str | None = None
+        self.runtime_broken = False
+        self.fault: Fault | None = None
+        self.micros: dict[str, int] = {}
+        self.parse_us = 0
 
     def failure_kind(self) -> str:
         return "refusal" if self.refusal else "engine"
