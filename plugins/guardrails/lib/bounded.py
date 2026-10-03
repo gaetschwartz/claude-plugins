@@ -7,6 +7,7 @@ the child parses hostile input and the parent must not execute what it sends bac
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import resource
@@ -62,8 +63,9 @@ def call(work: Callable[[], object], seconds: float, after_fork: Callable[[], No
     unreadable answer.
 
     `after_fork` runs in the parent once the child exists, before it waits."""
-    sys.stdout.flush()
-    sys.stderr.flush()
+    for stream in (sys.stdout, sys.stderr):
+        with contextlib.suppress(AttributeError, ValueError):
+            stream.flush()
     rx, tx = os.pipe()
     pid = os.fork()
     if pid == 0:

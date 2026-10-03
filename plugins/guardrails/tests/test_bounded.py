@@ -1,5 +1,6 @@
 from __future__ import annotations  # noqa: I001
 
+import io
 import json
 import os
 import sys
@@ -56,6 +57,10 @@ class Call(unittest.TestCase):
             self.assertEqual(bounded.call(lambda: 1, 5).outcome, bounded.Outcome.GARBLED)
         with self.assertRaises(ChildProcessError):
             os.waitpid(-1, os.WNOHANG)
+
+    def test_streams_that_cannot_be_flushed_do_not_stop_the_fork(self) -> None:
+        with mock.patch.object(sys, "stdout", None), mock.patch.object(sys, "stderr", io.StringIO()):
+            self.assertEqual(bounded.call(lambda: 1, 5), bounded.Result(DONE, 1))
 
     def test_the_parent_keeps_no_state_from_the_child(self) -> None:
         box: list[int] = []
