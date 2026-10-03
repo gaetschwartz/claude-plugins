@@ -51,6 +51,7 @@ class Hook(AstIsolated):
             with self.subTest(rid):
                 first = self.hook("strings x", session=f"u-{rid}")
                 self.assertEqual(decision(first), "deny")
+                assert first is not None
                 warning = first["systemMessage"]
                 self.assertIn(f"rule {rid} is invalid", warning)
                 self.assertRegex(warning, r"unknown field (match\.builtin|tool|match\.flavour)")
