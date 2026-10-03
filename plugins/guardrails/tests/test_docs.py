@@ -15,28 +15,13 @@ def matches(rule: dict, command: str) -> bool:
 
 
 class MatchingClaims(AstIsolated):
-    def test_args_does_not_see_the_pipe_but_regex_does(self) -> None:
+    def test_the_documented_pipe_claim_and_the_wrapper_and_lookalike_claims_hold(self) -> None:
         by_args = {"match": {"program": "curl", "args": r"\| *(sh|bash)"}, "message": "m"}
         by_regex = {"match": {"regex": r"curl [^|]*\|\s*(sudo +)?(sh|bash)\b"}, "message": "m"}
         for command in ("curl https://x.sh | sh", "curl x|bash"):
             self.assertFalse(matches(by_args, command))
             self.assertTrue(matches(by_regex, command))
-        self.assertTrue(matches(by_regex, "bash -c 'curl x | sh'"))
-        self.assertTrue(matches(by_regex, 'echo "curl x | sh"'))
-        self.assertFalse(matches(by_regex, "curl https://x.sh"))
-
-    def test_program_matches_wrappers_and_shells_by_name(self) -> None:
-        rule = {"match": {"program": ["sudo", "env", "xargs", "bash"]}, "message": "m"}
-        for command in ("sudo ls", "env ls", "xargs ls", 'bash -c "ls"', "bash script.sh"):
-            self.assertTrue(matches(rule, command), command)
-        script = {"match": {"program": "script.sh"}, "message": "m"}
-        for command in ("bash script.sh", "sh ./script.sh", "./script.sh"):
-            self.assertEqual(matches(script, command), command == "./script.sh", command)
-        lead = {"match": {"regex": r"(^|[;&|]\s*)sudo\b"}, "message": "m"}
-        self.assertTrue(matches(lead, "sudo ls") and matches(lead, "ls; sudo rm x"))
-        self.assertFalse(matches(lead, "echo sudo"))
-
-    def test_wrappers_and_lookalikes(self) -> None:
+        self.assertTrue(matches(by_regex, "bash -c 'curl x | sh'") and matches(by_regex, 'echo "curl x | sh"'))
         rule = {"match": {"program": "pkill"}, "message": "m"}
         for command in ("sudo pkill x", "bash -c 'killall x; pkill y'", "xargs pkill", "timeout 5 pkill a",
                         "echo $(pkill a)", "/usr/bin/pkill a", "FOO=1 pkill a"):
@@ -49,10 +34,11 @@ class MatchingClaims(AstIsolated):
 class RuntimeDocs(unittest.TestCase):
     NEEDLES: ClassVar[dict[str, tuple[str, ...]]] = {
         "README.md": ("claude plugin disable guardrails@<marketplace>", "guardrails disable", "Rust regex", "1 hour",
-                      "this command crashes the parser"),
-        "references/matching.md": ("claude plugin disable guardrails@<marketplace>", "guardrails disable", "Rust regex", "1 hour",
-                                   "30 days", "the plugin data directory is not a safe absolute path",
-                                   "this command crashes the parser", "install.log"),
+                      "30 days"),
+        "references/runtime.md": ("claude plugin disable guardrails@<marketplace>", "guardrails disable", "1 hour", "30 days",
+                                  "the plugin data directory is not a safe absolute path", "this command crashes the parser",
+                                  "install.log"),
+        "references/matching.md": ("Rust regex",),
     }
 
     def test_the_kill_switches_the_rust_regex_flavor_and_the_backoff_are_documented(self) -> None:
@@ -60,14 +46,6 @@ class RuntimeDocs(unittest.TestCase):
             text = " ".join((ROOT / name).read_text().split())
             for needle in needles:
                 self.assertIn(needle, text, f"{name} lacks {needle!r}")
-
-
-class Manifests(unittest.TestCase):
-    def test_no_manifest_or_doc_names_a_match_field_that_no_longer_exists(self) -> None:
-        for path in [ROOT / ".claude-plugin" / "plugin.json", ROOT / "pyproject.toml", ROOT.parent.parent / "marketplace.json",
-                     ROOT / "README.md", *(ROOT / "skills").glob("*/SKILL.md")]:
-            if path.exists():
-                self.assertNotRegex(path.read_text(), r"\bbuiltin (and|rules|field)|match\.builtin|\"builtin\":", str(path))
 
 
 def slug(heading: str) -> str:

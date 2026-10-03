@@ -62,8 +62,7 @@ The layout contract, all of it computed by the CLI:
 
 - Title: `### <id> · <action> · retry same-command · <scope>`; no retry part when retry is none; the scope is the layers
   that define an installed rule (`global+project`). A draft has no id yet: `--id-name`, else the rule's own `id`
-  field, else `new-rule`. For a draft in a managed file that is not the platform default, a `**File**` line follows
-  the title.
+  field, else `new-rule`.
 - `**Intent**` (only with `--intent`), `**Match**` (`program`, `args`, `regex`, `ast`, whichever the rule
   has; `ast = <the rule as compact one-line JSON>`), `**Message**` (with `{which:a|b}` resolved).
 - Groups, each omitted when empty: `**Block**` (the matcher catches it, action deny), `**Warn**` (catches it, action

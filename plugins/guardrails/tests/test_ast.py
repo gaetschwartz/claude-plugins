@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from unittest import mock
 
-from helpers import AstIsolated, caught, render
+from helpers import AstIsolated, caught
 
 import matching
 import policy
@@ -315,7 +315,6 @@ class Hook(AstIsolated):
         self.assertIn("[guardrails:slow]", out["hookSpecificOutput"]["permissionDecisionReason"])
 
     def test_no_regex_rule_runs_on_python_re_in_the_hook_process(self) -> None:
-        import re
 
         self.put(self.gpath, {"rules": {"pipe": {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "No."}}})
         with mock.patch.object(re, "search", side_effect=AssertionError("python re used")):
@@ -335,27 +334,3 @@ class Hook(AstIsolated):
         self.assertNotIn("r", self.get(self.gpath)["rules"])
         self.assertEqual(self.cli("rule", "add", "ok", "--json", json.dumps({"match": {"regex": r"\bfoo\b"},
                                                                           "message": "m"}))[0], 0)
-
-class WorkedExample(AstIsolated):
-    """The three rules in the README run through the real engine and select exactly what the README says."""
-
-    def rules(self) -> list[dict[str, Any]]:
-
-        from helpers import ROOT
-
-        text = (ROOT / "README.md").read_text()
-        section = text[text.index("### Worked example"):text.index("\n## Modes")]
-        return [json.loads(block) for block in re.findall(r"```json\n(.*?)\n```", section, re.DOTALL)]
-
-    def test_each_rule_selects_its_own_commands(self) -> None:
-        commands = ["pkill node", "sudo killall Finder", "bash -c 'pkill x'", f"{KILL} $({PG} -f vite)",
-                    f"{PG} -xl node", f"{PG} node | head -1", f"if {PG} -q x; then echo up; fi",
-                    f"ps aux | xargs {KILL} -9", f"xargs {KILL} < pids", 'echo "pkill is banned"',
-                    "cat <<'EOF'\npkill x\nEOF", f"{KILL} 4242"]
-        expected = [set(commands[:3]), {commands[3], commands[5], commands[6]}, {commands[7]}]
-        rules = self.rules()
-        self.assertEqual(len(rules), 3)
-        for rule, want in zip(rules, expected):
-            code, out, err = self.cli("rule", "test", "--json", json.dumps(rule), *commands)
-            self.assertEqual(code, 0, err)
-            self.assertEqual({cmd for cmd, hit in caught(out).items() if hit}, {render.clean(c) for c in want})

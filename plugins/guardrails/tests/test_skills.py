@@ -12,7 +12,8 @@ TEXT_SUFFIXES = {".md", ".json", ".py", ".sh", ".toml", ".txt"}
 READ_ONLY_TOOLS = ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "Bash(guardrails rule ast *)"]
 CAT_REFERENCES = "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"
 STALE = ("engine install", "engine verify", "npm ci", "package.json", "SARIF", "GUARDRAILS ENGINE MISSING", "astbin",
-         "astrun", "astcli", "astworker", "astrules", "engine-manifest", "guardrails:" + "rules")
+         "astrun", "astcli", "astworker", "astrules", "engine-manifest", "guardrails:" + "rules", "GUARDRAILS_MANAGED_PATH",
+         "--path", "guardrails wrapper", "match.builtin", '"builtin":')
 
 
 def skill(name: str) -> tuple[dict[str, str], str]:
@@ -86,15 +87,6 @@ class SkillFiles(unittest.TestCase):
                 with self.subTest(skill=name, ref=ref):
                     self.assertTrue((ROOT / ref.rstrip(".").removesuffix("/**").rstrip("/")).exists())
         self.assertEqual(used, {p.name for p in (ROOT / "references").glob("*.md")})
-
-    def test_the_pitfalls_in_new_match_the_guide(self) -> None:
-        new = skill("new")[1]
-        short = re.findall(r"^- `([a-z-]+)`: ", new.partition("## How to write the rule")[2].partition("\n## ")[0],
-                           re.MULTILINE)
-        guide = (ROOT / "references" / "writing-rules.md").read_text()
-        full = re.findall(r"^### ([a-z-]+)$", guide.partition("## The six pitfalls")[2].partition("\n## ")[0],
-                          re.MULTILINE)
-        self.assertEqual((len(short), short), (6, full))
 
     def test_no_text_names_a_removed_install_step_or_skill(self) -> None:
         known = {f"guardrails:{name}" for name in EXPECTED}

@@ -53,22 +53,11 @@ plain chat what to explain instead.)
    it. Never write a script or compute rows, spacing, verdicts or counts yourself; every ✗ or ✓ comes from the CLI.
 5. After a blank line add the bold-label lines from the Explain section of the presentation reference (`Happens`,
    `Loosen`, `Lower layers`, and `Cause` only when the question was why something was or was not caught), with no
-   command spans or verdicts of your own. State the cause when the matching reference explains it; do not hedge and do
-   not say "possibly". The reference covers the usual causes:
-   - a wrapper or `bash -c` was looked through, or was not (ssh, `find -exec`, scripts and obfuscated or dynamic names are invisible)
-   - `args` only sees that one command's own arguments, so a pipe to `sh` is invisible to it and needs `match.ast`
-     (an `inside` relation) or `match.regex`
-   - for a rule with `match.ast`: run `guardrails rule ast '<cmd>'` to show the tree and the shell-string units; the
-     engine may have been unavailable (the rule is then not enforced and the row is listed under **Not evaluated**; the user can run `guardrails engine status` for the state; while the runtime is still installing, no rule is enforced at all), a wrapper may be unknown to the wrapper list, or the
-     text was data (a heredoc body, single quotes)
-   - the rule was suspended by an active mode, disabled, or skipped because `requires` is not installed, or the hook
-     or project rules are switched off (the "Why a rule may not fire" list)
-   - `program` matches a wrapper or shell by name and behind a wrapper by any of its words (`sudo grep pkill file` hits
-     `pkill`); `bash script.sh` is program `bash`, the script file is not looked into
-   - a retry acknowledged the identical command earlier in the session
-   - the call was not a command the hook sees: a Monitor with only a `ws` URL, or a monitor a plugin declares itself
-   - a project or global entry cannot loosen what a higher layer defines; a managed rule without modes is always
-     enforced
+   command spans or verdicts of your own. State the cause when the matching reference explains it (its "Why a rule may
+   not fire" list and the limits of `program` / `args` / wrappers); do not hedge and do not say "possibly". For a rule with
+   `match.ast`, run `guardrails rule ast '<cmd>'` to show the tree and the shell-string units. If the engine was
+   unavailable the row is listed under **Not evaluated**: `cat ${CLAUDE_PLUGIN_ROOT}/references/runtime.md` for what that
+   means and tell the user to run `guardrails engine status`.
 6. When the fix for a pipeline case is a rule change, name `match.ast` (or `match.regex`) as the fix and leave the change to the user
    (`guardrails:edit`). The card's `Verified` line and `Note` come from `rule test`, which checks only the matcher:
    take mode, retry and warn-versus-deny behaviour from `status` and the reference.

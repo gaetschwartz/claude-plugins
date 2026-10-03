@@ -2,7 +2,7 @@
 
 The members of `a | b | c` are sibling `command` nodes under one `pipeline`, and the `|` is a sibling too. So
 `follows` / `precedes` need `stopBy: end` (the default sees only the `|` next to you), and `match.args` can never see
-the pipe, see [matching.md](../matching.md#pipelines-args-does-not-see-them). Every block is checked by
+the pipe, see [writing-rules.md](../writing-rules.md#args-no-pipelines). Every block is checked by
 `tests/test_ast_examples.py` against the real engine: each `catch` command matches, each `pass` command does not. Rule
 syntax and semantics: [matching.md](../matching.md).
 

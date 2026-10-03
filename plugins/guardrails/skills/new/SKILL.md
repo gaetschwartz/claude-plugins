@@ -29,9 +29,6 @@ Parse the text above; every long flag has a short one. Flags pre-answer the matc
 Defaults when a setting is neither given nor asked: action deny, retry same-command (only when deny), scope global,
 no modes.
 
-A rule applies to Bash commands and to Monitor commands alike (the hook matches both); a Monitor call that only
-opens a `ws` URL has no command, and monitors a plugin declares itself are not covered.
-
 ## Asking
 
 - Free text (the description, examples, message wording) is always asked in a plain chat message, never with
@@ -41,30 +38,12 @@ opens a `ws` URL has no command, and monitors a plugin declares itself are not c
 
 ## How to write the rule
 
-- One behavior per rule: split on "and"; a different message, alternative, action or mode is a different rule.
-- Narrowest matcher that separates the examples: `program`, `program` + `args`, `ast`, `regex` (Rust regex syntax: no backreferences or look-around).
-- For a structural `ast` rule run `guardrails rule ast '<a command it must catch>'` and use the kinds it prints.
-- Anchor the `pattern` on the dangerous command; put its surroundings in a relation (`inside`, `has`, `follows`,
-  `precedes`).
-- Test at least 3 commands that must be caught (one wrapped: `sudo X`, `bash -c 'X'`, a pipe or `$( )`) and at least 3
-  that must pass (a look-alike, `man X`, `echo "X"`, a heredoc mentioning X).
-- Tighten to zero mismatches, then write a `message` that names the alternative.
-
-Pitfalls (details in the full guide):
-
-- `trailing-holes`: end a pattern with `$$$`, not `$A` (exactly one word); patterns are anchored at the start, flags
-  are order-sensitive.
-- `hole-in-substitution`: a hole inside `$( )` never matches; use `has` with `kind: command_substitution`.
-- `stop-by`: `inside` / `has` / `follows` / `precedes` look at the nearest level only; add `stopBy: end`.
-- `args-no-pipelines`: `args` sees one command's own words, never a pipe or a substitution.
-- `program-and-wrapper-words`: `program` also matches behind a wrapper by any of its words (`sudo grep pkill file` is a
-  hit for `pkill`); test the look-alikes.
-- `regex-in-heredocs`: `regex` fires on `echo "X"`, `man X` and heredoc bodies.
-
-Negated context (`not` around `inside` / `follows` / `precedes`) works: every rule runs on the real tree.
-
-Read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md` in full whenever the rule is non-trivial (anything beyond
-`program` / `args`: a relation, a regex, several behaviors, wrapper or quoting concerns) or you are unsure.
+Read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md` (matcher ladder, tree, test matrix, edge cases, the six pitfalls)
+in full unless the rule is a bare `program` / `args` one. In short: one behavior per rule (split on "and"); the narrowest
+matcher that separates the examples; for an `ast` rule run `guardrails rule ast '<a command it must catch>'` and use the
+kinds it prints, never guessed ones; at least 3 commands that must be caught (one wrapped: `sudo X`, `bash -c 'X'`, a pipe
+or `$( )`) and at least 3 that must pass (a look-alike, `man X`, `echo "X"`, a heredoc mentioning X); tighten to zero
+mismatches; a `message` that names the alternative.
 
 Three examples (each block is machine-checked: every `catch` command matches, every `pass` command does not).
 
@@ -146,19 +125,12 @@ Read only the file that matches the shape you need.
 **1.a** Ask in chat for a description and/or examples and counter-examples: commands that must be caught and commands
 that must pass. Skipped when a description was passed.
 
-**1.b.1** Elaborate the rule. Use the narrowest matcher that separates the examples, stopping at the first that does:
-`program` (one name or a list), then `program` + `args`, then an `ast` rule (a `pattern`, plus
-`inside` / `has` when the question is about context such as "only when nested in a substitution, pipeline or loop"),
-then `regex`. Before writing an `ast` rule with relations, run `guardrails rule ast '<a command it must catch>'` and
-read the node kinds it prints; do not guess kinds. Write a `message` that names the
-alternative (what to do instead). Derive the `id` from the intent (`no-pkill`); ask only when it collides with an id in
-`guardrails status`, and say when the colliding rule is managed. Put the user's description in the rule's `description`.
-A question about what a command is piped into is out of reach for `program`/`args`: use `ast` with `inside` when the
-shape is structural, `regex` for dataflow across commands (`regex` also fires inside heredocs and quoted text). The
-wrappers and shells themselves (`sudo`, `bash`) are programs too (`program: sudo` matches `sudo ls`). A rule with
-`program`, `args`, `regex` or `match.ast` needs the ast-grep runtime, which guardrails installs by itself (every `guardrails` call ensures it first); if
-`rule test` reports `cannot` for a command or prints a note that the engine failed, tell the user before going on
-(`guardrails engine status` shows the state); no rule, `regex` included, works while the engine fails.
+**1.b.1** Elaborate the rule with the ladder from the guide. Derive the `id` from the intent (`no-pkill`); ask only when it
+collides with an id in `guardrails status`, and say when the colliding rule is managed. Put the user's description in the
+rule's `description`. A question about what a command is piped into is out of reach for `program`/`args`: use `ast` with
+`inside` for structure, `regex` for dataflow across commands. Every rule needs the ast-grep runtime, which installs itself;
+if `rule test` reports `cannot` for a command or says the engine failed, tell the user before going on
+(`guardrails engine status` shows the state); no rule works while the engine fails.
 
 **1.b.2** With examples, test them: `guardrails rule test --json - 'cmd' …` with the rule on stdin (see "Passing the
 rule as JSON").

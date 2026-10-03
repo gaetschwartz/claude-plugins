@@ -128,10 +128,8 @@ as its own command, then `kill <pid>`." Bad: "Blocked."
 - **`modes` and `agentMayEnable`**: a rule listing a mode is suspended while that mode is on. Declare the mode
   agent-enablable only if the user should be able to say "this session is X" and have the agent switch it on; an agent
   never enables a mode on its own because of a denial.
-- **Scopes and layering**: global by default, `--scope project` for one repository, `--scope managed` for enforced
-  rules. Order is managed, global, project; a lower layer can add rules and, for an existing id, only tighten
-  (action to deny, retry off, re-enable, reword); it can never change `match`, loosen or disable. Managed rules with no
-  declared modes cannot be suspended. Details in [matching.md](matching.md#layers).
+- **Scopes**: global by default, `--scope project` for one repository, `--scope managed` for enforced rules; a lower layer
+  can only tighten an existing id ([matching.md](matching.md#layers)).
 
 ## 10. Edge-case checklist
 
@@ -153,20 +151,12 @@ Test each that applies to the rule. Expected results are for a rule about the co
 | piped into or fed by | `a \| X`, `X \| b` | per the rule's intent |
 | Monitor and background use | the same command in a Monitor call, `X &` | rules for Bash also apply to Monitor |
 
-Known limits, where the rule cannot see the command (say so in the description rather than hoping):
-
-- a name held in a variable (`cmd=X; $cmd`), a function or an alias that expands to it
-- `ssh host X`, `find . -exec X {} \;`, scripts (`bash script.sh`), `python -c '...'`
-- a wrapper the fixed list does not know
-- an obfuscated name (`p''kill`, `$'p\x6bill'`, `p\kill`) or a script given as an ANSI-C literal (`bash -c $'X'`): it cannot be analysed statically
-- `watch 'X'`, `su -c 'X'`, `echo X | sh`, `source <(echo X)`: only `bash -c`, `script -c`, `eval` and shell-fed heredocs and here-strings are scanned
-- a wrapped command after a syntax error (`{ ; }; xargs -r X`, zsh-valid and a syntax error in bash): `program` and `args` rules still
-  see it, a `pattern` rule does not
-- the coarseness of wrapper variants: any word of a wrapper can start a command, so `sudo grep curl f | sh` matches a `curl $$$ | sh` rule
+Known limits, where the rule cannot see the command (say so in the description rather than hoping): the list "Cannot be
+analysed statically" and the notes on syntax errors and wrapper coarseness in [matching.md](matching.md#program-args).
 
 ## The six pitfalls
 
-Each one makes a rule look right and be wrong. The short list in the `new` skill uses the same ids.
+Each one makes a rule look right and be wrong.
 
 ### trailing-holes
 
