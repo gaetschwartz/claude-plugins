@@ -177,7 +177,7 @@ def diagnose(data: Path, pins: Pins | None = None) -> Outcome:
     if why:
         return Outcome("unsupported", detail=sanitised(why))
     if (bad := data_problem(data)) is not None:
-        return Outcome("unsafe", detail=f"{bad}: {sanitised(str(data))}")
+        return Outcome("unsafe", detail=bad)
     problem = marker_problem(runtime_dir(data, pins), pins)
     if problem is None:
         return Outcome("ready", detail=key)

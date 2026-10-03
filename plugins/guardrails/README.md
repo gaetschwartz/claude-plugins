@@ -68,7 +68,7 @@ troubleshooting; `guardrails engine status` shows the state and works offline.
 
 **While the runtime is not ready, no rule is enforced**, `regex` rules included, because every rule runs on the managed
 Python. That window is the first seconds of the first session, or until an install works after a failure. The notice says
-the runtime is being installed or why it failed (one of a few fixed classes, never text from the network or the
+the runtime is being installed or why it failed (one of a few fixed classes, never text or a path from the network, the environment or the
 repository), and that rules are NOT enforced meanwhile.
 
 **If guardrails ever blocks everything.** The user can run `claude plugin disable guardrails@<marketplace>` or, from a

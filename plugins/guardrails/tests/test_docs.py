@@ -53,7 +53,7 @@ class RuntimeDocs(unittest.TestCase):
         "README.md": ("claude plugin disable guardrails@<marketplace>", "guardrails disable", "Rust regex", "1 hour",
                       "this command crashes the parser"),
         "references/matching.md": ("claude plugin disable guardrails@<marketplace>", "guardrails disable", "Rust regex", "1 hour",
-                                   "30 days", "plugin data dir is not a safe absolute path",
+                                   "30 days", "the plugin data directory is not a safe absolute path",
                                    "this command crashes the parser", "install.log"),
     }
 

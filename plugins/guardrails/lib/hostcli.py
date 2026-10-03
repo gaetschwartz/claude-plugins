@@ -34,8 +34,8 @@ def notice(found: Outcome) -> str:
     if found.state == "unsupported":
         return f"{HEAD}this platform is unsupported ({found.detail}): the rules engine cannot run here. {MEANWHILE}{TELL}"
     if found.state == "unsafe":
-        return (f"{HEAD}plugin data dir is not a safe absolute path: {found.detail}. Nothing is run from it. "
-                f"{MEANWHILE}{TELL}")
+        return (f"{HEAD}the plugin data directory is not a safe absolute path ({found.detail}). Nothing is run from "
+                f"it. {MEANWHILE}{TELL}")
     if found.reason is not None:
         when = f" The next automatic attempt is at {clock(found.retry_at)}." if found.retry_at else ""
         return (f"{HEAD}the rules runtime is not installed ({REASON_TEXT[found.reason]} during {found.step}).{when} "
@@ -101,8 +101,7 @@ def status_text(data: Path) -> str:
     rt = bootstrap.runtime_dir(data, pins)
     lines = [f"runtime: {'ready' if found.state == 'ready' else 'NOT ready (' + found.state + ')'}",
              f"pins: uv {pins.uv}, Python {pins.python}, ast-grep-py {pins.ast_grep_py}, id {pins.runtime_id}",
-             f"platform: {bootstrap.platform_problem().key or 'unsupported: ' + found.detail}",
-             f"path: {bootstrap.sanitised(str(rt), 300)}"]
+             f"platform: {bootstrap.platform_problem().key or 'unsupported: ' + found.detail}"]
     with contextlib.suppress(OSError, ValueError, KeyError):
         lines.append(f"installed: Python {json.loads((rt / 'marker.json').read_text())['python']}")
     if found.state != "unsafe":
@@ -114,7 +113,7 @@ def status_text(data: Path) -> str:
     if stamp := bootstrap.read_stamp(data):
         lines.append(f"last install failure: {REASON_TEXT[stamp.reason]} during {stamp.step}, {stamp.count} in a row; "
                      f"next automatic attempt at {clock(stamp.retry_at)} (`guardrails engine ensure --retry-now` "
-                     f"ignores the wait); raw detail: {data / 'runtime' / 'install.log'}")
+                     f"ignores the wait); raw detail: runtime/install.log in the plugin data directory")
     if found.state != "ready":
         lines.append("rules are NOT enforced until the runtime is ready")
     return "\n".join(lines)
@@ -149,7 +148,10 @@ def exec_guard(args: list[str]) -> None:
 def run_command(args: list[str]) -> int:
     """The CLI: engine status needs no runtime; everything else ensures first and runs on the managed Python."""
     if args[:2] == ["engine", "status"]:
-        print(status_text(bootstrap.data_dir()))
+        data = bootstrap.data_dir()
+        print(status_text(data))
+        print(f"guardrails: runtime {bootstrap.sanitised(str(bootstrap.runtime_dir(data, bootstrap.load_pins())), 300)}, "
+              f"install log {bootstrap.sanitised(str(data / 'runtime' / 'install.log'), 300)}", file=sys.stderr)
         return 0
     if args[:2] == ["engine", "ensure"]:
         return ensure_command(args[2:])

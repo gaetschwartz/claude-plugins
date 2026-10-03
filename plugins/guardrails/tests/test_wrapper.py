@@ -185,6 +185,7 @@ class StubbedCases(Base):
                     self.assertIn("is broken", text)
                     self.assertIn("python3", text)
                     self.assertIn("NOT enforced", text)
+                    self.assertNotIn(str(broken.parent), proc.stdout)
                     self.assertEqual(proc.returncode, 2 if mode == "cli" else 0)
                     if mode == "hook":
                         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"],

@@ -82,7 +82,8 @@ find_python
 if [ -z "$py" ]; then
   if [ -n "$broken" ]; then
     clean=$(printf '%s' "$broken" | /usr/bin/tr -c 'A-Za-z0-9/._-' '?')
-    say "[guardrails plugin notice] python3 at $clean is broken (it cannot run), so the guardrails runtime cannot be installed and guardrails rules are NOT enforced. Tell the user about this now."
+    [ "$mode" = cli ] || printf 'guardrails: broken python3 at %s\n' "$clean" >&2
+    say "[guardrails plugin notice] python3 is broken (it cannot run), so the guardrails runtime cannot be installed and guardrails rules are NOT enforced. Tell the user about this now."
   fi
   say "[guardrails plugin notice] No usable python3 (3.9 or newer) was found, so the guardrails runtime cannot be installed and guardrails rules are NOT enforced. Tell the user about this now."
 fi

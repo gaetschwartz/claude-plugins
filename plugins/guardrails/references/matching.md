@@ -217,8 +217,11 @@ open in it too. The notice says so.
 
 The data dir: the runtime is found only through `CLAUDE_PLUGIN_DATA` (default `~/.claude/plugins/data/<plugin>-<marketplace>`),
 which must be absolute and canonical (no `..`, no symlink component), owned by you, not writable by group or others. If not,
-the notice says "plugin data dir is not a safe absolute path: <path>", nothing is executed or written there, and the notice
-repeats on every call. The project directory and the cwd never decide (a session started in `$HOME` or `~/.claude` enforces
+the notice says "the plugin data directory is not a safe absolute path (<fixed reason>)", nothing is executed or written there,
+and the notice repeats on every call. No notice, hook answer or `engine status` text ever contains a path or any other text
+taken from the environment or the repository: the paths of the runtime and of the install log go to stderr of
+`guardrails engine status` only. Residual, out of scope by decision: a `CLAUDE_PLUGIN_DATA` that the repository controls and
+that points at a planted runtime passes these checks, because the variable is provided by the harness. The project directory and the cwd never decide (a session started in `$HOME` or `~/.claude` enforces
 normally).
 
 Only `lib/bootstrap.py` and `lib/hostcli.py` run on the host's Python (3.9 or newer, standard library only). The bootstrap
@@ -251,7 +254,7 @@ Trust model: the wrapper runs the runtime's Python only when the data dir passes
 interpreter and the extension module are owned by you, not writable by group or others, unchanged in size and mtime since the
 install, and inside the runtime dir; any failure reinstalls. The hook runs with `python -I`. The wrapper picks the host Python
 from fixed absolute locations first, then `PATH` entries that are absolute, outside the project and cwd and not world-writable;
-each candidate is smoke-tested (`python3 -I -S -c` on the version), and a broken one is named in the notice, never skipped
+each candidate is smoke-tested (`python3 -I -S -c` on the version), and a broken one is reported (its path on stderr, never in the notice), never skipped
 silently. A hook Python that dies is reported ("failed to run (exit N)").
 
 Troubleshooting: `guardrails engine status` needs no runtime and works offline: whether the runtime is ready (or why not), the
