@@ -2,7 +2,8 @@
 
 The command is parsed as written. The commands behind each wrapper (sudo, env, xargs, ...) and the scripts handed to
 shells (`bash -c '...'`, `eval`, heredocs) are text variants and units of their own, parsed and matched the same way;
-a hit inside one of them counts as wrapped.
+a hit inside one of them counts as wrapped. A variant is one top-level statement with its wrappers replaced, never the
+whole text, so its cost does not grow with the size of the script around it.
 """
 
 from __future__ import annotations
@@ -11,7 +12,7 @@ import itertools
 import math
 import re
 from collections import deque
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import NamedTuple
@@ -23,7 +24,7 @@ from verdict import MAX_COMMAND_BYTES, Kind, Limit, UnitTree
 MAX_DEPTH = 8
 MAX_UNITS = 64
 MAX_VARIANTS = 2048
-MAX_VARIANT_BYTES = 16 << 20
+MAX_VARIANT_BYTES = 512 << 10
 MAX_COMBINATIONS = 64
 SHELLS = ("bash", "sh", "zsh", "dash", "ksh", "script")
 CONTEXT_KINDS = frozenset({"pipeline", "command_substitution", "process_substitution"})
@@ -75,10 +76,15 @@ class Scan:
         return {rid: found.get(rid) for rid in rule_ids}
 
 
+class TooManyVariants(Exception):
+    """A unit holds more wrapped commands, or one wrapper has more words, than the variant cap allows."""
+
+
 class Span(NamedTuple):
     start: int
     end: int
     words: tuple[int, ...]
+    statement: tuple[int, int] = (0, 0)
 
 
 def unquote(word: str) -> str:
@@ -182,19 +188,46 @@ def scripts_in(root: SgNode, restricted: bool) -> list[Script]:
     return [script for script in found if script.text.strip()]
 
 
+def statement_range(node: SgNode) -> tuple[int, int]:
+    """The range of the top-level statement (a direct child of the program) that holds the node."""
+    while (parent := node.parent()) is not None and parent.kind() != "program":
+        node = parent
+    where = node.range()
+    return where.start.index, where.end.index
+
+
 def wrapper_spans(root: SgNode, wrappers: Sequence[str]) -> list[Span]:
-    """Each command named by a wrapper: its byte range and where each of its words after the first node starts."""
+    """Each command named by a wrapper: its range, where each of its non-option words starts (an option cannot start
+    the wrapped command) and the top-level statement around it."""
+    commands = commands_named(root, wrappers)
+    if len(commands) > MAX_VARIANTS:
+        raise TooManyVariants
     spans = []
-    for command in commands_named(root, wrappers):
-        words = command.named_children()[1:]
+    for command in commands:
+        nodes = arguments(command)
+        if len(nodes) > MAX_VARIANTS:
+            raise TooManyVariants
+        words = [word for word in nodes if not word.text().startswith("-")]
         if words:
             where = command.range()
-            spans.append(Span(where.start.index, where.end.index, tuple(w.range().start.index for w in words)))
+            spans.append(Span(where.start.index, where.end.index, tuple(w.range().start.index for w in words),
+                              statement_range(command)))
     return spans
 
 
-def variants_of(text: str, spans: Sequence[Span]) -> list[str]:
-    """The command text with one wrapper replaced by the text from each of its words on, and with several outermost
+def variants_of(text: str, spans: Sequence[Span]) -> Iterator[str]:
+    """The text of each top-level statement that holds a wrapper, with the wrappers replaced (see statement_variants).
+    Lazy, so the caller's caps stop the work before the copies are made."""
+    by_statement: dict[tuple[int, int], list[Span]] = {}
+    for span in spans:
+        by_statement.setdefault(span.statement, []).append(span)
+    for (first, last), group in by_statement.items():
+        yield from statement_variants(text[first:last], [Span(s.start - first, s.end - first,
+                                                             tuple(w - first for w in s.words)) for s in group])
+
+
+def statement_variants(text: str, spans: Sequence[Span]) -> Iterator[str]:
+    """The statement text with one wrapper replaced by the text from each of its words on, and with several outermost
     wrappers replaced together: every combination while there are few, else each k-th word of all of them at once."""
 
     def replaced(chosen: Sequence[tuple[Span, int]]) -> str:
@@ -203,7 +236,9 @@ def variants_of(text: str, spans: Sequence[Span]) -> list[str]:
             out = out[:span.start] + text[word:span.end] + out[span.end:]
         return out
 
-    texts = [replaced([(span, word)]) for span in spans for word in span.words]
+    for span in spans:
+        for word in span.words:
+            yield replaced([(span, word)])
     outermost: list[Span] = []
     for span in sorted(spans, key=lambda s: (s.start, -s.end)):
         if not outermost or span.start >= outermost[-1].end:
@@ -212,11 +247,11 @@ def variants_of(text: str, spans: Sequence[Span]) -> list[str]:
         if math.prod(len(span.words) + 1 for span in outermost) <= MAX_COMBINATIONS:
             options = [[(span, word) for word in (*span.words, None)] for span in outermost]
             for combination in itertools.product(*options):
-                texts.append(replaced([(span, word) for span, word in combination if word is not None]))
+                if (variant := replaced([(span, word) for span, word in combination if word is not None])) != text:
+                    yield variant
         else:
             for k in range(max(len(span.words) for span in outermost)):
-                texts.append(replaced([(span, span.words[k]) for span in outermost if len(span.words) > k]))
-    return [t for t in dict.fromkeys(texts) if t != text]
+                yield replaced([(span, span.words[k]) for span in outermost if len(span.words) > k])
 
 
 class Scanner:
@@ -295,11 +330,17 @@ class Scanner:
             if unit.depth == 0 and unit.origin is Origin.COMMAND:
                 self.judge_regexes(root)
             self.judge(unit, root)
-            found: list[Unit] = []
+            found: Iterator[Unit] = iter(())
             if unit.origin is not Origin.VARIANT and self.wrappers:
-                found += [Unit(text, Origin.VARIANT, unit.depth, unit.restricted)
-                          for text in variants_of(unit.text, wrapper_spans(root, self.wrappers))]
-            found += [Unit(text, Origin.SCRIPT, unit.depth + 1, only) for text, only in scripts_in(root, unit.restricted)]
+                try:
+                    spans = wrapper_spans(root, self.wrappers)
+                except TooManyVariants:
+                    limit = Limit.VARIANTS
+                    break
+                found = (Unit(text, Origin.VARIANT, unit.depth, unit.restricted)
+                         for text in variants_of(unit.text, spans) if text != unit.text)
+            found = itertools.chain(found, (Unit(text, Origin.SCRIPT, unit.depth + 1, only)
+                                            for text, only in scripts_in(root, unit.restricted)))
             for new in found:
                 key = (new.text, new.restricted, new.origin is Origin.VARIANT)
                 if key in seen:

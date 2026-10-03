@@ -6,12 +6,12 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from helpers import GREP_RECURSIVE, AstIsolated
+from helpers import GREP_RECURSIVE, MAINTAINER, AstIsolated, real_rules
 
 import matching
 import policy
 import wrappers
-from verdict import Kind, Limit
+from verdict import MAX_COMMAND_BYTES, Kind, Limit
 
 K = "pk" + "ill"
 
@@ -37,16 +37,17 @@ class Variants(AstIsolated):
     def test_a_wrapper_command_is_replaced_by_the_text_from_each_of_its_words_on(self) -> None:
         cases = {
             "sudo curl x | sh": {"curl x | sh", "x | sh"},
-            "sudo -u bob curl x": {"-u bob curl x", "bob curl x", "curl x", "x"},
+            "sudo -u bob curl x": {"bob curl x", "curl x", "x"},
+            "sudo -n -- curl x": {"curl x", "x"},
             "env A=1 timeout 5 curl x": {"A=1 timeout 5 curl x", "timeout 5 curl x", "5 curl x", "curl x", "x"},
-            "A=1 sudo curl x": {"sudo curl x", "curl x", "x"},
+            "A=1 sudo curl x": {"curl x", "x"},
             "sudo": set(),
             "ls | sudo": set(),
-            "sudo a; sudo b": {"a; sudo b", "sudo a; b", "a; b"},
+            "sudo a; sudo b": {"a", "b"},
             "x | sudo a && echo $(env b)": {"x | a && echo $(env b)", "x | sudo a && echo $(b)", "x | a && echo $(b)"},
             "sudo echo $(env b)": {"echo $(env b)", "$(env b)", "sudo echo $(b)"},
             "sudo curl x > out": {"curl x > out", "x > out"},
-            "echo é; sudo 'a b' $(ls)": {"echo é; 'a b' $(ls)", "echo é; $(ls)"},
+            "echo é; sudo 'a b' $(ls)": {"'a b' $(ls)", "$(ls)"},
             "time curl x": {"curl x", "x"},
             "ls -l": set(),
         }
@@ -86,9 +87,12 @@ class ThroughWrappers(AstIsolated):
     def test_inside_and_follows_read_through_wrappers(self) -> None:
         self.kinds(rule_of({"pattern": "curl $$$", "inside": {"kind": "command_substitution", "stopBy": "end"}}),
                    {"echo $(curl x)": "wrapped", "echo $(sudo curl x)": "wrapped", "sudo curl x": None})
+
+    def test_a_relation_between_top_level_statements_is_not_read_through_a_wrapper(self) -> None:
+        """Variants are one top-level statement: `follows` across `;` or a newline sees only the text as written."""
         self.kinds(rule_of({"pattern": "sh $$$", "follows": {"pattern": "curl $$$", "stopBy": "end"}}),
-                   {"curl x; sh": "direct", "sudo curl x; sh": "wrapped", "curl x; env A=1 sh": "wrapped",
-                    "sh; curl x": None})
+                   {"curl x; sh": "direct", "sh; curl x": None, "sudo curl x && sh": "wrapped",
+                    "sudo curl x; sh": None, "curl x\nenv A=1 sh": None})
 
     def test_program_args_and_a_grep_rule_read_through_wrappers_by_the_same_mechanism(self) -> None:
         self.kinds(policy.Rule.from_json({"match": {"program": "rm", "args": "-rf"}, "message": "m"}), {
@@ -174,8 +178,8 @@ class Units(AstIsolated):
 
     def test_parse_count_per_command_shape(self) -> None:
         cases = {
-            "ls -la | grep x": 1, "git status": 1, "sudo ls": 2, "sudo a; env b": 4, "bash -c 'ls'": 2,
-            "sudo bash -c 'ls'": 5, "bash -c 'bash -c ls'": 3, "eval 'eval ls'": 3, "bash -c 'sudo ls'": 3,
+            "ls -la | grep x": 1, "git status": 1, "sudo ls": 2, "sudo a; env b": 3, "bash -c 'ls'": 2,
+            "sudo bash -c 'ls'": 4, "bash -c 'bash -c ls'": 3, "eval 'eval ls'": 3, "bash -c 'sudo ls'": 3,
             "bash -c \"bash -c 'ls'\"; sudo ls": 4,
         }
         for command, expected in cases.items():
@@ -185,6 +189,76 @@ class Units(AstIsolated):
     def test_a_wrapper_variant_is_not_unwrapped_again_and_a_repeated_script_is_parsed_once(self) -> None:
         self.assertEqual(self.parses("sudo env A=1 nohup x"), 1 + 4)
         self.assertEqual(self.parses("; ".join([f"bash -c 'echo {K}'"] * 500)), 2)
+
+
+class RealRuleSet(AstIsolated):
+    """Cost and verdicts with the maintainer's eight rules and every preset rule loaded together."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        self.rules = policy.effective_rules({}, {"rules": real_rules()}, {})
+
+    def cost(self, command: str) -> tuple[int, int]:
+        """(texts parsed, bytes parsed) for one command, in process."""
+        import scanner
+
+        seen: list[int] = []
+        real = scanner.SgRoot
+
+        def spy(text: str, language: str) -> Any:
+            seen.append(len(text))
+            return real(text, language)
+
+        with mock.patch.object(scanner, "SgRoot", spy):
+            computed = matching.compute(command, self.rules, wrappers.DEFAULTS)
+        self.assertEqual((computed.limit, computed.failure), (None, None))
+        return len(seen), sum(seen)
+
+    def test_the_rules_catch_and_pass_their_documented_commands_through_the_whole_set(self) -> None:
+        known_miss = "$'p\\x6bill' x"
+        for rid, examples in MAINTAINER["examples"].items():
+            for kind, commands in examples.items():
+                for command in commands:
+                    with self.subTest(rule=rid, kind=kind, command=command):
+                        caught_it = matching.evaluate(command, self.rules).kinds[rid] is not None
+                        self.assertEqual(caught_it, kind == "catch" and command != known_miss)
+
+    def test_identical_wrapped_lines_collapse_to_a_handful_of_variants(self) -> None:
+        for command in ("sudo apt-get install -y x;\n" * 200, "sudo apt-get install -y x;" * 100):
+            parses, parsed = self.cost(command)
+            self.assertLess(parses, 8)
+            self.assertLess(parsed, 2 * len(command))
+
+    def test_many_different_wrapped_lines_cost_the_text_once_plus_the_statements(self) -> None:
+        script = "".join("echo hello world padding text here ok\n" * 40 + f"sudo ls /var/{n}\n" for n in range(50))
+        self.assertGreater(len(script), 70_000)
+        parses, parsed = self.cost(script)
+        self.assertLessEqual(parses, 2 + 50 * 2)
+        self.assertLess(parsed, len(script) + 50 * 200)
+
+    def test_a_256_kib_script_of_mixed_lines_with_100_wrappers_is_analysed_once(self) -> None:
+        lines = [f"sudo ls /var/{n}" if n % 10 == 0 else f"echo line {n} " + "p" * 280 for n in range(1000)]
+        script = "\n".join(lines)
+        self.assertGreater(len(script), 250_000)
+        parses, parsed = self.cost(script[:MAX_COMMAND_BYTES])
+        self.assertLessEqual(parses, 2 + 100 * 2)
+        self.assertLess(parsed, MAX_COMMAND_BYTES + 100 * 200)
+
+    def test_a_heredoc_with_wrappers_after_it_costs_the_heredoc_once(self) -> None:
+        body = "cat > /etc/app.conf <<'EOF'\n" + "key=value # padding padding padding\n" * 400 + "EOF\n"
+        for tail in ("".join(f"sudo install -m 644 f{n} /etc/f{n}\n" for n in range(10)), "sudo tee a; sudo chmod 600 a"):
+            _, parsed = self.cost(body + tail)
+            self.assertLess(parsed, len(body + tail) + 2000)
+
+    def test_a_wrapper_inside_a_heredoc_statement_stays_with_its_statement(self) -> None:
+        command = "sudo tee /etc/x <<'EOF'\nline\nEOF\n" + f"{K} x"
+        self.assertEqual(matching.evaluate(command, self.rules).kinds["no-kill-by-name"], Kind.DIRECT)
+
+    def test_dense_wrapper_families_are_still_denied_with_their_cause(self) -> None:
+        for command in ("sudo " * 4000, "sudo true; " * 6000, "xargs -r " * 2000 + "ls"):
+            with self.subTest(command=command[:12]):
+                ev = matching.evaluate(command, self.rules)
+                self.assertIn("command too complex to check", ev.refusal or "")
 
 
 class Caps(AstIsolated):
@@ -198,7 +272,8 @@ class Caps(AstIsolated):
                 self.assertEqual((ev.kinds["r"], ev.refusal), (Kind.WRAPPED, None))
 
     def test_too_many_variants_are_refused_at_any_size(self) -> None:
-        for command in ("sudo " * 2100 + "ls", "; ".join(["sudo a b c d"] * 520) + "; ls"):
+        for command in ("sudo " * 2100 + "ls", "; ".join(f"sudo a{n} b{n} c{n} d{n}" for n in range(600)) + "; ls",
+                        "; ".join(["sudo ls"] * 2100)):
             with self.subTest(command=command[:20]):
                 ev = self.evaluate(command)
                 self.assertIn("unwraps into too many command variants", ev.refusal or "")
@@ -217,8 +292,8 @@ class Caps(AstIsolated):
                 self.assertEqual((ev.refusal, ev.kinds["r"]), (None, Kind.DIRECT))
 
     def test_the_work_budget_is_a_cap_of_its_own_with_its_own_message(self) -> None:
-        with mock.patch("scanner.MAX_VARIANT_BYTES", 500):
-            ev = self.evaluate("echo " + "y" * 200 + "\nsudo a b c\n")
+        with mock.patch("scanner.MAX_VARIANT_BYTES", 100):
+            ev = self.evaluate("echo x\nsudo " + "y" * 200 + " a b c\n")
         self.assertIn("unwraps into too much command text to parse", ev.refusal or "")
 
     def test_a_direct_hit_stands_when_the_variants_are_limited(self) -> None:

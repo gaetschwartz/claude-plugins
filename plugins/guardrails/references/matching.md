@@ -36,14 +36,19 @@ program names, written however the shell allows a plain name: `pkill`, `/usr/bin
 double quotes), in `<(...)`.
 
 Looked through, the wrapper variants: a command that contains a wrapper command (`sudo doas env timeout nice nohup time
-command exec builtin stdbuf setsid ionice xargs watch`, plus your own) is also matched as text variants of the whole
-command in which that wrapper command is replaced by the text from each of its own words onward: `sudo -u bob pkill x`
-also reads as `-u bob pkill x`, `bob pkill x`, `pkill x` and `x` (a wrapper's words are read from the parse, never split
+command exec builtin stdbuf setsid ionice xargs watch`, plus your own) is also matched as text variants of the top-level
+statement (a direct child of the program) that holds it, in which that wrapper command is replaced by the text from each of
+its own non-option words onward (an option cannot start the wrapped command): `sudo -u bob pkill x`
+also reads as `bob pkill x`, `pkill x` and `x` (a wrapper's words are read from the parse, never split
 by guardrails; leading assignments such as `A=1 sudo x` are dropped with it). Nested wrappers need no recursion, because a
 later word starts the inner command directly. A command with several wrappers also gets every combination of them replaced
 together while there are at most 64 (else each k-th word of all of them), so `sudo curl x | sudo sh` reads as `curl x | sh`.
+Because a variant is one statement, its cost does not grow with the script around it, and repeated lines collapse. The
+accepted loss: a relation BETWEEN separate top-level statements (`follows` across `;` or a newline, e.g. `cd x` then
+`sudo curl y`) is judged only on the text as written, not through the wrapper; inside one statement (pipelines, lists,
+subshells, loops, substitutions, a heredoc attached to it) relations are kept.
 Every rule is matched on each variant, and a hit found in one is wrapped. Variants are not unwrapped again, are
-de-duplicated and are bounded: 2048 variants and 16 MiB of variant text parsed in total per command (and the 5 s deadline), past which the command is denied
+de-duplicated and are bounded: 2048 variants and 512 KiB of variant text parsed in total per command, and 2048 wrapper commands or wrapper words per unit (and the 5 s deadline), past which the command is denied
 unparsed ("command too complex to check") at any size. There is no table of which flags take a value: any word counts as a
 start, so `sudo grep pkill file` and `command -v pkill` also match `pkill` (known false positives, see below). The same
 coarseness applies to relation rules, which judge the real tree of each variant: `sudo grep curl f | sh` matches a
@@ -120,7 +125,7 @@ in ` $$$` also selects the command with no arguments (in tree-sitter-bash a trai
 arguments, so guardrails widens it). A hole INSIDE a substitution, such as `kill $($$$)`, never matches anything: express
 that with `inside` / `has`.
 
-**Behind a wrapper.** Every pattern, relation, `not`, `regex` and `kind` is matched on the whole command with the wrapper
+**Behind a wrapper.** Every pattern, relation, `not`, `regex` and `kind` is matched on the whole statement with the wrapper
 replaced, so pipeline and list patterns (`curl $$$ | sh`, `cd $A && rm $$$`) and negations (`not inside`, `not follows`)
 work through `sudo`, `env`, `xargs` and the rest; see the variants above.
 
@@ -274,7 +279,7 @@ imported or fails its self-test, rules cannot be evaluated, so the hook allows t
 - **A rule that does not compile** (an `ast` rule, or a regex Rust cannot compile) is skipped and named once per session; the
   others run.
 - **A command over 256 KiB, or one that nests shell strings more than 8 deep, unpacks into more than 64 distinct strings
-  or 256 KiB of script text, or unwraps into more than 2048 variants or 16 MiB of variant text, is denied unparsed**
+  or 256 KiB of script text, or unwraps into more than 2048 variants or 512 KiB of variant text, is denied unparsed**
   ("command too large to check", "command too complex to check"): padding must never be a way past a rule. Only a deny rule
   that could not be judged causes the denial (warn-only rules: allowed with a warning).
 - If the hook itself raises, it allows with a visible warning that no rule was applied, and never exits silently.

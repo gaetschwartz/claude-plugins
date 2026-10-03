@@ -39,13 +39,15 @@ edge-case checklist, the pitfalls), and `references/ast/` is a cookbook of teste
 flags, lists, wrappers); a test runs every example in it against the real engine.
 
 **Wrappers and shell strings.** A command that contains a wrapper command (`sudo doas env timeout nice ionice nohup time
-command exec builtin stdbuf setsid xargs watch`, plus your own) is matched as text variants too: the whole command with that
-wrapper replaced by the text from each of its own words onward (`sudo -u bob pkill x` also reads as `-u bob pkill x`,
-`bob pkill x`, `pkill x`, `x`), several wrappers replaced together while the combinations stay few. Every rule is matched
+command exec builtin stdbuf setsid xargs watch`, plus your own) is matched as text variants too: the top-level statement that holds
+the wrapper, with the wrapper replaced by the text from each of its own non-option words onward (`sudo -u bob pkill x` also
+reads as `bob pkill x`, `pkill x`, `x`), several wrappers of one statement replaced together while the combinations stay few.
+Pipelines, `&&`/`||` lists, subshells, loops, substitutions and heredocs inside the statement keep their relations; a relation
+BETWEEN separate top-level statements (a `follows` rule across `;` or a newline) is not read through a wrapper. Every rule is matched
 on the real tree of each variant, so a `program`, a command `pattern`, a pipeline or list pattern (`curl $$$ | sh`,
 `cd $A && rm $$$`) and a `not inside` all see through wrappers, and a hit found in a variant is `wrapped`. There is no table
 of flags that take a value, so any word can start a command: `sudo grep pkill file` also matches `pkill`, and
-`sudo grep curl f | sh` matches a `curl $$$ | sh` rule (known coarseness). At most 2048 variants and 16 MiB of variant text
+`sudo grep curl f | sh` matches a `curl $$$ | sh` rule (known coarseness). At most 2048 variants (identical ones count once) and 512 KiB of variant text
 parsed in total per command (the 5 s deadline bounds the time as well); past that the command is denied ("command too complex to check") whatever its size. The script of
 `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'`, the arguments of `eval`, heredocs and here-strings fed to a shell, and
 the substitutions in unquoted heredoc bodies are unquoted (one shell word, nothing else) and scanned as units of their own

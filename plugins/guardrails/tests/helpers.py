@@ -26,7 +26,15 @@ import render  # noqa: F401
 import store
 
 GREP_RECURSIVE = json.loads((ROOT / "presets" / "modern-cli.json").read_text())["rules"]["grep-rg"]["match"]["ast"]
-GREP_RECURSIVE = json.loads((ROOT / "presets" / "modern-cli.json").read_text())["rules"]["grep-rg"]["match"]["ast"]
+MAINTAINER = json.loads((ROOT / "tests" / "maintainer_rules.json").read_text())
+
+
+def real_rules() -> dict[str, Any]:
+    """The maintainer's own eight rules plus every preset rule, as a state file's `rules` table."""
+    rules = dict(MAINTAINER["rules"])
+    for path in sorted((ROOT / "presets").glob("*.json")):
+        rules.update({f"{path.stem}-{rid}": rule for rid, rule in json.loads(path.read_text())["rules"].items()})
+    return rules
 DEV_DATA = Path.home() / ".cache" / "guardrails-runtime-dev"
 SKIP_RUNTIME = "the managed runtime could not be installed ({reason}); tests that run the real hook are skipped"
 _RUNTIME: list[bootstrap.Outcome] = []
