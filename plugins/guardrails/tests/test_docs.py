@@ -64,6 +64,14 @@ class RuntimeDocs(unittest.TestCase):
                 self.assertIn(needle, text, f"{name} lacks {needle!r}")
 
 
+class Manifests(unittest.TestCase):
+    def test_no_manifest_or_doc_names_a_match_field_that_no_longer_exists(self) -> None:
+        for path in [ROOT / ".claude-plugin" / "plugin.json", ROOT / "pyproject.toml", ROOT.parent.parent / "marketplace.json",
+                     ROOT / "README.md", *(ROOT / "skills").glob("*/SKILL.md")]:
+            if path.exists():
+                self.assertNotRegex(path.read_text(), r"\bbuiltin (and|rules|field)|match\.builtin|\"builtin\":", str(path))
+
+
 def slug(heading: str) -> str:
     return re.sub(r"[^a-z0-9 _-]", "", heading.lower().replace("`", "")).replace(" ", "-")
 
