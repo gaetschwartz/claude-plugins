@@ -41,16 +41,16 @@ plain chat what to explain instead.)
    A deny message names the rule as `[guardrails:<id>]`, or `<id> (managed)`.
 3. Decide the commands that answer the question: the one in question (from `-c`; source `yours`), its wrapped and
    look-alike forms (source `inferred`). Set `expect` only when the caller said what should happen. With an id run
-   `guardrails rule test --render --id <id> --examples - [--path <file>]` with the examples list on stdin:
+   `guardrails rule test --id <id> --examples - [--path <file>]` with the examples list on stdin:
 
-       guardrails rule test --render --id no-pkill --examples - <<'EOF'
+       guardrails rule test --id no-pkill --examples - <<'EOF'
        [{"cmd": "sudo pkill -f vite", "source": "yours"}, {"cmd": "pgrep -fl node"}]
        EOF
 
    A heredoc invocation is not pre-approved by `allowed-tools`, so it may prompt; that is expected.
 
    With only a command, find the rules whose `program` or `regex` could apply and run it once per rule id.
-4. Answer with the rule card: paste the `--render` output VERBATIM, unchanged, no paraphrase, no added prose inside
+4. Answer with the rule card: paste the `rule test` output VERBATIM, unchanged, no paraphrase, no added prose inside
    it. Never write a script or compute rows, spacing, verdicts or counts yourself; every ✗ or ✓ comes from the CLI.
 5. After a blank line add the bold-label lines from the Explain section of the presentation reference (`Happens`,
    `Loosen`, `Lower layers`, and `Cause` only when the question was why something was or was not caught), with no

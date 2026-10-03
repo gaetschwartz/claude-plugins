@@ -105,11 +105,10 @@ class SkillFiles(unittest.TestCase):
         for name in ("new", "edit", "explain", "status"):
             with self.subTest(skill=name):
                 text = (SKILLS / name / "SKILL.md").read_text()
-                self.assertIn("--render", text)
                 self.assertIn("VERBATIM", text)
                 self.assertIsNone(re.search(r"\bpad(ded|ding)?\b", text, re.IGNORECASE))
-        self.assertIn("rule test --render", (SKILLS / "new" / "SKILL.md").read_text())
-        self.assertIn("status --render", (SKILLS / "status" / "SKILL.md").read_text())
+        self.assertIn("rule test", (SKILLS / "new" / "SKILL.md").read_text())
+        self.assertIn("status", (SKILLS / "status" / "SKILL.md").read_text())
         for name in ("new", "edit", "explain"):
             self.assertIn("never write a script", (SKILLS / name / "SKILL.md").read_text().lower())
 
@@ -117,7 +116,7 @@ class SkillFiles(unittest.TestCase):
         text = (SKILLS / "new" / "SKILL.md").read_text()
         for needle in ("\"examples\"", '"expect"', "you chose", "--id-name"):
             self.assertIn(needle, text)
-        self.assertIn("status --render --rule", text)
+        self.assertIn("status --rule", text)
 
     def test_skills_teach_the_matcher_ladder_and_the_tree_command(self) -> None:
         for name in ("new", "edit"):

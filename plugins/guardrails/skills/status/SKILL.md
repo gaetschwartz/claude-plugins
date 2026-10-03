@@ -23,7 +23,7 @@ Flags (parse them from the text above; each long flag has its short form), all p
 
 ## Steps
 
-1. Run `guardrails status --render` plus the flags above. Nothing else. If it fails, print the error line and stop.
+1. Run `guardrails status` plus the flags above. Nothing else. If it fails, print the error line and stop.
 2. Your reply is that output VERBATIM: unchanged, no paraphrase, no reordering, no summary, no added or removed lines,
    no code fence. The CLI already computed the managed-file line, the rows, the states and the problems. Never
    rebuild, filter or reformat them yourself.

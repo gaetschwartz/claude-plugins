@@ -205,7 +205,7 @@ defaults, unless something is ambiguous. Ask for message wording in chat only wh
 2. Run the command below with the rule and the examples in one JSON document on stdin (a quoted heredoc, so nothing
    needs shell quoting):
 
-       guardrails rule test --render --json - --intent '<the user's description as one short plain line>' --id-name <id> --scope <s> [--path <file>] <<'EOF'
+       guardrails rule test --json - --intent '<the user's description as one short plain line>' --id-name <id> --scope <s> [--path <file>] <<'EOF'
        {"rule": {…}, "examples": [{"cmd": "…", "source": "yours", "expect": "match"}, …]}
        EOF
 
@@ -236,14 +236,14 @@ guardrails rule add <id> --json - --scope <s> [--path <file>] --as-user --reason
 EOF
 ```
 
-Resend the very document the confirmed `rule test --render` used, unchanged, so the stored rule is the one the user
+Resend the very document the confirmed `rule test` used, unchanged, so the stored rule is the one the user
 confirmed. `rule add` and `mode declare` change configuration and are not pre-approved; the user approves each.
 
 A new mode declared for this rule is written first with `guardrails mode declare <name> [--agent-may-enable]
 [--scope <s>] [--path <file>] --as-user --reason "…"`.
 
 On a permission failure (exit 2, not writable): say so, show the printed message and the `sudo …` command, and stop;
-do not run it. After a successful write run `guardrails status --render --rule <id> --scope <s> [--path <file>]` and
+do not run it. After a successful write run `guardrails status --rule <id> --scope <s> [--path <file>]` and
 paste its one line VERBATIM. For a managed `--path` file that is neither the platform default nor the current
 `GUARDRAILS_MANAGED_PATH`, repeat the note `rule add` printed: the hook enforces it only if
 `GUARDRAILS_MANAGED_PATH` points there.

@@ -92,7 +92,7 @@ real text and of each shell string: see [ast/context.md](ast/context.md#a-comman
 ## 6. Test matrix
 
 Write it before tuning. Run it with `guardrails rule test --json - ... <<'EOF'` (document shape
-`{"rule": {...}, "examples": [{"cmd": "...", "expect": "match|pass"}]}`); add `--render` for the card.
+`{"rule": {...}, "examples": [{"cmd": "...", "expect": "match|pass"}]}`); it prints the card.
 
 | group | minimum | why |
 |---|---|---|

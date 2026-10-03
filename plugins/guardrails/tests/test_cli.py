@@ -6,7 +6,7 @@ import shlex
 import stat
 from pathlib import Path
 
-from helpers import AstIsolated
+from helpers import AstIsolated, caught
 
 RULE = ('{"match": {"program": "strings"}, "message": "Read the docs.", "retry": "same-command", '
         '"modes": ["reverse-engineering"]}')
@@ -213,8 +213,8 @@ class Status(AstIsolated):
         self.put(self.ppath, {"rules": {"nm": {"match": {"program": "nm"}, "message": "m", "modes": ["ghost"]}}})
         code, out, _ = self.cli("status")
         self.assertEqual(code, 0)
-        for expected in ("no-strings [global] deny retry: program=strings", "nm [project] deny: program=nm",
-                         "reverse-engineering [global]: inactive; agent may enable: yes; RE", "rule bad:",
+        for expected in ("`no-strings` deny · global · enabled", "`nm        ` deny · project · enabled",
+                         "`reverse-engineering` off · agent may enable: yes · global", "rule bad:",
                          "mode 'ghost' is not declared"):
             self.assertIn(expected, out)
 
@@ -224,8 +224,8 @@ class Status(AstIsolated):
                               "modes": {"reverse-engineering": {"description": "RE", "agentMayEnable": True}},
                               "sessions": {"s1": {"modes": {"reverse-engineering": {"by": "agent", "reason": "why"}}}}})
         out = self.cli("status")[1]
-        self.assertIn("ACTIVE (by agent: why)", out)
-        self.assertIn("SUSPENDED by reverse-engineering", out)
+        self.assertIn("on (by agent: why)", out)
+        self.assertIn("suspended by reverse-engineering", out)
 
     def test_reports_corrupt_file(self) -> None:
         self.put(self.gpath, "{nope")
@@ -235,12 +235,8 @@ class Status(AstIsolated):
 
     def test_empty(self) -> None:
         out = self.cli("status")[1]
-        self.assertIn("(none; the guardrails:setup skill installs recommended presets)", out)
-        self.assertIn("(none declared)", out)
-
-
-def line(marker: str, cmd: str) -> str:
-    return f"  {marker:<7}{cmd}"
+        self.assertIn("No rules installed", out)
+        self.assertNotIn("**Modes**", out)
 
 
 class RuleTest(AstIsolated):
@@ -253,13 +249,10 @@ class RuleTest(AstIsolated):
             "sudo strings x", "bash -c 'strings a'", "man strings", "echo strings", heredoc,
         )
         self.assertEqual(code, 0)
-        self.assertIn("rule (draft): deny", out)
-        self.assertIn(line("match", "sudo strings x"), out)
-        self.assertIn(line("match", "bash -c 'strings a'"), out)
-        self.assertIn(line("-", "man strings"), out)
-        self.assertIn(line("-", "echo strings"), out)
-        self.assertIn(line("-", "cat <<'EOF' > n.md\\nstrings\\nEOF"), out)
-        self.assertIn("message: docs", out)
+        self.assertIn("### new-rule · deny · global", out)
+        self.assertEqual(caught(out), {"sudo strings x": True, "bash -c 'strings a'": True, "man strings": False,
+                                       "echo strings": False, "cat <<'EOF' > n.md⏎strings⏎EOF": False})
+        self.assertIn("**Message** docs", out)
 
     def test_draft_invalid_rule(self) -> None:
         code, _, err = self.cli("rule", "test", "--json", '{"match": {}, "message": "m"}', "echo hi")
@@ -276,8 +269,8 @@ class RuleTest(AstIsolated):
         self.cli("rule", "set", "no-strings", "--json", '{"action": "deny"}', "--scope", "project")
         code, out, _ = self.cli("rule", "test", "--id", "no-strings", "strings a")
         self.assertEqual(code, 0)
-        self.assertIn("rule no-strings [global+project]: deny retry modes=reverse-engineering", out)
-        self.assertIn(line("match", "strings a"), out)
+        self.assertIn("### no-strings · deny · retry same-command · global+project", out)
+        self.assertEqual(caught(out), {"strings a": True})
 
     def test_unknown_id(self) -> None:
         self.assertEqual(self.cli("rule", "test", "--id", "ghost", "echo hi")[0], 2)
@@ -293,13 +286,13 @@ class RuleTest(AstIsolated):
         draft = ('{"match": {"program": "strings"}, "message": "docs", '
                  '"requires": ["definitely-not-installed-xyz"]}')
         out = self.cli("rule", "test", "--json", draft, "strings a")[1]
-        self.assertIn("note: none of definitely-not-installed-xyz is installed here, so the hook skips this rule",
+        self.assertIn("**Note** none of definitely-not-installed-xyz is installed here, so the hook skips this rule",
                       out)
 
     def test_disabled_rule_notes(self) -> None:
         draft = '{"match": {"program": "strings"}, "message": "docs", "enabled": false}'
         out = self.cli("rule", "test", "--json", draft, "strings a")[1]
-        self.assertIn("note: rule is disabled", out)
+        self.assertIn("**Note** rule is disabled", out)
 
 
 MANAGED_RULE = '{"match": {"program": "pkill"}, "message": "No pkill."}'
@@ -409,7 +402,7 @@ class ManagedScope(AstIsolated):
         code, out, _ = self.cli("mode", "off", "incident", "--scope", "global")
         self.assertEqual(code, 0)
         self.assertIn("managed scope keeps mode incident on", out)
-        self.assertIn("ACTIVE", self.cli("status")[1])
+        self.assertIn("`incident` on (persistent)", self.cli("status")[1])
 
     def test_project_cannot_switch_a_managed_mode_on(self) -> None:
         self.managed("mode", "declare", "incident")
@@ -417,13 +410,13 @@ class ManagedScope(AstIsolated):
         self.assertEqual(code, 0)
         self.assertIn("a project cannot switch it on", out)
         status = self.cli("status")[1]
-        self.assertIn("incident [managed+project]: inactive", status)
+        self.assertIn("`incident` off · agent may enable: no · managed+project", status)
         self.assertIn("project state switches on mode 'incident', which the managed file declares (ignored)", status)
 
     def test_project_can_switch_on_its_own_and_global_modes(self) -> None:
         self.cli("mode", "declare", "mine")
         self.assertEqual(self.cli("mode", "on", "mine", "--scope", "project")[0], 0)
-        self.assertIn("mine [global+project]: ACTIVE", self.cli("status")[1])
+        self.assertIn("`mine` on (persistent) · agent may enable: no · global+project", self.cli("status")[1])
 
     def test_declare_notes_when_managed_declares_the_mode(self) -> None:
         self.managed("mode", "declare", "incident")
@@ -461,16 +454,10 @@ class ManagedScope(AstIsolated):
         self.cli("rule", "add", "mine", "--json", MANAGED_RULE, "--scope", "project")
         code, out, _ = self.cli("status")
         self.assertEqual(code, 0)
-        for expected in (f"managed state: {self.dpath} (absent)", f"managed override: {self.mpath}",
-                         "no-strings [managed+global] deny retry",
-                         "bare [managed] deny ALWAYS ENFORCED", "mine [project] deny",
-                         "reverse-engineering [managed]: inactive"):
+        for expected in ("`no-strings` deny · managed+global · enabled", "`bare      ` deny · managed · always enforced",
+                         "`mine      ` deny · project · enabled",
+                         "`reverse-engineering` off · agent may enable: no · managed"):
             self.assertIn(expected, out)
-
-    def test_status_without_managed_file(self) -> None:
-        out = self.cli("status")[1]
-        self.assertIn(f"managed state: {self.dpath} (absent)", out)
-        self.assertIn(f"managed override: {self.mpath} (absent)", out)
 
     def test_status_reports_unreadable_managed_file(self) -> None:
         self.put(self.mpath, "{nope")
@@ -488,12 +475,13 @@ class ManagedScope(AstIsolated):
     def test_status_notes_managed_rules_survive_disabled_hook(self) -> None:
         self.managed("rule", "add", "bare", "--json", MANAGED_RULE)
         self.cli("disable")
-        self.assertIn("hook enabled:  no (disabled by user); managed rules stay enforced", self.cli("status")[1])
+        self.assertIn("**Note** the global hook is disabled (disabled by user); managed rules stay enforced",
+                      self.cli("status")[1])
 
     def test_rule_test_shows_origin(self) -> None:
         self.managed("rule", "add", "no-strings", "--json", RULE)
         out = self.cli("rule", "test", "--id", "no-strings", "strings a")[1]
-        self.assertIn("rule no-strings [managed]:", out)
+        self.assertIn("### no-strings · deny · retry same-command · managed\n", out)
 
     def test_corrupt_managed_file_is_not_overwritten_and_says_how_to_fix_it(self) -> None:
         self.put(self.mpath, "{nope")
@@ -550,7 +538,7 @@ class ManagedScope(AstIsolated):
         self.mpath.parent.chmod(0)
         self.addCleanup(self.mpath.parent.chmod, 0o755)
         out = self.cli("status")[1]
-        self.assertIn(f"managed override: {self.mpath} (unreadable)", out)
+        self.assertIn(f"override `{self.mpath}` unreadable", out)
         self.assertIn("unreadable managed state", out)
 
     def test_status_warns_about_untrusted_managed_location(self) -> None:
@@ -584,8 +572,8 @@ class ManagedScope(AstIsolated):
         self.put(self.dpath, {"rules": {"d": json.loads(RULE)}})
         self.managed("rule", "add", "o", "--json", RULE)
         out = self.cli("status")[1]
-        self.assertIn("d [managed]", out)
-        self.assertIn("o [managed]", out)
+        self.assertIn("`d` deny · managed", out)
+        self.assertIn("`o` deny · managed", out)
 
     def test_creating_the_managed_directory_ignores_umask(self) -> None:
         old = os.umask(0o077)
@@ -710,33 +698,9 @@ class PathOption(AstIsolated):
         self.put(self.fpath, {"rules": {"no-pkill": {"match": {"program": "pkill"}, "message": "no"}}})
         code, out, _ = self.cli("status", "--path", str(self.fpath))
         self.assertEqual(code, 0)
-        self.assertIn(f"managed --path: {self.fpath}", out)
-        self.assertIn(f"managed override: {self.mpath} (absent)", out)
-        self.assertIn("no-pkill [managed] deny ALWAYS ENFORCED", out)
-        self.assertIn(f"note: the platform default managed file is absent; managed rules come only from {self.fpath}",
-                      out)
-        self.assertIn("is read for this status only; the hook enforces it only if GUARDRAILS_MANAGED_PATH points "
-                      "at it", out)
+        self.assertIn(f"--path `{self.fpath}` present", out)
+        self.assertIn("`no-pkill` deny · managed · always enforced", out)
         self.assertNotIn("no-pkill", self.cli("status")[1])
-
-    def test_status_says_when_default_is_absent_and_override_used(self) -> None:
-        self.put(self.mpath, {"rules": {}})
-        out = self.cli("status")[1]
-        self.assertIn(f"note: the platform default managed file is absent; managed rules come only from {self.mpath}",
-                      out)
-        del os.environ["GUARDRAILS_MANAGED_PATH"]
-        self.assertNotIn("platform default managed file is absent", self.cli("status")[1])
-        self.put(self.dpath, {"rules": {}})
-        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.mpath)
-        self.assertNotIn("platform default managed file is absent", self.cli("status")[1])
-
-    def test_status_has_no_default_absent_note_without_any_override_file(self) -> None:
-        self.assertNotIn("platform default managed file is absent", self.cli("status")[1])
-
-    def test_status_path_equal_to_env_is_not_duplicated(self) -> None:
-        out = self.cli("status", "--path", str(self.mpath))[1]
-        self.assertEqual(out.count(str(self.mpath)), 1)
-        self.assertNotIn("managed --path", out)
 
     def test_rank_below_default_and_tightening_only(self) -> None:
         strict = {"rules": {"r": {"match": {"program": "pkill"}, "message": "default", "action": "deny"}}}
@@ -744,10 +708,10 @@ class PathOption(AstIsolated):
         self.put(self.dpath, strict)
         self.put(self.fpath, loose)
         out = self.cli("status", "--path", str(self.fpath))[1]
-        self.assertIn("r [managed] deny ALWAYS ENFORCED: program=pkill", out)
+        self.assertIn("`r` deny · managed · always enforced", out)
         out = self.cli("rule", "test", "--id", "r", "pkill x", "kill 1", "--path", str(self.fpath))[1]
-        self.assertIn("match  pkill x", out)
-        self.assertIn("message: default", out)
+        self.assertEqual(caught(out), {"pkill x": True, "kill 1": False})
+        self.assertIn("**Message** default", out)
 
     def test_path_reports_problems_like_the_override(self) -> None:
         self.put(self.fpath, "{nope")
@@ -769,7 +733,7 @@ class PathOption(AstIsolated):
         self.assertEqual(self.cli("rule", "test", "--id", "only-here", "pkill x")[0], 2)
         code, out, _ = self.cli("rule", "test", "--id", "only-here", "pkill x", "--path", str(self.fpath))
         self.assertEqual(code, 0)
-        self.assertIn("match  pkill x", out)
+        self.assertEqual(caught(out), {"pkill x": True})
 
     def test_session_mode_on_reads_modes_from_the_path_file(self) -> None:
         self.put(self.fpath, {"modes": {"incident": {"description": "fire", "agentMayEnable": True}}})
@@ -870,24 +834,23 @@ class PathOptionEdges(AstIsolated):
     def test_path_equal_to_the_platform_default_is_not_an_extra_source(self) -> None:
         self.put(self.dpath, {"rules": {"r": {"match": {"program": "pkill"}, "message": "m"}}})
         out = self.cli("status", "--path", str(self.dpath))[1]
-        self.assertNotIn("managed --path", out)
-        self.assertEqual(out.count(f"managed state: {self.dpath}"), 1)
+        self.assertNotIn("--path `", out)
+        self.assertEqual(out.splitlines()[0].count(str(self.dpath)), 1)
         self.assertNotIn("the hook enforces", out)
-        self.assertNotIn("platform default managed file is absent", out)
 
     def test_lower_ranked_file_cannot_switch_on_a_higher_mode(self) -> None:
         self.put(self.dpath, {"rules": {"r": {"match": {"program": "pkill"}, "message": "m", "modes": ["m"]}},
                               "modes": {"m": {}}})
         self.put(self.mpath, {"modes": {"m": {"active": True}}})
         out = self.cli("status")[1]
-        self.assertIn("m [managed]: inactive", out)
-        self.assertNotIn("SUSPENDED", out)
+        self.assertIn("`m` off · agent may enable: no · managed", out)
+        self.assertNotIn("suspended", out)
         extra = self.tmp / "extra.json"
         self.put(extra, {"modes": {"m": {"active": True}}})
         os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.tmp / "none.json")
         out = self.cli("status", "--path", str(extra))[1]
-        self.assertIn("m [managed]: inactive", out)
-        self.assertNotIn("SUSPENDED", out)
+        self.assertIn("`m` off · agent may enable: no · managed", out)
+        self.assertNotIn("suspended", out)
 
     def test_hook_keeps_enforcing_when_the_override_declares_active(self) -> None:
         self.put(self.dpath, {"rules": {"r": {"match": {"program": "pkill"}, "message": "no pkill", "modes": ["m"]}},
@@ -907,13 +870,12 @@ class RuleTestNotes(AstIsolated):
         return out
 
     def test_plain_rule_has_no_notes(self) -> None:
-        self.assertNotIn("note:", self.notes("--json", self.DRAFT))
+        self.assertNotIn("**Note**", self.notes("--json", self.DRAFT))
 
     def test_disabled_rule(self) -> None:
         out = self.notes("--json", '{"match": {"program": "pkill"}, "message": "m", "enabled": false}')
-        self.assertIn("note: rule is disabled", out)
-        self.assertIn("match  pkill x", out)
-        self.assertIn("match only means the matcher selects the command", out)
+        self.assertIn("**Note** rule is disabled", out)
+        self.assertEqual(caught(out), {"pkill x": True})
 
     def test_missing_required_binary(self) -> None:
         out = self.notes("--json", '{"match": {"program": "pkill"}, "message": "m", "requires": ["no-such-bin-xyz"]}')
@@ -926,7 +888,7 @@ class RuleTestNotes(AstIsolated):
         self.cli("mode", "on", "m", "--session-id", "s1")
         out = self.notes("--id", "r", "--session-id", "s1")
         self.assertIn("mode m is active, so the hook suspends this rule right now", out)
-        self.assertIn("match  pkill x", out)
+        self.assertEqual(caught(out), {"pkill x": True})
 
     def test_hook_and_project_rules_disabled(self) -> None:
         self.cli("rule", "add", "g", "--json", self.DRAFT)

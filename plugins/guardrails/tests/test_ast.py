@@ -10,7 +10,7 @@ from collections.abc import Iterator
 from typing import Any, ClassVar
 from unittest import mock
 
-from helpers import REAL_WANTED, AstIsolated
+from helpers import REAL_WANTED, AstIsolated, caught, render
 
 import astbin
 import astcli
@@ -337,10 +337,8 @@ class Cli(AstIsolated):
         code, out, _ = self.cli("rule", "test", "--json", json.dumps(self.RULE), "pkill x", "sudo pkill x",
                                 "echo 'pkill x'", "ls")
         self.assertEqual(code, 0)
-        self.assertIn("match  pkill x", out)
-        self.assertIn("match  sudo pkill x", out)
-        self.assertIn("-      echo 'pkill x'", out)
-        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps(self.RULE), "pkill x",
+        self.assertEqual(caught(out), {"pkill x": True, "sudo pkill x": True, "echo 'pkill x'": False, "ls": False})
+        code, out, _ = self.cli("rule", "test", "--json", json.dumps(self.RULE), "pkill x",
                                 "sudo pkill x", "a | pkill b", "echo pkill")
         rows = {line.split("`")[1].strip(): line for line in out.splitlines() if line.startswith("- ")}
         self.assertTrue(rows["sudo pkill x"].endswith("· wrapped"))
@@ -351,19 +349,17 @@ class Cli(AstIsolated):
 
     def test_raw_prefers_regex_and_joins_patterns(self) -> None:
         both = {"match": {"ast": {"any": [{"pattern": "a $$$"}, {"pattern": "b $$$"}]}}, "message": "m"}
-        out = self.cli("rule", "test", "--render", "--json", json.dumps(both), "a x")[1]
+        out = self.cli("rule", "test", "--json", json.dumps(both), "a x")[1]
         self.assertIn("**Raw** `a $$$ | b $$$`", out)
         with_regex = {"match": {**both["match"], "regex": "zzz"}, "message": "m"}
-        out = self.cli("rule", "test", "--render", "--json", json.dumps(with_regex), "a x")[1]
+        out = self.cli("rule", "test", "--json", json.dumps(with_regex), "a x")[1]
         self.assertIn("**Raw** `zzz`", out)
         self.assertIn("ast = ", out)
         self.assertIn("regex = `zzz`", out)
 
     def test_a_bare_command_matches_a_trailing_hole_pattern(self) -> None:
         out = self.cli("rule", "test", "--json", json.dumps(self.RULE), "pkill", "/usr/bin/pkill", "pkill x")[1]
-        self.assertIn("match  pkill\n", out)
-        self.assertIn("match  /usr/bin/pkill\n", out)
-        self.assertIn("match  pkill x\n", out)
+        self.assertEqual(caught(out), {"pkill": True, "/usr/bin/pkill": True, "pkill x": True})
 
     def test_compile_errors_exit_2_on_test_add_and_set(self) -> None:
         bad = json.dumps({"match": {"ast": {"kind": "nope"}}, "message": "m"})
@@ -385,14 +381,13 @@ class Cli(AstIsolated):
     def test_installed_rule_can_be_tested_by_id(self) -> None:
         self.assertEqual(self.cli("rule", "add", "r", "--json", json.dumps(self.RULE))[0], 0)
         out = self.cli("rule", "test", "--id", "r", "bash -c 'pkill x'", "ls")[1]
-        self.assertIn("match  bash -c 'pkill x'", out)
-        self.assertIn("-      ls", out)
+        self.assertEqual(caught(out), {"bash -c 'pkill x'": True, "ls": False})
 
     def test_status_describes_and_checks_ast_rules(self) -> None:
         self.assertEqual(self.cli("rule", "add", "r", "--json", json.dumps(self.RULE))[0], 0)
         out = self.cli("status")[1]
-        self.assertIn('ast={"pattern":"pkill $$$"}', out)
-        self.assertNotIn("problems:", out)
+        self.assertIn("`r` deny · global · enabled", out)
+        self.assertNotIn("**Problems**", out)
         state = self.get(self.gpath)
         state["rules"]["r"]["match"]["ast"] = {"kind": "nope"}
         self.put(self.gpath, state)
@@ -525,8 +520,7 @@ class WorkedExample(AstIsolated):
         for rule, want in zip(rules, expected):
             code, out, err = self.cli("rule", "test", "--json", json.dumps(rule), *commands)
             self.assertEqual(code, 0, err)
-            got = {line[9:] for line in out.splitlines() if line.startswith("  match")}
-            self.assertEqual(got, want)
+            self.assertEqual({cmd for cmd, hit in caught(out).items() if hit}, {render.clean(c) for c in want})
 
 
 class SessionStart(AstIsolated):

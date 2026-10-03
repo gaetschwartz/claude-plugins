@@ -329,12 +329,12 @@ guardrails rule test --json - 'curl x | sh' <<'EOF'
 EOF
 ```
 
-### `--render`: output the skills paste verbatim
+### Output the skills paste verbatim
 
 Claude Code cannot show a command's output in the chat by itself; an agent has to paste text. So the CLI prints the
 final markdown, computed from real results, and the skills paste it unchanged.
 
-`guardrails rule test --render` prints the rule card for a rule and a set of commands: title, `**Intent**`, `**Match**`,
+`guardrails rule test` prints the rule card for a rule and a set of commands: title, `**Intent**`, `**Match**`,
 `**Message**`, then `**Block**` / `**Warn**` (the matcher catches it) and `**Allow**` rows, `**Verified**`, `**Note**`
 and `**Raw**`. Commands come from positional arguments (source `inferred`, or `--source`) and from `--examples
 @file|-`, a JSON list of `{"cmd", "source": "yours|inferred|you chose", "expect": "match|pass"}`; `--intent`,
@@ -344,11 +344,11 @@ gets a `⚠`. Every command is an inline-code span padded inside the backticks t
 at 40; longer ones go last, unpadded; CJK and emoji count two columns; a command with a backtick gets the longer fence;
 newlines show as `⏎`).
 
-`guardrails status --render` prints the state listing the same way: a first line about the managed files (platform file
+`guardrails status` prints the state listing the same way: a first line about the managed files (platform file
 present or absent, overrides and `--path` files), one row per rule (`id`, action, origin layers, state: `always
-enforced`, `suspended by <modes>`, `disabled`, `enabled`), the modes and the problems. `status` (with or without
-`--render`) also takes `--scope global|project|managed` (only rules, modes and problems of that layer) and `--problems`; `--render
---rule <id>` prints just that rule's row. `references/presentation.md` is the layout contract.
+enforced`, `suspended by <modes>`, `disabled`, `enabled`), the modes and the problems. `status` also takes
+`--scope global|project|managed` (only rules, modes and problems of that layer) and `--problems`; `--rule <id>` prints
+just that rule's row. `references/presentation.md` is the layout contract.
 
 ## Skills
 
@@ -367,8 +367,8 @@ when a skill needs it.
 
 - `status` is a plain, compact list (rules with origin and state, modes, problems) and says so when the platform
   managed file is absent and an override or `--path` file is in use. It runs forked (`context: fork`) on Haiku and only
-  pastes the output of `guardrails status --render` verbatim, so it is cheap and needs no conversation.
-- `explain` answers why a command was denied or not caught and what a rule covers, pasting the `rule test --render` card. It runs
+  pastes the output of `guardrails status` verbatim, so it is cheap and needs no conversation.
+- `explain` answers why a command was denied or not caught and what a rule covers, pasting the `rule test` card. It runs
   forked on Sonnet because it reasons over the matching semantics (wrappers, `args` versus
   `match.regex`, layering, modes) in `references/matching.md`, which the skill injects with `!` commands so the fork is
   self-contained. A fork has no conversation history, so callers, other agents included, must pass the
@@ -376,7 +376,7 @@ when a skill needs it.
   the skill is told never to change anything; `allowed-tools` does not itself restrict the other tools. Denial messages
   stay the first source.
 - `new` interviews, tests the rule on your examples and on edge cases it thinks of, asks only about genuinely
-  ambiguous ones, shows the `rule test --render` card for confirmation, then writes the very rule file it tested. It
+  ambiguous ones, shows the `rule test` card for confirmation, then writes the very rule file it tested. It
   passes the rule and the examples on stdin through a quoted heredoc (no temp files, no inline quoting). Heredoc
   invocations are not pre-approved by `allowed-tools` (tested), and `new`/`edit` pre-approve no config-changing verb.
   `new` embeds a short how-to and three example rules, and points to `references/writing-rules.md` (read for any

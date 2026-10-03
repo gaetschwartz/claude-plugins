@@ -26,13 +26,13 @@ Parse the text above; every long flag has a short one.
   clears the field; `program`, `args`, `builtin`, `regex`, `ast` edit `match` (`ast` is a JSON object).
 - `-s` / `--scope global|project|managed` (default global), `-P` / `--path <file>` (managed-format file, needs
   `-s managed`), `-y` / `--yes` (do not confirm `rm`).
-- No arguments: run `guardrails status --render`, paste its output VERBATIM, ask (AskUserQuestion, or chat when there
+- No arguments: run `guardrails status`, paste its output VERBATIM, ask (AskUserQuestion, or chat when there
   are more than four) which rule, then ask what to change. A rule given without a change: paste the output of
-  `guardrails status --render --rule <id>` VERBATIM and ask what to change.
+  `guardrails status --rule <id>` VERBATIM and ask what to change.
 
 ## Steps
 
-1. Look the rule up with `guardrails status --render --rule <id>` (add `--path` when given) to learn its origins and
+1. Look the rule up with `guardrails status --rule <id>` (add `--path` when given) to learn its origins and
    state. A managed rule can only be changed with `--scope managed` (exit 3 otherwise); a project entry over a global
    or managed rule can only tighten it, and the CLI says which keys had no effect: tell the user.
 2. Apply it:
@@ -52,9 +52,9 @@ Parse the text above; every long flag has a short one.
    writing relational rules. After a change to `match` (program, args, builtin, regex, ast), re-verify: write the
    commands the user gives, or sensible ones (a caught command, a wrapped form, a look-alike that must pass), as an examples list
    (`{"cmd", "source": "yours" | "inferred", "expect": "match" | "pass"}`, `expect` from what the user wants) on stdin
-   and run `guardrails rule test --render --id <id> --examples - [--path <file>] <<'EOF'` … `EOF`. Paste the output VERBATIM:
+   and run `guardrails rule test --id <id> --examples - [--path <file>] <<'EOF'` … `EOF`. Paste the output VERBATIM:
    unchanged, no paraphrase, no added prose. Never write a script, and never build rows, verdicts or spacing yourself.
    A `⚠` row or a mismatch count above 0 goes back to the user, not into a silent second edit.
-4. Report the outcome: after a `set`, run `guardrails status --render --rule <id> --scope <s> [--path <file>]` and paste
+4. Report the outcome: after a `set`, run `guardrails status --rule <id> --scope <s> [--path <file>]` and paste
    its one line VERBATIM; after a `rm`, the CLI's "removed" line is the report. On exit 2 because the file is not
    writable, print the message and the `sudo …` command exactly as printed and stop; do not run it.

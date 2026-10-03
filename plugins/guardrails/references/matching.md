@@ -21,7 +21,7 @@ refuse). It does not apply modes, retry acknowledgements, `warn` versus `deny`, 
 suspends it (and whether that mode is active now), global hook or project rules disabled. Report those notes next to any
 verdict; never call a matcher result "blocked" on its own, and never read `cannot` as "no match".
 
-`rule test --render` prints the same verdicts as the markdown card described in `presentation.md`, with a `wrapped` tag
+`rule test` prints the same verdicts as the markdown card described in `presentation.md`, with a `wrapped` tag
 the engine computes: the command reached the rule only through a look-through (a wrapper, a shell string, a
 substitution, a pipeline member), as opposed to being the command the rule names. A `regex` match reads the raw text, so
 it is never tagged `wrapped`, and a regex hit wins over a look-through hit on the same command. A `cannot` row is listed

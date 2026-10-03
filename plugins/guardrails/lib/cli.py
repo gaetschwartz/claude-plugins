@@ -26,6 +26,8 @@ SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "d
 SCOPES = ("global", "project", "managed")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
+PASTED = {("status", None), ("rule", "test")}
+
 Args = argparse.Namespace
 
 
@@ -170,21 +172,6 @@ def load_json(value: str, flag: str) -> Any:
 def check_stdin(*pairs: tuple[str | None, str]) -> None:
     if sum(value == "-" for value, _ in pairs) > 1:
         raise Invalid(f"only one of {' and '.join(flag for _, flag in pairs)} can read stdin")
-
-
-def describe_match(rule: policy.Rule) -> str:
-    match = view(rule, "match")
-    bits = []
-    if policy.programs_of(rule):
-        bits.append("program=" + ",".join(policy.programs_of(rule)))
-    for key in ("args", "builtin", "regex"):
-        if match.get(key):
-            bits.append(f"{key}={match[key]}")
-    if match.get("ast"):
-        bits.append("ast=" + render.compact(match["ast"]))
-    if isinstance(rule.get("requires"), list):
-        bits.append("requires=" + "|".join(str(r) for r in rule["requires"]))
-    return " ".join(bits) or "(no matcher)"
 
 
 @dataclass
@@ -349,7 +336,7 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
     return status
 
 
-def print_status_render(args: Args, snap: Snapshot) -> None:
+def print_status(args: Args, snap: Snapshot) -> None:
     if args.problems:
         print(render.problems_listing(snap.problems_in(args.scope)))
         return
@@ -363,90 +350,8 @@ def print_status_render(args: Args, snap: Snapshot) -> None:
     print(render.status_listing(status))
 
 
-def print_status_plain(args: Args, snap: Snapshot) -> None:
-    if args.problems:
-        problems = snap.problems_in(args.scope)
-        print("problems:" if problems else "no problems")
-        for problem in problems:
-            print(f"  - {render.clean(problem)}")
-        return
-    extra, mstate, gstate, pstate, rule_origins = snap.extra, snap.mstate, snap.gstate, snap.pstate, snap.rule_origins
-    disabled = f" ({gstate['disabledReason']})" if gstate.get("disabledReason") else ""
-    default, *override = snap.sources
-    print(f"managed state: {default}{store.presence(default)}")
-    env = os.environ.get(store.MANAGED_ENV)
-    for path in override:
-        if extra and path == extra and not (env and os.path.abspath(env) == path):
-            print(f"managed --path: {path}{store.presence(path)}")
-        else:
-            print(f"managed override: {path}{store.presence(path)}")
-    in_use = [path for path in override if not store.presence(path)]
-    if in_use and store.presence(default) == " (absent)":
-        print(f"note: the platform default managed file is absent; managed rules come only from {', '.join(in_use)}")
-    if extra and not store.hook_enforces(extra):
-        print(f"note: --path {extra} is read for this status only; the hook enforces it only if "
-              f"{store.MANAGED_ENV} points at it")
-    print(f"global state:  {snap.gpath}")
-    print(f"project state: {snap.ppath or '(not in a project)'}")
-    kept = "" if snap.hook_on or not view(mstate, "rules") else "; managed rules stay enforced"
-    print(f"hook enabled:  {'yes' if snap.hook_on else 'no'}{disabled}{kept}")
-    if snap.ppath:
-        print(f"project rules enabled: {'yes' if pstate.get('enabled', True) is not False else 'no'}")
-
-    scope = args.scope
-    print("\nrules:")
-    shown = [rid for rid in sorted(snap.rules) if scope is None or scope in rule_origins.get(rid, [])]
-    if not shown:
-        print("  (none; the guardrails:setup skill installs recommended presets)")
-    for rid in shown:
-        rule = snap.rules[rid]
-        source = "+".join(rule_origins.get(rid, []))
-        flags = [str(rule.get("action"))]
-        if rule.get("retry") == "same-command":
-            flags.append("retry")
-        if rule.get("enabled") is not True:
-            flags.append("DISABLED")
-        suspended = [m for m in policy.modes_of(rule) if m in snap.active]
-        if suspended:
-            flags.append("SUSPENDED by " + ",".join(suspended))
-        elif rid in snap.blind and rule.get("enabled") is True:
-            flags.append("NOT ENFORCED (engine unavailable)")
-        if "managed" in rule_origins.get(rid, []) and not policy.modes_of(rule):
-            flags.append("ALWAYS ENFORCED")
-        print(render.clean(f"  {rid} [{source}] {' '.join(flags)}: {describe_match(rule)}"))
-        if policy.modes_of(rule):
-            print(render.clean(f"      suspended by modes: {', '.join(policy.modes_of(rule))}"))
-
-    print("\nmodes:")
-    names = [n for n in sorted(snap.modes) if scope is None or scope in snap.mode_origins.get(n, [])]
-    if not names:
-        print("  (none declared)")
-    for name in names:
-        mode = snap.modes[name]
-        if name in snap.active:
-            record = snap.active[name]
-            why = f": {record['reason']}" if record.get("reason") else ""
-            state = f"ACTIVE (by {record.get('by', 'user')}{why})"
-        else:
-            state = "inactive"
-        print(render.clean(f"  {name} [{'+'.join(snap.mode_origins.get(name, []))}]: {state}; "
-                           f"agent may enable: {'yes' if mode['agentMayEnable'] else 'no'}; {mode['description']}"))
-
-    problems = snap.problems_in(scope)
-    if problems:
-        print("\nproblems:")
-        for problem in problems:
-            print(f"  - {render.clean(problem)}")
-
-
 def cmd_status(args: Args) -> int:
-    if args.rule and not args.render:
-        raise Invalid("--rule needs --render")
-    snap = snapshot(args)
-    if args.render:
-        print_status_render(args, snap)
-    else:
-        print_status_plain(args, snap)
+    print_status(args, snapshot(args))
     return 0
 
 
@@ -678,8 +583,6 @@ def cannot_evaluate_note(ev: matching.Evaluation) -> str:
 
 def cmd_rule_test(args: Args) -> int:
     check_stdin((args.json, "--json"), (args.examples, "--examples"))
-    if not args.render and (args.intent or args.id_name or args.scope):
-        raise Invalid("--intent, --id-name and --scope need --render")
     if args.id_name:
         check_name("rule", args.id_name)
     if any(not c.strip() for c in args.commands):
@@ -698,7 +601,6 @@ def cmd_rule_test(args: Args) -> int:
             examples += example_list(carried)
         policy.validate_rule(draft)
         rule = policy.with_defaults(draft)
-        label = "(draft)"
         layers: list[str] = []
         named = args.id_name or rule.get("id")
         rid = named if isinstance(named, str) and named else "new-rule"
@@ -714,7 +616,6 @@ def cmd_rule_test(args: Args) -> int:
         rule = rules[args.id]
         policy.validate_rule(rule)
         layers = policy.origins("rules", mstate, gstate, pstate)[args.id]
-        label = f"{args.id} [{'+'.join(layers)}]"
         rid, scope = args.id, "+".join(layers)
 
     if not examples:
@@ -732,24 +633,8 @@ def cmd_rule_test(args: Args) -> int:
         notes.append(cannot_evaluate_note(unjudged))
     results = [render.Result(cmd, source, render.UNEVALUATED if rid in ev.unevaluated else ev.kinds[rid], expect)
                for (cmd, source, expect), ev in zip(examples, evaluations)]
-    if args.render:
-        print(render.rule_card(rid, rule, policy.programs_of(rule), policy.render(rule["message"]), scope,
-                               args.intent or "", results, notes, file))
-        return 0
-    flags = [str(rule["action"])]
-    if rule.get("retry") == "same-command":
-        flags.append("retry")
-    if policy.modes_of(rule):
-        flags.append("modes=" + ",".join(policy.modes_of(rule)))
-    print(render.clean(f"rule {label}: {' '.join(flags)}"))
-    if any(not note.startswith("cannot evaluate") for note in notes):
-        print("note: match only means the matcher selects the command; the hook would not act on it as follows")
-    for note in notes:
-        print(render.clean(f"note: {note}"))
-    for result in results:
-        label = "cannot" if result.kind == render.UNEVALUATED else "match" if result.matched else "-"
-        print(f"  {label:<7}{render.clean(result.cmd, chr(92) + 'n')}")
-    print(render.clean(f"message: {policy.render(rule['message'])}", chr(92) + "n"))
+    print(render.rule_card(rid, rule, policy.programs_of(rule), policy.render(rule["message"]), scope,
+                           args.intent or "", results, notes, file))
     return 0
 
 
@@ -1094,8 +979,7 @@ def build_parser() -> argparse.ArgumentParser:
     status = verbs.add_parser("status", parents=[common, pathed], help="show effective rules and modes")
     status.add_argument("--scope", choices=SCOPES, help="list only rules and modes with an entry in this layer")
     status.add_argument("--problems", action="store_true", help="print only the problems")
-    status.add_argument("--render", action="store_true", help="print markdown for pasting verbatim")
-    status.add_argument("--rule", metavar="ID", help="with --render: print only this rule's row")
+    status.add_argument("--rule", metavar="ID", help="print only this rule's row")
 
     rule = verbs.add_parser("rule", help="add, change or remove rules").add_subparsers(dest="op", required=True)
     add = rule.add_parser("add", parents=[common, scoped], help="add or replace a rule")
@@ -1114,9 +998,8 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("--examples", help='JSON list of {"cmd", "source", "expect"} objects, @<file> or - for stdin')
     test.add_argument("--source", choices=render.SOURCES, default="inferred",
                       help="source tag of the positional commands (default: inferred)")
-    test.add_argument("--render", action="store_true", help="print the presentation block for pasting verbatim")
-    test.add_argument("--intent", help="with --render: the rule's intent line")
-    test.add_argument("--id-name", help="with --render and --json: the id shown in the title")
+    test.add_argument("--intent", help="the rule's intent line")
+    test.add_argument("--id-name", help="with --json: the id shown in the title")
     test.add_argument("--scope", choices=SCOPES, help="with --json: the scope shown in the title (default: global)")
     ast = rule.add_parser("ast", parents=[common, pathed], help="print the parse tree of a command, with the units "
                           "its wrappers and shell strings expose")
@@ -1210,7 +1093,7 @@ def main(argv: list[str]) -> int:
         code = HANDLERS[(args.verb, getattr(args, "op", None))](args)
         note = unenforced_note(args) if code == 0 else ""
         if note:
-            print(note, file=sys.stderr if getattr(args, "render", False) else sys.stdout)
+            print(note, file=sys.stderr if (args.verb, getattr(args, "op", None)) in PASTED else sys.stdout)
         return code
     except Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)

@@ -36,7 +36,7 @@ class BareCommand(AstIsolated):
         proc = self.run_guard(payload)
         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
         status = self.run_bin("status")
-        self.assertIn("no-pkill [managed+project] deny ALWAYS ENFORCED", status.stdout)
+        self.assertIn("`no-pkill` deny · managed+project · always enforced", status.stdout)
 
     def test_managed_scope_unwritable_exits_2_with_sudo_hint(self) -> None:
         if os.geteuid() == 0:

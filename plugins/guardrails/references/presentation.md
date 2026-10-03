@@ -15,10 +15,10 @@ CLI prints the final markdown, computed from real results, and you paste it.
 - A wrong row means a wrong input or a wrong rule: fix the input (the examples, the rule) and run the command again.
   Do not edit the output.
 
-## Rule card: `guardrails rule test --render`
+## Rule card: `guardrails rule test`
 
-    guardrails rule test --render --json @rule.json --examples @examples.json --intent '<text>' --id-name <id> --scope <s>
-    guardrails rule test --render --id <id> --examples @examples.json
+    guardrails rule test --json @rule.json --examples @examples.json --intent '<text>' --id-name <id> --scope <s>
+    guardrails rule test --id <id> --examples @examples.json
 
 Inputs: the rule (`--json`, or an installed one with `--id`; `--scope` and `--id-name` only label a draft), the commands
 (positional, source `inferred`; `--source` changes that default), and `--examples @file` or `--examples -` (stdin), a
@@ -89,7 +89,7 @@ The layout contract, all of it computed by the CLI:
 - Untrusted text: every field (commands, ids, reasons, messages, problems) is made single-line and safe. A newline
   becomes `⏎`, a tab `⇥`, ESC `␛`, and other control, bidi and zero-width characters `\u{hex}`, so text can never start
   a new line or section; widths are computed on that shown form.
-- stdout of a `--render` command is only the block. Anything that matters to the user is a `**Note**` line inside it;
+- stdout of `rule test` and `status` is only the block. Anything that matters to the user is a `**Note**` line inside it;
   plain diagnostics go to stderr.
 - `rule test` checks only the matcher. It does not know modes, retry acknowledgements or the hook being off, which is why
   `Verified` says "matcher checked" and the group heading carries the action.
@@ -102,9 +102,9 @@ script. Each line is a named node, indented by depth, with the text in `«…»`
 other renderer (newline `⏎`, ESC `␛`). Use it to learn node kinds before writing `inside` / `has` rules. It needs the
 AST engine (ast-grep) and exits 2 with a message, including the fix commands, when that is unavailable.
 
-## Status: `guardrails status --render`
+## Status: `guardrails status`
 
-    guardrails status --render [--scope global|project|managed] [--problems] [--path <file>] [--rule <id>]
+    guardrails status [--scope global|project|managed] [--problems] [--path <file>] [--rule <id>]
 
 Output:
 
@@ -135,7 +135,7 @@ Output:
 
 ## Explain
 
-`explain` pastes the rule card of `guardrails rule test --render --id <id> …` verbatim. After a blank line it adds
+`explain` pastes the rule card of `guardrails rule test --id <id> …` verbatim. After a blank line it adds
 short bold-label lines of its own, without any command span, verdict or count (those are in the card):
 
     **Happens** blocked once; the identical command re-run in the same session passes
@@ -146,7 +146,7 @@ short bold-label lines of its own, without any command span, verdict or count (t
 Include `Cause` only when the question was why something was or was not caught. What happens at run time (mode
 suspension, retry, warn versus deny) comes from `status` and the matching reference, never from `rule test` alone.
 
-## Rule row: `guardrails status --render --rule <id>`
+## Rule row: `guardrails status --rule <id>`
 
     - `no-pkill` deny · global · enabled
 

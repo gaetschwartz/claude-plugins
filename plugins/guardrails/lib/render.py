@@ -70,27 +70,14 @@ def display_width(text: str) -> int:
     return sum(char_width(c) for c in text)
 
 
-ESCAPES = {"\t": "⇥", "\x1b": "␛", "\x7f": "␡"}
-HIDDEN = re.compile("[\u2028\u2029\u202a-\u202e\u2066-\u2069\u200b-\u200f\u2060-\u2064\ufeff\U000e0000-\U000e007f]")
+GLYPHS = str.maketrans({"\n": NEWLINE, "\t": "⇥", "\x1b": "␛", "\x7f": "␡"})
+INVISIBLE = ("Cc", "Cf", "Cs", "Co", "Zl", "Zp")
 
 
-def clean(text: str, newline: str = NEWLINE) -> str:
+def clean(text: str) -> str:
     """Replace everything that could start a new line, move the cursor or hide text with a visible form."""
-    out = []
-    for ch in re.sub(r"\r\n|\r|\n", "\n", text):
-        if ch == "\n":
-            out.append(newline)
-        elif ch in ESCAPES:
-            out.append(ESCAPES[ch])
-        elif unicodedata.category(ch) in ("Cc", "Cf", "Zl", "Zp") or HIDDEN.match(ch):
-            out.append(f"\\u{{{ord(ch):x}}}")
-        else:
-            out.append(ch)
-    return "".join(out)
-
-
-def one_line(text: str) -> str:
-    return clean(text)
+    shown = text.replace("\r\n", "\n").replace("\r", "\n").translate(GLYPHS)
+    return "".join(f"\\u{{{ord(ch):x}}}" if unicodedata.category(ch) in INVISIBLE else ch for ch in shown)
 
 
 def prose(text: str) -> str:
@@ -113,7 +100,7 @@ def common_width(texts: list[str]) -> int:
 
 
 def words(values: list[str]) -> str:
-    return ", ".join(span(one_line(v)) for v in values)
+    return ", ".join(span(v) for v in values)
 
 
 def compact(value: object) -> str:
@@ -127,9 +114,9 @@ def describe_match(match: dict[str, object], programs: list[str]) -> str:
     for key in ("args", "regex", "builtin"):
         value = match.get(key)
         if isinstance(value, str) and value:
-            parts.append(f"{key} = {span(one_line(value))}")
+            parts.append(f"{key} = {span(value)}")
     if isinstance(match.get("ast"), dict) and match["ast"]:
-        parts.append(f"ast = {span(one_line(compact(match['ast'])))}")
+        parts.append(f"ast = {span(compact(match['ast']))}")
     return "; ".join(parts) or "(no matcher)"
 
 
@@ -170,7 +157,7 @@ def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: s
     lines.append(f"**Match** {describe_match(match, programs)}")
     lines.append(f"**Message** {prose(message)}")
 
-    shown = [one_line(r.cmd) for r in results]
+    shown = [clean(r.cmd) for r in results]
     width = common_width(shown)
     hit = "Warn" if action == "warn" else "Block"
     for heading, glyph, wanted in ((hit, "✗", "direct"), ("Allow", "✓", None), ("Not evaluated", "?", UNEVALUATED)):
@@ -193,7 +180,7 @@ def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: s
         lines.append(f"**Note** {prose('; '.join(notes))}")
     raw = raw_matcher(match)
     if raw:
-        lines.append(f"**Raw** {span(one_line(raw))}")
+        lines.append(f"**Raw** {span(raw)}")
     return "\n".join(lines)
 
 

@@ -14,7 +14,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from unittest import mock
 
-from helpers import LIB, REAL_WANTED, ROOT, AstIsolated, Isolated
+from helpers import LIB, REAL_WANTED, ROOT, AstIsolated, Isolated, caught
 
 import astbin
 import astcli
@@ -721,15 +721,14 @@ class EngineMissingNotice(Isolated):
         self.assertEqual(code, 0)
         self.assertIn("cannot evaluate", text)
         self.assertIn("the engine is missing", text)
-        self.assertIn("  cannot pkill x", text)
+        self.assertIn("**Not evaluated**\n- ? `pkill x`", text)
         regex = json.dumps({"match": {"regex": "^pkill"}, "message": "m"})
-        self.assertIn("match  pkill x", self.cli("rule", "test", "--json", regex, "pkill x")[1])
-        self.assertIn("k [global] deny NOT ENFORCED (engine unavailable)", self.cli("status")[1])
-        self.assertIn("deny · global · NOT enforced: engine unavailable", self.cli("status", "--render")[1])
+        self.assertEqual(caught(self.cli("rule", "test", "--json", regex, "pkill x")[1]), {"pkill x": True})
+        self.assertIn("deny · global · NOT enforced: engine unavailable", self.cli("status")[1])
         self.put(self.gpath, self.WITH_REGEX)
         rows = self.cli("status")[1]
-        self.assertIn("rx [global] deny:", rows)
-        self.assertNotIn("rx [global] deny NOT ENFORCED", rows)
+        self.assertIn("`rx` deny · global · enabled", rows)
+        self.assertNotIn("`rx` deny · global · NOT enforced", rows)
 
 
 class EngineUsableNoNotice(AstIsolated):

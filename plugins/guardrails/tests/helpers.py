@@ -6,6 +6,7 @@ import contextlib
 import io
 import json
 import os
+import re
 import subprocess
 import sys
 import tempfile
@@ -56,6 +57,12 @@ def shared_engine() -> str | None:
                     if astbin.wheel_probe(plat, data).path:
                         _SHARED[0] = astbin.engine_root(data)
     return _SHARED[0] or None
+
+
+def caught(out: str) -> dict[str, bool]:
+    """Command shown in each rule card row, and whether the matcher selects it."""
+    rows = re.finditer(r"^- (?P<glyph>[✗✓]) (?:⚠ )?`(?P<cmd>.*?)\s*` ", out, re.MULTILINE)
+    return {row["cmd"]: row["glyph"] == "✗" for row in rows}
 
 
 SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR",

@@ -74,7 +74,7 @@ class Spans(unittest.TestCase):
         self.assertEqual(render.display_width("é"), 1)
 
     def test_newlines(self) -> None:
-        self.assertEqual(render.one_line("a\nb\r\nc"), "a⏎b⏎c")
+        self.assertEqual(render.clean("a\nb\r\nc"), "a⏎b⏎c")
 
     def test_common_width_is_capped(self) -> None:
         self.assertEqual(render.common_width(["a" * 10, "b"]), 10)
@@ -84,7 +84,7 @@ class Spans(unittest.TestCase):
 
 class Card(AstIsolated):
     def card(self, rule: dict, examples: list, *extra: str) -> str:
-        code, out, err = self.cli("rule", "test", "--render", "--json", json.dumps(rule), "--examples",
+        code, out, err = self.cli("rule", "test", "--json", json.dumps(rule), "--examples",
                                   json.dumps(examples), *extra)
         self.assertEqual((code, err), (0, ""))
         return out
@@ -254,19 +254,19 @@ class Card(AstIsolated):
     def test_installed_rule_scope_is_its_layers(self) -> None:
         self.cli("rule", "add", "no-pkill", "--json", json.dumps(PKILL))
         self.cli("rule", "set", "no-pkill", "--json", '{"retry": "none"}', "--scope", "project")
-        code, out, _ = self.cli("rule", "test", "--render", "--id", "no-pkill", "pkill a", "ls")
+        code, out, _ = self.cli("rule", "test", "--id", "no-pkill", "pkill a", "ls")
         self.assertEqual(code, 0)
         self.assertTrue(out.startswith("### no-pkill · deny · global+project\n"))
         self.assertIn("inferred", out)
 
     def test_positional_commands_and_source_flag(self) -> None:
-        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "pkill a", "ls",
+        code, out, _ = self.cli("rule", "test", "--json", json.dumps(PKILL), "pkill a", "ls",
                                 "--source", "yours")
         self.assertEqual(code, 0)
         self.assertEqual(out.count(" yours\n"), 2)
 
     def test_positional_then_examples(self) -> None:
-        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "pkill a",
+        code, out, _ = self.cli("rule", "test", "--json", json.dumps(PKILL), "pkill a",
                                 "--examples", json.dumps([{"cmd": "pkill b", "source": "yours"}, "pkill c"]))
         self.assertEqual(code, 0)
         self.assertEqual([r.split("`")[1].rstrip() for r in self.rows(out)], ["pkill a", "pkill b", "pkill c"])
@@ -275,11 +275,11 @@ class Card(AstIsolated):
     def test_examples_from_file_and_stdin(self) -> None:
         path = self.tmp / "ex file.json"
         path.write_text(json.dumps([{"cmd": "pkill a", "source": "yours"}]))
-        code, from_file, _ = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--examples",
+        code, from_file, _ = self.cli("rule", "test", "--json", json.dumps(PKILL), "--examples",
                                       f"@{path}")
         self.assertEqual(code, 0)
         with mock.patch("sys.stdin", io.StringIO(path.read_text())):
-            code, from_stdin, _ = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--examples", "-")
+            code, from_stdin, _ = self.cli("rule", "test", "--json", json.dumps(PKILL), "--examples", "-")
         self.assertEqual(code, 0)
         self.assertEqual(from_file, from_stdin)
         self.assertIn(" yours\n", from_file)
@@ -291,25 +291,19 @@ class Card(AstIsolated):
                               ('[{"cmd": "x", "expects": "match"}]', "unknown keys"), ("[]", "at least one"),
                               ("@/no/such/file.json", "cannot read")):
             with self.subTest(bad=bad):
-                code, out, err = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--examples", bad)
+                code, out, err = self.cli("rule", "test", "--json", json.dumps(PKILL), "--examples", bad)
                 self.assertEqual((code, out), (2, ""))
                 self.assertIn(fragment, err)
 
     def test_commands_are_required_without_examples(self) -> None:
-        code, _, err = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL))
+        code, _, err = self.cli("rule", "test", "--json", json.dumps(PKILL))
         self.assertEqual(code, 2)
         self.assertIn("at least one command", err)
 
-    def test_render_only_flags_are_rejected_elsewhere(self) -> None:
-        self.assertEqual(self.cli("rule", "test", "--json", json.dumps(PKILL), "--intent", "x", "ls")[0], 2)
-        self.assertEqual(self.cli("rule", "test", "--json", json.dumps(PKILL), "--id-name", "x", "ls")[0], 2)
+    def test_draft_labels_are_rejected_for_an_installed_rule(self) -> None:
         self.cli("rule", "add", "r", "--json", json.dumps(PKILL))
-        self.assertEqual(self.cli("rule", "test", "--render", "--id", "r", "--scope", "project", "ls")[0], 2)
-
-    def test_plain_rule_test_output_is_unchanged_by_examples(self) -> None:
-        code, out, _ = self.cli("rule", "test", "--json", json.dumps(PKILL), "--examples", '["pkill a"]', "ls")
-        self.assertEqual(code, 0)
-        self.assertIn("  -      ls\n  match  pkill a\n", out)
+        for label in ("--scope", "--id-name"):
+            self.assertEqual(self.cli("rule", "test", "--id", "r", label, "project", "ls")[0], 2)
 
     def test_render_output_is_unfenced(self) -> None:
         out = self.card(PKILL, GOLDEN_EXAMPLES)
@@ -319,7 +313,7 @@ class Card(AstIsolated):
 
 class StatusRender(AstIsolated):
     def status(self, *extra: str) -> str:
-        code, out, err = self.cli("status", "--render", *extra)
+        code, out, err = self.cli("status", *extra)
         self.assertEqual((code, err), (0, ""))
         return out
 
@@ -346,6 +340,27 @@ class StatusRender(AstIsolated):
         self.assertIn(f"--path `{extra}` absent", first)
         self.assertIn(f"managed rules come only from `{self.mpath}`", first)
         self.assertIn("the --path file is read for this status only", first)
+
+    def test_managed_line_cases(self) -> None:
+        cases = {
+            "override only": ([self.mpath], (), [f"managed rules come only from `{self.mpath}`"], []),
+            "default and override": ([self.dpath, self.mpath], (), [], ["come only from"]),
+            "--path equal to the env override": ([self.mpath], ("--path", str(self.mpath)), [], ["--path `"]),
+            "--path equal to the platform default": ([self.dpath], ("--path", str(self.dpath)), [],
+                                                     ["--path `", "the hook enforces", "come only from"]),
+            "no managed file": ([], (), [], ["come only from"]),
+        }
+        for name, (files, argv, present, absent) in cases.items():
+            with self.subTest(case=name):
+                for path in files:
+                    self.put(path, {})
+                first = self.status(*argv).splitlines()[0]
+                for text in present:
+                    self.assertIn(text, first)
+                for text in absent:
+                    self.assertNotIn(text, first)
+                for path in files:
+                    path.unlink()
 
     def test_rule_rows_and_states(self) -> None:
         self.put(self.mpath, {"rules": {"kill-9": json.loads(self.rule(action="warn"))}})
@@ -419,12 +434,9 @@ class StatusRender(AstIsolated):
         self.cli("rule", "add", "a-rule", "--json", self.rule())
         self.cli("rule", "add", "b-rule", "--json", self.rule(action="warn"))
         self.assertEqual(self.status("--rule", "b-rule"), "- `b-rule` warn · global · enabled\n")
-        code, _, err = self.cli("status", "--render", "--rule", "ghost")
+        code, _, err = self.cli("status", "--rule", "ghost")
         self.assertEqual(code, 2)
         self.assertIn("no rule 'ghost'", err)
-        code, _, err = self.cli("status", "--rule", "a-rule")
-        self.assertEqual(code, 2)
-        self.assertIn("--rule needs --render", err)
 
     def test_long_ids_are_capped(self) -> None:
         long = "r" * 50
@@ -434,19 +446,8 @@ class StatusRender(AstIsolated):
         self.assertIn(f"- `{long}` deny", out)
         self.assertIn("- `short" + " " * 35 + "` deny", out)
 
-    def test_plain_status_honours_scope_and_problems(self) -> None:
-        self.cli("rule", "add", "g-rule", "--json", self.rule())
-        self.cli("rule", "add", "p-rule", "--json", self.rule(), "--scope", "project")
-        out = self.cli("status", "--scope", "project")[1]
-        self.assertIn("p-rule [project]", out)
-        self.assertNotIn("g-rule", out)
-        self.put(self.gpath, "{nope")
-        out = self.cli("status", "--problems")[1]
-        self.assertTrue(out.startswith("problems:\n  - unreadable global state file"))
-        self.assertNotIn("rules:", out)
-
-    def test_agent_can_render(self) -> None:
-        code, _, _ = self.cli("status", "--render", agent=True)
+    def test_agent_can_read_status(self) -> None:
+        code, _, _ = self.cli("status", agent=True)
         self.assertEqual(code, 0)
 
 
@@ -470,11 +471,11 @@ class InputSources(AstIsolated):
         self.put(path, self.RULE)
         code, out, _ = self.cli("rule", "test", "--json", f"@{path}", "strings x", "ls")
         self.assertEqual(code, 0)
-        self.assertIn("match  strings x", out)
+        self.assertIn("- ✗ `strings x` inferred", out)
         with mock.patch("sys.stdin", io.StringIO(self.RULE)):
             code, out, _ = self.cli("rule", "test", "--json", "-", "strings x")
         self.assertEqual(code, 0)
-        self.assertIn("match  strings x", out)
+        self.assertIn("- ✗ `strings x` inferred", out)
 
     def test_hard_quoting_survives_a_file(self) -> None:
         hard = {"match": {"regex": "echo `pkill $(x)` \"y\" 'z'"}, "message": "it's \"hard\""}
@@ -487,7 +488,7 @@ class InputSources(AstIsolated):
     def test_missing_file_and_invalid_json_exit_2(self) -> None:
         bad = self.tmp / "bad.json"
         self.put(bad, "{nope")
-        for verb in (("rule", "add", "x"), ("rule", "test", "--render", "ls")):
+        for verb in (("rule", "add", "x"), ("rule", "test", "ls")):
             with self.subTest(verb=verb):
                 code, _, err = self.cli(*verb, "--json", f"@{self.tmp / 'missing.json'}")
                 self.assertEqual(code, 2)
@@ -500,7 +501,7 @@ class InputSources(AstIsolated):
         self.assertFalse(self.gpath.exists())
 
     def test_stdin_cannot_serve_two_flags(self) -> None:
-        code, _, err = self.cli("rule", "test", "--render", "--json", "-", "--examples", "-")
+        code, _, err = self.cli("rule", "test", "--json", "-", "--examples", "-")
         self.assertEqual(code, 2)
         self.assertIn("only one of --json and --examples can read stdin", err)
 
@@ -535,13 +536,12 @@ class Sanitising(AstIsolated):
         self.assertEqual(control_chars(cleaned), [])
         for shown in ("␛", "⇥", "\\u{2028}", "\\u{85}", "\\u{202e}", "\\u{200b}", "\\u{e0041}", "\\u{0}", "␡"):
             self.assertIn(shown, cleaned)
-        self.assertEqual(render.clean("a\nb\r\nc", "\\n"), "a\\nb\\nc")
         self.assertEqual(render.clean(render.clean(EVIL)), render.clean(EVIL))
 
     def test_card_fields_never_break_the_block(self) -> None:
         forged = "x\n### Forged\n- ✗ `fake` yours"
         rule = {**PKILL, "id": forged, "message": forged}
-        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps(rule), "--intent", forged,
+        code, out, _ = self.cli("rule", "test", "--json", json.dumps(rule), "--intent", forged,
                                 "--examples", json.dumps([{"cmd": forged}, {"cmd": "pkill " + EVIL}, "ls"]))
         self.assertEqual(code, 0)
         self.assertEqual(control_chars(out), [])
@@ -551,7 +551,7 @@ class Sanitising(AstIsolated):
         self.assertEqual(sum(line.startswith("### ") for line in out.splitlines()), 1)
 
     def test_tabs_and_controls_align_on_the_cleaned_text(self) -> None:
-        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--examples",
+        code, out, _ = self.cli("rule", "test", "--json", json.dumps(PKILL), "--examples",
                                 json.dumps([{"cmd": "pkill\ta"}, {"cmd": "pkill \x1bb"}, {"cmd": "pkill abcdefghi"}]))
         self.assertEqual(code, 0)
         self.assertEqual({span_width(m) for m in SPAN.finditer(out)}, {len("pkill abcdefghi")})
@@ -561,24 +561,17 @@ class Sanitising(AstIsolated):
         self.put(self.gpath, {"rules": {forged: {"match": {"program": "x"}, "message": "m"}},
                               "modes": {forged: {"description": forged, "agentMayEnable": True}},
                               "sessions": {"s1": {"modes": {forged: {"by": "agent", "reason": forged}}}}})
-        for argv in (("status", "--render", "--session-id", "s1"), ("status", "--session-id", "s1"),
-                     ("status", "--render", "--rule", forged)):
+        for argv in (("status", "--session-id", "s1"), ("status", "--rule", forged)):
             with self.subTest(argv=argv):
                 code, out, err = self.cli(*argv)
                 self.assertEqual((code, control_chars(out), "\x1b" in out), (0, [], False), err)
                 for line in out.splitlines():
                     self.assertFalse(line.startswith(("### Forged", "- `fake")), line)
 
-    def test_plain_rule_test_neutralises(self) -> None:
-        code, out, _ = self.cli("rule", "test", "--json", json.dumps({**PKILL, "message": "m\x1b[2J\n### Forged"}),
-                                "pkill " + EVIL)
-        self.assertEqual((code, control_chars(out), "\x1b" in out), (0, [], False))
-        self.assertIn("message: m␛[2J\\n### Forged", out)
-
     def test_problems_are_neutralised(self) -> None:
         self.put(self.gpath, {"rules": {"bad": {"match": {"regex": "("}, "message": "x\x1b"}}})
         self.put(self.ppath, {"rules": {"r\x1b": {"match": {"program": "x"}, "message": "m", "modes": ["g\nh"]}}})
-        out = self.cli("status", "--render")[1]
+        out = self.cli("status")[1]
         self.assertEqual((control_chars(out), "\x1b" in out), ([], False))
         self.assertIn("mode 'g h'", out)
 
@@ -619,18 +612,19 @@ class WrappedForms(AstIsolated):
                     "pkill 'x", "cat <<EOF\npkill x\nEOF", "xargs pkill", "zz", "ls"]
         for raw in rules:
             rule = policy.with_defaults({**raw, "message": "m"})
+            out = self.cli("rule", "test", "--json", json.dumps({**raw, "message": "m"}), *commands)[1]
+            caught = {command_of(row): row.startswith("- ✗") for row in out.splitlines() if row.startswith(("- ✗", "- ✓"))}
             for command in commands:
                 with self.subTest(rule=raw, command=command):
                     output, _ = engine.evaluate(command, {"r": rule}, {}, {}, "s")
-                    shown = self.cli("rule", "test", "--json", json.dumps({**raw, "message": "m"}), command)[1]
-                    self.assertEqual("  match  " in shown, output is not None)
+                    self.assertEqual(caught[render.clean(command)], output is not None)
 
 
 class NotEvaluated(AstIsolated):
     def test_a_rule_the_engine_cannot_judge_is_never_shown_as_allowed(self) -> None:
         self.use_engine(False)
         examples = json.dumps([{"cmd": "pkill a", "expect": "match"}, {"cmd": "ls", "expect": "pass"}])
-        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--examples", examples)
+        code, out, _ = self.cli("rule", "test", "--json", json.dumps(PKILL), "--examples", examples)
         self.assertEqual(code, 0)
         self.assertIn("**Not evaluated**", out)
         self.assertIn("- ? ⚠ `pkill a", out)
@@ -641,7 +635,7 @@ class NotEvaluated(AstIsolated):
 
     def test_a_regex_rule_is_judged_without_the_engine(self) -> None:
         self.use_engine(False)
-        code, out, _ = self.cli("rule", "test", "--render", "--json", json.dumps({"match": {"regex": "^pkill"}, "message": "m"}),
+        code, out, _ = self.cli("rule", "test", "--json", json.dumps({"match": {"regex": "^pkill"}, "message": "m"}),
                                 "pkill a", "ls")
         self.assertEqual(code, 0)
         self.assertNotIn("Not evaluated", out)
@@ -657,14 +651,14 @@ class NotEvaluated(AstIsolated):
 class Isolation(AstIsolated):
     def test_render_stdout_is_only_the_block(self) -> None:
         extra = self.tmp / "custom.json"
-        code, out, err = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--scope", "managed",
+        code, out, err = self.cli("rule", "test", "--json", json.dumps(PKILL), "--scope", "managed",
                                   "--path", str(extra), "pkill a")
         self.assertEqual(code, 0)
         self.assertNotIn("\nnote:", "\n" + out)
         self.assertIn(f"**File** `{extra}`", out)
         self.assertIn(f"**Note** the hook enforces {extra} only if GUARDRAILS_MANAGED_PATH points at it", out)
         self.assertIn("the hook enforces", err)
-        code, out, err = self.cli("status", "--render", "--scope", "managed", "--path", str(extra))
+        code, out, err = self.cli("status", "--scope", "managed", "--path", str(extra))
         self.assertEqual(code, 0)
         self.assertNotIn("\nnote:", "\n" + out)
         self.assertTrue(out.startswith("**Managed**"))
@@ -675,26 +669,26 @@ class Isolation(AstIsolated):
     def test_status_scope_filters_problems(self) -> None:
         self.put(self.gpath, {"rules": {"g-bad": {"match": {"program": "x"}, "message": "m", "modes": ["a"]}}})
         self.put(self.ppath, {"rules": {"p-bad": {"match": {"program": "x"}, "message": "m", "modes": ["b"]}}})
-        allp = self.cli("status", "--render", "--problems")[1]
+        allp = self.cli("status", "--problems")[1]
         self.assertIn("g-bad", allp)
         self.assertIn("p-bad", allp)
         for scope, present, absent in (("global", "g-bad", "p-bad"), ("project", "p-bad", "g-bad")):
             for extra in ((), ("--problems",)):
-                out = self.cli("status", "--render", "--scope", scope, *extra)[1]
+                out = self.cli("status", "--scope", scope, *extra)[1]
                 self.assertIn(present, out)
                 self.assertNotIn(absent, out)
             self.assertNotIn(absent, self.cli("status", "--scope", scope)[1])
-        self.assertEqual(self.cli("status", "--render", "--scope", "managed", "--problems")[1], "No problems.\n")
+        self.assertEqual(self.cli("status", "--scope", "managed", "--problems")[1], "No problems.\n")
 
     def test_unreadable_layer_problems_follow_their_scope(self) -> None:
         self.put(self.gpath, "{nope")
-        self.assertIn("unreadable global", self.cli("status", "--render", "--scope", "global")[1])
-        self.assertNotIn("unreadable global", self.cli("status", "--render", "--scope", "project")[1])
+        self.assertIn("unreadable global", self.cli("status", "--scope", "global")[1])
+        self.assertNotIn("unreadable global", self.cli("status", "--scope", "project")[1])
 
 
 class Inputs(AstIsolated):
     def test_id_name_is_validated(self) -> None:
-        code, _, err = self.cli("rule", "test", "--render", "--json", json.dumps(PKILL), "--id-name",
+        code, _, err = self.cli("rule", "test", "--json", json.dumps(PKILL), "--id-name",
                                 "bad id ### x", "ls")
         self.assertEqual(code, 2)
         self.assertIn("must match", err)
@@ -703,17 +697,14 @@ class Inputs(AstIsolated):
         for argv in (("--json", json.dumps(PKILL), "  "), ("--json", json.dumps(PKILL), "--examples", '[{"cmd": " "}]'),
                      ("--json", json.dumps(PKILL), "--examples", '[" "]')):
             with self.subTest(argv=argv):
-                code, out, _ = self.cli("rule", "test", "--render", *argv)
+                code, out, _ = self.cli("rule", "test", *argv)
                 self.assertEqual((code, out), (2, ""))
-
-    def test_scope_needs_render(self) -> None:
-        self.assertEqual(self.cli("rule", "test", "--json", json.dumps(PKILL), "--scope", "project", "ls")[0], 2)
 
     def test_envelope_carries_rule_and_examples_through_one_stdin(self) -> None:
         document = json.dumps({"rule": PKILL, "examples": [{"cmd": "pkill a", "source": "yours", "expect": "match"},
                                                           {"cmd": "ls", "expect": "pass"}]})
         with mock.patch("sys.stdin", io.StringIO(document)):
-            code, out, _ = self.cli("rule", "test", "--render", "--json", "-", "--id-name", "no-pkill")
+            code, out, _ = self.cli("rule", "test", "--json", "-", "--id-name", "no-pkill")
         self.assertEqual(code, 0)
         self.assertIn("2 commands, 0 mismatches", out)
         self.assertIn(" yours\n", out)
@@ -723,7 +714,7 @@ class Inputs(AstIsolated):
         self.assertEqual(stored["match"], PKILL["match"])
         self.assertNotIn("examples", stored)
         with mock.patch("sys.stdin", io.StringIO(json.dumps({"rule": PKILL, "examples": "x"}))):
-            self.assertEqual(self.cli("rule", "test", "--render", "--json", "-")[0], 2)
+            self.assertEqual(self.cli("rule", "test", "--json", "-")[0], 2)
 
 
 if __name__ == "__main__":

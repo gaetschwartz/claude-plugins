@@ -5,7 +5,7 @@ sibling nodes under `program` or the enclosing block. Order-dependent rules use 
 siblings. Every block is checked by `tests/test_ast_examples.py` against the real engine: each `catch` command
 matches, each `pass` command does not. Rule syntax and semantics: [matching.md](../matching.md).
 
-What `rule test --render` tags `wrapped`:
+What `rule test` tags `wrapped`:
 
 | shape | tag |
 |---|---|
