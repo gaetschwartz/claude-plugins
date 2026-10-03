@@ -76,7 +76,6 @@ positives.
 - `match.ast`: an ast-grep rule object over the parsed syntax tree; see below.
 - The matchers are alternatives: the rule fires when the program/args/builtin part matches OR `regex` matches OR `ast`
   matches; `program` and `args` are ANDed with each other.
-- `match.mentions` is gone. A state file that still has it loads; the key is ignored.
 
 ## `match.ast`: the syntax tree matcher
 
@@ -152,8 +151,7 @@ Verified with `guardrails rule ast '<command>'`:
 tree-sitter sees `sudo pkill -f vite` as a `command` named `sudo` whose arguments are plain words. The wrapper names are
 data: the built-in list above, extended per layer with `guardrails wrapper add <name>` (`--scope global|project|managed`
 and `--path`, like `rule`), `wrapper rm <name>`, `wrapper list`. Look-through only grows: a layer can add names and never
-remove or change a higher layer's; invalid names are skipped and reported. A state file from an older version, whose
-wrapper entries carry options such as `flagsWithValue` or `shellString`, loads and the options are ignored.
+remove or change a higher layer's; invalid names are skipped and reported.
 
 **False-positive and false-negative risks.** A wrapper the list does not know (`mywrap pkill x`) is an ordinary command,
 so the `pkill x` inside is not seen: declare it. A word of a wrapper that merely equals the program name matches

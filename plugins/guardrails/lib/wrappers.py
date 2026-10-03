@@ -37,7 +37,3 @@ def resolve(labelled: list[tuple[str, object]]) -> tuple[Names, list[str]]:
             if name not in names:
                 names.append(name)
     return tuple(names), notes
-
-
-def effective(*layers: object) -> Names:
-    return resolve([(f"layer {i}", layer) for i, layer in enumerate(layers)])[0]

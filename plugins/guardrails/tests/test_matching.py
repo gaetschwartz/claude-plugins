@@ -69,7 +69,7 @@ class Matching(AstIsolated):
 
     def test_wrappers_are_not_looked_through_when_they_are_unknown_or_bare(self) -> None:
         self.kinds(rule_of(program=K), {f"mywrap -x 3 {K} a": None, f"ssh host {K}": None, "sudo": None, "env A=1": None})
-        names = wrappers.effective({"wrappers": {"mywrap": {}}})
+        names = wrappers.resolve([("g", {"wrappers": {"mywrap": {}}})])[0]
         self.kinds(rule_of(program=K), {f"mywrap -x 3 {K} a": "wrapped"}, names)
 
     def test_wrapper_names_are_programs_too(self) -> None:

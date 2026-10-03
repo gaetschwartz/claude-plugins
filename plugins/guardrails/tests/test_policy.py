@@ -33,6 +33,7 @@ class Validate(unittest.TestCase):
             rule(match={}),
             rule(match={"args": "-9"}),
             rule(match={"program": "x", "bogus": 1}),
+            rule(match={"program": "x", "mentions": ["a"]}),
             rule(match={"program": 3}),
             rule(match={"program": ["x", ""]}),
             rule(match={"builtin": "nope"}),
@@ -366,10 +367,6 @@ class Matching(AstIsolated):
         self.assertFalse(matches(rule(), "echo 'x; strings /bin/ls"))
         self.assertTrue(matches(rule(), "strings /bin/ls; echo 'x"))
         self.assertTrue(matches(rule(match={"program": "kill", "args": "-9"}), "kill -9 1 \"x"))
-
-    def test_the_retired_mentions_key_is_accepted_and_ignored(self) -> None:
-        policy.validate_rule(rule(match={"program": "x", "mentions": ["a"]}))
-        self.assertFalse(matches(rule(match={"program": "x", "mentions": ["strings"]}), "strings a"))
 
 
 class Rendering(Isolated):

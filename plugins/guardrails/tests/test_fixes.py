@@ -63,23 +63,16 @@ class Layering(AstIsolated):
 
     def test_lower_layers_only_add_wrapper_names(self) -> None:
         self.managed_rules()
-        self.put(self.ppath, {"wrappers": {"mywrap": {}, "sudo": {"flagsWithValue": ["-E"], "noCommandFlags": ["-E"]},
-                                           K: {"skip": 2}}})
+        self.put(self.ppath, {"wrappers": {"mywrap": {}, "sudo": {}, K: {}}})
         for n, command in enumerate([f"sudo -E {K} x", f"nohup {K} x", f"env -i {K} x", f"mywrap -x {K} x", f"{K} x",
                                      "strings -n 4 /bin/ls"]):
             self.assertTrue(is_denied(self.hook(command, f"b{n}")), command)
 
     def test_a_global_layer_is_held_to_the_same_rule(self) -> None:
         self.managed_rules()
-        self.put(self.gpath, {"wrappers": {"sudo": {"skip": 3}, K: {}}})
+        self.put(self.gpath, {"wrappers": {"sudo": {}, K: {}}})
         self.assertTrue(is_denied(self.hook(f"sudo -E {K} x", "g1")))
         self.assertTrue(is_denied(self.hook(f"{K} x", "g2")))
-
-    def test_old_wrapper_entries_load_and_their_options_are_ignored(self) -> None:
-        old = {"flagsWithValue": ["-x"], "shellString": "-c", "skip": 1, "assignments": True, "noCommandFlags": ["-v"]}
-        self.put(self.gpath, {"wrappers": {"mywrap": old}, "rules": {"k": {"match": {"program": K}, "message": "m"}}})
-        self.assertTrue(is_denied(self.hook(f"mywrap -x 3 {K} a")))
-        self.assertEqual(self.cli("status", "--problems")[0], 0)
 
     def test_the_cli_takes_names_and_refuses_builtins(self) -> None:
         code, _, err = self.cli("wrapper", "add", "sudo")
@@ -93,7 +86,7 @@ class Layering(AstIsolated):
         corpus = [*DENY, *ALLOW[:20], f"sudo -E {K} x", f"nohup {K} x", f"timeout 5 {K} a", f"bash -c '{K} x'",
                   "grep -r foo .", "sudo grep -rn foo .", "strings -n 4 /bin/ls"]
         base = {c: matching.evaluate(c, rules).kinds for c in corpus}
-        names = wrappers.effective({"wrappers": {K: {}, "strings": {}, "grep": {}, "mywrap": {}}})
+        names = wrappers.resolve([("g", {"wrappers": {K: {}, "strings": {}, "grep": {}, "mywrap": {}}})])[0]
         for command in corpus:
             after = matching.evaluate(command, rules, names).kinds
             for rid, before in base[command].items():
@@ -739,17 +732,6 @@ class Budget(AstIsolated):
         timeout = json.loads((HOOKS / "hooks.json").read_text())["hooks"]["PreToolUse"][0]["hooks"][0]["timeout"]
         self.assertLess(guard.HOOK_BUDGET, timeout)
         self.assertLess(astrun.DEADLINE, guard.HOOK_BUDGET)
-
-
-class RetiredMentions(AstIsolated):
-    def test_a_state_file_with_mentions_still_loads_and_the_key_does_nothing(self) -> None:
-        rule = {"match": {"ast": BY_NAME, "mentions": ["pkill", "killall"]}, "message": "m"}
-        policy.validate_rule(rule)
-        self.put(self.gpath, {"rules": {"r": rule}})
-        self.assertIsNone(self.hook("echo pkill"))
-        self.assertTrue(is_denied(self.hook(f"{K} x")))
-        self.assertEqual(self.cli("status", "--problems")[0], 0)
-        self.assertEqual(self.cli("rule", "set", "r", "mentions=x")[0], 2)
 
 
 if __name__ == "__main__":

@@ -16,7 +16,6 @@ ACTIONS = ("deny", "warn")
 RETRIES = ("none", "same-command")
 MAX_AST_BYTES = 16384
 MATCH_KEYS = ("program", "args", "builtin", "regex", "ast")
-RETIRED_MATCH_KEYS = ("mentions",)
 BUILTINS = ("grep-recursive",)
 AST_KEYS = ("pattern", "kind", "regex", "inside", "has", "follows", "precedes", "not", "any", "all", "stopBy", "field")
 AST_RELATIONS = ("inside", "has", "follows", "precedes")
@@ -126,7 +125,7 @@ def validate_rule(rule: object) -> None:
     match = rule.get("match")
     if not isinstance(match, dict) or not any(match.get(k) for k in ("program", "builtin", "regex", "ast")):
         raise Invalid("'match' needs at least one of 'program', 'builtin', 'regex', 'ast'")
-    unknown = set(match) - set(MATCH_KEYS) - set(RETIRED_MATCH_KEYS)
+    unknown = set(match) - set(MATCH_KEYS)
     if unknown:
         raise Invalid(f"unknown match keys: {', '.join(sorted(unknown))}")
     program = match.get("program")

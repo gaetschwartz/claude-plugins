@@ -43,8 +43,7 @@ also matches `pkill` (a known false positive). A command `pattern` in `match.ast
 The script of `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'`, the arguments of `eval`, heredocs and here-strings fed to
 a shell, and the substitutions in unquoted heredoc bodies are unquoted and scanned as units of their own (depth 8, 64 distinct units, 256 KiB). Add wrapper names with `guardrails wrapper add <name>`
 (`--scope global|project|managed`, `--path`, `--as-user` for agents, like `rule`); `wrapper rm` and `wrapper list` do the
-rest. Look-through only ever grows: a layer adds names and never removes or changes a higher layer's. State files from
-older versions, whose wrapper entries carry `flagsWithValue` or `shellString`, still load and those options are ignored.
+rest. Look-through only ever grows: a layer adds names and never removes or changes a higher layer's.
 Obfuscated or dynamic command names (`$'p\x6bill'`, `p''kill`, variables, aliases, functions) cannot be analysed
 statically and are not matched; `references/matching.md` lists the known limits.
 
@@ -350,13 +349,6 @@ present or absent, overrides and `--path` files), one row per rule (`id`, action
 enforced`, `suspended by <modes>`, `disabled`, `enabled`), the modes and the problems. `status` (with or without
 `--render`) also takes `--scope global|project|managed` (only rules, modes and problems of that layer) and `--problems`; `--render
 --rule <id>` prints just that rule's row. `references/presentation.md` is the layout contract.
-
-## Migrating from shell-guard
-
-shell-guard is gone; its Bash rules live here as data instead of hard-coded Python. Uninstall shell-guard, install
-guardrails, then run the `guardrails:setup` skill — nothing is active until you do, exactly as after a fresh install.
-There is no `FIND_OK=1 find …` or `GREP_OK=1 grep -r …` escape hatch any more: for a rule with `retry: same-command`
-(the `find-fd` / `grep-rg` rules included), re-run the exact command unchanged instead.
 
 ## Skills
 
