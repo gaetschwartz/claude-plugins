@@ -310,7 +310,7 @@ use `python3 <plugin dir>/lib/guard.py <verb>` (`--help` for the full
 list: `status`, `rule add|set|rm|test|ast`, `wrapper add|rm|list`, `mode declare|undeclare|on|off`,
 `preset list|show|install`, `enable|disable`; changes take `--scope global|project|managed`, with `--path <file>` to pick a managed-format file). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
 `enable`/`disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample
-commands without changing anything. It checks the matcher only (`match` or `-`); it prints `note:` lines when the hook
+commands without changing anything. It checks the matcher only (a row is caught or allowed); it prints a `**Note**` line when the hook
 would not act on a match: rule disabled, `requires` binary missing, a listed mode that suspends it (and whether it is
 active now), global hook or project rules disabled.
 

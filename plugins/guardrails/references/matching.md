@@ -14,17 +14,17 @@ plus `inside` / `has` when context matters), then `regex`. Before writing an `as
 
 ## What `rule test` does and does not check
 
-`rule test` answers one question per command: does the rule's matcher select it (`match`), not (`-`), or could it not
-be judged (`cannot`: a rule that needs the engine while the engine is missing or failing, or a command the hook would
-refuse). It does not apply modes, retry acknowledgements, `warn` versus `deny`, or hook-level switches. It prints
-`note:` lines when the hook would not act on a match: rule disabled, `requires` binary missing, a listed mode that
+`rule test` answers one question per command: does the rule's matcher select it (a `Block` or `Warn` row), not (an
+`Allow` row), or could it not be judged (a `Not evaluated` row: a rule that needs the engine while the engine is missing
+or failing, or a command the hook would refuse). It does not apply modes, retry acknowledgements, `warn` versus `deny`,
+or hook-level switches. It prints a `**Note**` line when the hook would not act on a match: rule disabled, `requires` binary missing, a listed mode that
 suspends it (and whether that mode is active now), global hook or project rules disabled. Report those notes next to any
-verdict; never call a matcher result "blocked" on its own, and never read `cannot` as "no match".
+verdict; never call a matcher result "blocked" on its own, and never read a `Not evaluated` row as "no match".
 
 `rule test` prints the same verdicts as the markdown card described in `presentation.md`, with a `wrapped` tag
 the engine computes: the command reached the rule only through a look-through (a wrapper, a shell string, a
 substitution, a pipeline member), as opposed to being the command the rule names. A `regex` match reads the raw text, so
-it is never tagged `wrapped`, and a regex hit wins over a look-through hit on the same command. A `cannot` row is listed
+it is never tagged `wrapped`, and a regex hit wins over a look-through hit on the same command. A row that could not be judged is listed
 under **Not evaluated**. Paste the card; do not retell it.
 
 ## `program`, `args`, `builtin`

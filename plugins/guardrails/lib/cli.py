@@ -118,6 +118,11 @@ def managed_state(args: Args) -> store.State:
     return store.load_managed(extra_path(args))[0]
 
 
+def states(args: Args) -> tuple[store.State, store.State, store.State]:
+    """The managed, global and project state; an unreadable global or project file raises."""
+    return managed_state(args), store.load(store.global_state_path()), store.load(store.project_state_path())
+
+
 def managed_rule_ids(args: Args) -> set[str]:
     return set(policy.origins("rules", managed_state(args), {}, {}))
 
@@ -592,8 +597,7 @@ def cmd_rule_test(args: Args) -> int:
     examples: list[Example] = [(c, args.source, None) for c in args.commands]
     if args.examples is not None:
         examples += parse_examples(args.examples)
-    mstate, gstate, pstate = (managed_state(args), store.load(store.global_state_path()),
-                              store.load(store.project_state_path()))
+    mstate, gstate, pstate = states(args)
     file = ""
     if args.json is not None:
         draft, carried = split_envelope(load_json(args.json, "--json"))
@@ -641,8 +645,7 @@ def cmd_rule_test(args: Args) -> int:
 def cmd_rule_ast(args: Args) -> int:
     if not args.command.strip():
         raise Invalid("the command must not be blank")
-    mstate, gstate, pstate = (managed_state(args), store.load(store.global_state_path()),
-                              store.load(store.project_state_path()))
+    mstate, gstate, pstate = states(args)
     try:
         response = matching.tree(args.command, policy.effective_wrappers(mstate, gstate, pstate), state_dir())
     except astrun.Unavailable as exc:
@@ -756,8 +759,7 @@ def cmd_wrapper_rm(args: Args) -> int:
 
 
 def cmd_wrapper_list(args: Args) -> int:
-    mstate = managed_state(args)
-    gstate, pstate = store.load(store.global_state_path()), store.load(store.project_state_path())
+    mstate, gstate, pstate = states(args)
     origins = policy.origins("wrappers", mstate, gstate, pstate)
     shown = False
     for name in sorted(policy.effective_wrappers(mstate, gstate, pstate)):
@@ -841,8 +843,7 @@ def cmd_mode_on(args: Args) -> int:
     if args.scope != "session":
         return set_persistent(args, True)
     sid = session_id(args)
-    modes = policy.effective_modes(managed_state(args), store.load(store.global_state_path()),
-                                   store.load(store.project_state_path()))
+    modes = policy.effective_modes(*states(args))
     if args.name not in modes:
         raise Invalid(f"mode '{args.name}' is not declared (declared: {', '.join(sorted(modes)) or 'none'})")
     if is_agent():
