@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
 import installer
+import telemetry
 from helpers import DEV_DATA, HOOKS, LIB, ROOT, Isolated, RealRuntime
 
 SCRIPT = (HOOKS / "guardrails.sh").read_text()
@@ -303,6 +304,14 @@ class RealWrapperReady(RealRuntime):
         for path in (loose, grouped):
             self.assertEqual(sorted(p.name for p in path.iterdir()), ["runtime", "state.json"])
         self.assertTrue(self.enforced(payload, {**os.environ, "CLAUDE_PLUGIN_DATA": str(self.data)}, self.tmp))
+
+    def test_the_hook_process_has_written_its_telemetry_when_it_exits(self) -> None:
+        payload = self.deny_rule()
+        for _ in range(3):
+            self.assertTrue(self.enforced(payload, dict(os.environ), self.proj))
+        rows = {row.rule: row for row in telemetry.read(self.data / telemetry.DB, 0)}
+        self.assertGreaterEqual(rows["no-pkill"].deny, 1)
+        self.assertGreaterEqual(rows["@hook"].passed, 1)
 
     def test_a_hostile_python_environment_injects_nothing(self) -> None:
         evil = self.tmp / "evil"

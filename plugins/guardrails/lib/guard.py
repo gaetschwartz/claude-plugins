@@ -48,4 +48,8 @@ def main(argv: list[str] | None = None) -> int:
 if __name__ == "__main__":
     if bootstrap.data_problem(bootstrap.data_dir()) is not None:
         sys.exit(UNSAFE_DATA_DIR)
-    sys.exit(main())
+    code = main()
+    if len(sys.argv) == 1:  # the hook has nothing left to release; skip interpreter teardown
+        sys.stdout.flush()
+        os._exit(code)
+    sys.exit(code)
