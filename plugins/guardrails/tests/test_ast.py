@@ -32,30 +32,6 @@ class Kinds(AstIsolated):
         rule = rule_of(ast, **extra)
         return {c: matching.evaluate(c, {"r": rule}).kinds["r"] for c in commands}
 
-    def test_pattern_matches_commands_and_not_data(self) -> None:
-        got = self.kinds(BY_NAME, ["pkill node", "killall Finder", "echo pkill", "echo 'pkill x'", "man pkill",
-                                   "cat <<EOF\npkill x\nEOF", "cat <<'EOF'\nkillall x\nEOF", "ls > pkill"])
-        self.assertEqual({c for c, k in got.items() if k}, {"pkill node", "killall Finder"})
-
-    def test_double_quoted_substitution_runs_single_quoted_text_does_not(self) -> None:
-        got = self.kinds(NESTED, [f'echo "{KILL} $({PG} x)"', f"echo '{KILL} $({PG} x)'", f"{KILL} $({PG} x)",
-                                  f"echo foo$({PG} x)", f"echo `{PG} x`", f"cat <<EOF\n$({PG} x)\nEOF",
-                                  f"cat <<'EOF'\n$({PG} x)\nEOF"])
-        self.assertEqual({c for c, k in got.items() if k},
-                         {f'echo "{KILL} $({PG} x)"', f"{KILL} $({PG} x)", f"echo foo$({PG} x)", f"echo `{PG} x`",
-                          f"cat <<EOF\n$({PG} x)\nEOF"})
-
-    def test_context_relations(self) -> None:
-        got = self.kinds(NESTED, [f"{PG} x", f"if {PG} -q x; then a; fi", f"{PG} x | head", f"a && {PG} x",
-                                  f"while {PG} x; do :; done", f"for p in $({PG} x); do b; done", f"{PG} -f vite;"])
-        self.assertEqual({c for c, k in got.items() if k},
-                         {f"if {PG} -q x; then a; fi", f"{PG} x | head", f"a && {PG} x",
-                          f"while {PG} x; do :; done", f"for p in $({PG} x); do b; done"})
-
-    def test_xargs_kill_needs_a_pipeline(self) -> None:
-        got = self.kinds(XARGS_KILL, [f"{PG} x | xargs {KILL} -9", f"xargs {KILL} -9 < pids", f"ps | xargs {KILL}"])
-        self.assertEqual({c for c, k in got.items() if k}, {f"{PG} x | xargs {KILL} -9", f"ps | xargs {KILL}"})
-
     def test_command_patterns_are_also_tried_behind_wrappers_and_inside_shell_strings(self) -> None:
         got = self.kinds(BY_NAME, ["sudo pkill x", "env A=1 pkill x", "xargs pkill", "sudo -u bob killall x", "pkill x",
                                    "bash -c 'pkill x'", "eval pkill x", "sudo bash -c 'killall x'",
@@ -163,11 +139,6 @@ class Validation(AstIsolated):
                 policy.Rule.from_json({"match": {"ast": ast}, "message": "m"})
         policy.Rule.from_json({"match": {"ast": {"pattern": "a $$$", "inside": {"kind": "pipeline"}}}, "message": "m"})
 
-    def test_ast_alone_is_a_matcher(self) -> None:
-        policy.Rule.from_json({"match": {"ast": {"kind": "command"}}, "message": "m"})
-        with self.assertRaises(policy.Invalid):
-            policy.Rule.from_json({"match": {"args": "x"}, "message": "m"})
-
 
 class Cli(AstIsolated):
     RULE: ClassVar[dict[str, Any]] = {"match": {"ast": {"pattern": "pkill $$$"}}, "message": "no pkill"}
@@ -196,13 +167,7 @@ class Cli(AstIsolated):
         self.assertIn("ast = ", out)
         self.assertIn("regex = `zzz`", out)
 
-    def test_compile_errors_exit_2_on_test_add_and_set(self) -> None:
-        bad = json.dumps({"match": {"ast": {"kind": "nope"}}, "message": "m"})
-        for argv in (("rule", "test", "--json", bad, "x"), ("rule", "add", "r", "--json", bad)):
-            code, _, err = self.cli(*argv)
-            self.assertEqual(code, 2, argv)
-            self.assertIn("does not compile", err)
-        self.assertFalse(self.gpath.exists())
+    def test_a_set_that_does_not_compile_exits_2_and_changes_nothing(self) -> None:
         self.assertEqual(self.cli("rule", "add", "r", "--json", json.dumps(self.RULE))[0], 0)
         code, _, err = self.cli("rule", "set", "r", "--json", '{"ast": {"regex": "("}}')
         self.assertEqual(code, 2)

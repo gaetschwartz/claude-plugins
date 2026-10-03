@@ -43,6 +43,10 @@ class Presets(AstIsolated):
         out = self.cli("preset", "install", "docs-first")[1]
         self.assertIn("rule no-strings: unchanged", out)
         self.assertIn("mode reverse-engineering: kept existing declaration", out)
+        self.cli("mode", "declare", "reverse-engineering")
+        self.cli("preset", "install", "docs-first")
+        mode = self.get(self.gpath)["modes"]["reverse-engineering"]
+        self.assertEqual((mode["agentMayEnable"], bool(mode["description"])), (False, True))
 
     def test_install_subset_brings_only_referenced_modes(self) -> None:
         self.assertEqual(self.cli("preset", "install", "process-safety", "--only", "kill-9")[0], 0)
@@ -54,14 +58,6 @@ class Presets(AstIsolated):
         self.assertEqual(self.cli("preset", "install", "nope")[0], 2)
         self.assertEqual(self.cli("preset", "install", "docs-first", "--only", "nope")[0], 2)
         self.assertEqual(self.cli("preset", "show", "../etc/passwd")[0], 2)
-
-    def test_install_keeps_existing_mode_choice(self) -> None:
-        self.cli("preset", "install", "docs-first")
-        self.cli("mode", "declare", "reverse-engineering")
-        self.cli("preset", "install", "docs-first")
-        mode = self.get(self.gpath)["modes"]["reverse-engineering"]
-        self.assertFalse(mode["agentMayEnable"])
-        self.assertTrue(mode["description"])
 
     def test_docs_first_end_to_end(self) -> None:
         self.cli("preset", "install", "docs-first")

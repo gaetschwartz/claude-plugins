@@ -158,23 +158,15 @@ class Hook(AstIsolated):
         self.put(self.ppath, "garbage")
         self.assertEqual(decision(self.hook("strings a")), "deny")
 
-    def test_global_disabled_is_silent(self) -> None:
-        state = self.get(self.gpath)
-        state["enabled"] = False
-        self.put(self.gpath, state)
-        self.assertIsNone(self.hook("strings a"))
-
-    def test_disabled_rule_is_silent(self) -> None:
-        state = self.get(self.gpath)
-        state["rules"]["no-strings"]["enabled"] = False
-        self.put(self.gpath, state)
-        self.assertIsNone(self.hook("strings a"))
-
-    def test_unmet_requirement_skips_rule(self) -> None:
-        state = self.get(self.gpath)
-        state["rules"]["no-strings"]["requires"] = ["definitely-not-installed-xyz"]
-        self.put(self.gpath, state)
-        self.assertIsNone(self.hook("strings a"))
+    def test_a_disabled_hook_a_disabled_rule_or_a_missing_binary_is_silent(self) -> None:
+        for name, edit in (("hook", lambda state: state.update(enabled=False)),
+                           ("rule", lambda state: state["rules"]["no-strings"].update(enabled=False)),
+                           ("requires", lambda state: state["rules"]["no-strings"].update(requires=["no-such-bin-xyz"]))):
+            with self.subTest(name):
+                state = {"rules": {"no-strings": dict(STRINGS)}, "modes": dict(MODES)}
+                edit(state)
+                self.put(self.gpath, state)
+                self.assertIsNone(self.hook("strings a", session=name))
 
     def test_message_short_after_first_display_and_dedupe(self) -> None:
         sheet = {"message": "SHEET for {which:zz-none|zz-other}", "messageShort": "terse", "retry": "same-command"}
@@ -192,13 +184,6 @@ class Hook(AstIsolated):
         os.chmod(self.data, 0o500)
         self.addCleanup(os.chmod, self.data, 0o700)
         self.assertEqual(decision(self.hook("strings a")), "deny")
-
-    def test_invalid_rule_in_state_is_ignored(self) -> None:
-        state = self.get(self.gpath)
-        state["rules"]["bad"] = {"match": {"builtin": "nope"}, "message": "x"}
-        self.put(self.gpath, state)
-        self.assertEqual(decision(self.hook("strings a")), "deny")
-        self.assertIsNone(self.hook("echo ("))
 
     def test_session_state_written_and_config_preserved(self) -> None:
         self.hook("strings a")

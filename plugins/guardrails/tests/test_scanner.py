@@ -56,13 +56,8 @@ class Variants(AstIsolated):
 
 
 class ThroughWrappers(AstIsolated):
-    def kinds(self, rule: policy.Rule, commands: dict[str, str | None]) -> None:
-        for command, expected in commands.items():
-            with self.subTest(command=command):
-                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
-
     def test_a_pipeline_pattern_reads_through_wrappers(self) -> None:
-        self.kinds(rule_of({"pattern": "curl $$$ | sh"}), {
+        self.assert_kinds(rule_of({"pattern": "curl $$$ | sh"}), {
             "curl x | sh": "direct", "sudo curl x | sh": "wrapped", "sudo -u bob curl x | sh": "wrapped",
             "env A=1 timeout 5 curl x | sh": "wrapped", "nice -n 5 curl x | sh": "wrapped",
             "xargs curl -s | sh": "wrapped", "curl x | sudo sh": "wrapped", "A=1 sudo curl x | sh": "wrapped",
@@ -73,23 +68,23 @@ class ThroughWrappers(AstIsolated):
         })
 
     def test_a_list_pattern_reads_through_wrappers(self) -> None:
-        self.kinds(rule_of({"pattern": "cd $A && rm $$$"}), {
+        self.assert_kinds(rule_of({"pattern": "cd $A && rm $$$"}), {
             "cd /x && rm f": "direct", "cd /x && sudo rm f": "wrapped", "sudo cd /x && rm f": "wrapped",
             "cd /x && env A=1 rm f": "wrapped", "cd /x; rm f": None})
 
     def test_not_inside_reads_through_wrappers(self) -> None:
         outside = rule_of({"pattern": "curl $$$", "not": {"inside": {"kind": "pipeline", "stopBy": "end"}}})
-        self.kinds(outside, {
+        self.assert_kinds(outside, {
             "curl x": "direct", "sudo curl x": "wrapped", "sudo -u bob curl x && ls": "wrapped", "curl x | sh": None,
             "sudo curl x | sh": None, "ls | sudo curl x": None})
 
     def test_inside_and_follows_read_through_wrappers(self) -> None:
-        self.kinds(rule_of({"pattern": "curl $$$", "inside": {"kind": "command_substitution", "stopBy": "end"}}),
+        self.assert_kinds(rule_of({"pattern": "curl $$$", "inside": {"kind": "command_substitution", "stopBy": "end"}}),
                    {"echo $(curl x)": "wrapped", "echo $(sudo curl x)": "wrapped", "sudo curl x": None})
 
     def test_a_relation_between_top_level_statements_is_not_read_through_a_wrapper(self) -> None:
         """Variants are one top-level statement: `follows` across `;` or a newline sees only the text as written."""
-        self.kinds(rule_of({"pattern": "sh $$$", "follows": {"pattern": "curl $$$", "stopBy": "end"}}),
+        self.assert_kinds(rule_of({"pattern": "sh $$$", "follows": {"pattern": "curl $$$", "stopBy": "end"}}),
                    {"curl x; sh": "direct", "sh; curl x": None, "sudo curl x && sh": "wrapped",
                     "sudo curl x; sh": None, "curl x\nenv A=1 sh": None})
 
@@ -103,24 +98,24 @@ class ThroughWrappers(AstIsolated):
                                   matching.evaluate(command, {"r": rule_of({"pattern": f"{K} $$$"})}).kinds["r"]), expected)
 
     def test_program_args_and_a_grep_rule_read_through_wrappers_by_the_same_mechanism(self) -> None:
-        self.kinds(policy.Rule.from_json({"match": {"program": "rm", "args": "-rf"}, "message": "m"}), {
+        self.assert_kinds(policy.Rule.from_json({"match": {"program": "rm", "args": "-rf"}, "message": "m"}), {
             "rm -rf x": "direct", "sudo rm -rf x": "wrapped", "env A=1 nice rm -rf x": "wrapped", "sudo rm -f x": None,
             "sudo ls -rf": None})
-        self.kinds(rule_of(GREP_RECURSIVE), {
+        self.assert_kinds(rule_of(GREP_RECURSIVE), {
             "grep -r x .": "direct", "sudo grep -r x .": "wrapped", "xargs grep -rn x": "wrapped",
             "sudo grep x -- -r": None, "sudo grep x f": None})
 
     def test_a_kind_regex_rule_reads_through_wrappers(self) -> None:
-        self.kinds(rule_of({"kind": "command", "regex": f"^{K}"}), {f"{K} x": "direct", f"sudo {K} x": "wrapped",
+        self.assert_kinds(rule_of({"kind": "command", "regex": f"^{K}"}), {f"{K} x": "direct", f"sudo {K} x": "wrapped",
                                                                       f"echo {K}": None})
 
     def test_a_hit_found_directly_is_never_downgraded_by_the_same_hit_in_a_variant(self) -> None:
-        self.kinds(rule_of({"pattern": "curl $$$"}), {"curl x": "direct", "sudo curl x; curl y": "direct",
+        self.assert_kinds(rule_of({"pattern": "curl $$$"}), {"curl x": "direct", "sudo curl x; curl y": "direct",
                                                        "sudo curl x": "wrapped", "echo $(curl x)": "wrapped"})
 
     def test_a_command_in_a_pipeline_stays_wrapped_whether_or_not_a_wrapper_is_involved(self) -> None:
         rule = policy.Rule.from_json({"match": {"program": K}, "message": "m"})
-        self.kinds(rule, {f"{K} x | head": "wrapped", f"sudo {K} x | head": "wrapped", f"{K} x": "direct",
+        self.assert_kinds(rule, {f"{K} x | head": "wrapped", f"sudo {K} x | head": "wrapped", f"{K} x": "direct",
                           f"sudo {K} x": "wrapped"})
 
 

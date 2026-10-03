@@ -24,13 +24,8 @@ def rule_of(**match: Any) -> policy.Rule:
 
 
 class Matching(AstIsolated):
-    def kinds(self, rule: policy.Rule, commands: dict[str, str | None]) -> None:
-        for command, expected in commands.items():
-            with self.subTest(command=command):
-                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
-
     def test_program_forms(self) -> None:
-        self.kinds(rule_of(program=K), {
+        self.assert_kinds(rule_of(program=K), {
             f"{K} x": "direct", f"/usr/bin/{K} x": "direct", f"'{K}' x": "direct", f'"{K}" x': "direct",
             f"FOO=1 BAR=2 {K} x": "direct", f"{K} >/dev/null -9 y": "direct", f"a; {K} x": "direct",
             f"a && {K} x": "direct", f"({K} x)": "direct", f"{{ {K} x; }}": "direct", f"if {K} x; then b; fi": "direct",
@@ -51,25 +46,25 @@ class Matching(AstIsolated):
         for command in forms:
             with self.subTest(command=command):
                 self.assertIsNotNone(matching.evaluate(command.replace("KILL", K), {"r": rule}).kinds["r"])
-        self.kinds(rule, {f"cat <<'EOF'\n$({K} x)\nEOF": None, f"cat <<\"EOF\"\n`{K} x`\nEOF": None})
+        self.assert_kinds(rule, {f"cat <<'EOF'\n$({K} x)\nEOF": None, f"cat <<\"EOF\"\n`{K} x`\nEOF": None})
 
     def test_obfuscated_and_dynamic_names_cannot_be_analysed(self) -> None:
-        self.kinds(rule_of(program=K), {f"$'p\\x6b{K[2:]}' x": None, f"p''{K[1:]} x": None, f"p\\{K[1:]} x": None,
+        self.assert_kinds(rule_of(program=K), {f"$'p\\x6b{K[2:]}' x": None, f"p''{K[1:]} x": None, f"p\\{K[1:]} x": None,
                                         f"P={K}; $P x": None, f"alias k={K}; k x": None, f"bash -c $'{K} x'": None,
                                         f"eval $'{K} x'": None})
 
     def test_unbalanced_quotes_are_not_commands_but_a_complete_command_before_them_is(self) -> None:
-        self.kinds(rule_of(program=K), {f"echo 'x; {K} y": None, f"{K} y; echo 'x": "direct"})
-        self.kinds(rule_of(program="kill", args="-9"), {"kill -9 1 \"x": "direct"})
+        self.assert_kinds(rule_of(program=K), {f"echo 'x; {K} y": None, f"{K} y; echo 'x": "direct"})
+        self.assert_kinds(rule_of(program="kill", args="-9"), {"kill -9 1 \"x": "direct"})
 
     def test_names_with_regex_characters_are_matched_literally(self) -> None:
         for name in ("g++", "a.b", "x-y", "a^b", "x,y", "é"):
             with self.subTest(name=name):
-                self.kinds(rule_of(program=name), {f"{name} x": "direct", f"sudo {name} x": "wrapped", f"/bin/{name}": "direct",
+                self.assert_kinds(rule_of(program=name), {f"{name} x": "direct", f"sudo {name} x": "wrapped", f"/bin/{name}": "direct",
                                                    "g xx": None, "ab x": None, "x x": None, "a_b x": None})
 
     def test_program_list_and_each_name(self) -> None:
-        self.kinds(rule_of(program=ALL_KILLS), {f"{K} x": "direct", "killall node": "direct", "sudo killall x": "wrapped",
+        self.assert_kinds(rule_of(program=ALL_KILLS), {f"{K} x": "direct", "killall node": "direct", "sudo killall x": "wrapped",
                                                 "kill 1": None})
 
     def test_wrapper_branch_reads_the_wrappers_own_words(self) -> None:
@@ -79,20 +74,20 @@ class Matching(AstIsolated):
                     f"ionice -c 3 {K} x", f"xargs -I{{}} {K} {{}}", f"xargs -0 -n1 {K}", f"watch -n 5 {K} x",
                     f"doas {K} x", f"sudo -- {K} x", f"/usr/bin/sudo /bin/{K} x", f"sudo env timeout 5 nice -n 1 {K} x",
                     f"FOO=1 sudo {K} x", f"sudo {K} x > /dev/null 2>&1", f"echo a | xargs {K}", f"sudo 'sudo' {K}"]
-        self.kinds(rule_of(program=K), {c: "wrapped" for c in commands})
+        self.assert_kinds(rule_of(program=K), {c: "wrapped" for c in commands})
 
     def test_wrappers_are_not_looked_through_when_they_are_unknown_or_bare(self) -> None:
-        self.kinds(rule_of(program=K), {f"mywrap -x 3 {K} a": None, f"ssh host {K}": None, "sudo": None, "env A=1": None})
+        self.assert_kinds(rule_of(program=K), {f"mywrap -x 3 {K} a": None, f"ssh host {K}": None, "sudo": None, "env A=1": None})
 
     def test_wrapper_names_are_programs_too(self) -> None:
-        self.kinds(rule_of(program=["sudo", "xargs"]), {"sudo ls": "direct", "xargs ls": "direct", "ls": None})
+        self.assert_kinds(rule_of(program=["sudo", "xargs"]), {"sudo ls": "direct", "xargs ls": "direct", "ls": None})
 
     def test_a_wrapper_word_match_is_the_declared_false_positive(self) -> None:
-        self.kinds(rule_of(program=K), {f"sudo grep {K} file": "wrapped", f"command -v {K}": "wrapped"})
+        self.assert_kinds(rule_of(program=K), {f"sudo grep {K} file": "wrapped", f"command -v {K}": "wrapped"})
 
     def test_args_is_a_regex_over_the_whole_command(self) -> None:
         rule = rule_of(program="kill", args=r"(^|\s)-(9|KILL|SIGKILL)(\s|$)|(^|\s)-s\s+(9|KILL|SIGKILL)(\s|$)")
-        self.kinds(rule, {"kill -9 1": "direct", "kill -KILL 1": "direct", "kill -s 9 1": "direct", "kill -9": "direct",
+        self.assert_kinds(rule, {"kill -9 1": "direct", "kill -KILL 1": "direct", "kill -s 9 1": "direct", "kill -9": "direct",
                           "sudo kill -9 1": "wrapped", "xargs kill -9": "wrapped", "kill 1": None, "kill -99 1": None,
                           "echo kill -9": None, "kill -15 9": None, "pkill -9 x": None})
 
@@ -100,10 +95,10 @@ class Matching(AstIsolated):
         with self.assertRaises(policy.Invalid):
             policy.Rule.from_json({"match": {"args": "x"}, "message": "m"})
         rule = rule_of(program="kill", regex="zzz")
-        self.kinds(rule, {"kill 1": "direct", "echo zzz": "direct", "ls": None})
+        self.assert_kinds(rule, {"kill 1": "direct", "echo zzz": "direct", "ls": None})
 
     def test_the_recursive_grep_rule_of_the_modern_cli_preset(self) -> None:
-        self.kinds(rule_of(ast=GREP_RECURSIVE), {
+        self.assert_kinds(rule_of(ast=GREP_RECURSIVE), {
             "grep -r foo .": "direct", "grep -rn foo .": "direct", "grep -nr foo .": "direct", "grep -R foo .": "direct",
             "egrep -r foo .": "direct", "fgrep -rl foo .": "direct", "grep --recursive foo .": "direct",
             "grep --dereference-recursive foo": "direct", "grep -d recurse foo .": "direct",
@@ -118,30 +113,25 @@ class Matching(AstIsolated):
 
     def test_ast_alternatives_and_regex_combine(self) -> None:
         rule = rule_of(program="kill", ast={"pattern": f"{K} $$$"}, regex="zzz")
-        self.kinds(rule, {"kill 1": "direct", f"{K} x": "direct", "echo zzz": "direct", "ls": None,
+        self.assert_kinds(rule, {"kill 1": "direct", f"{K} x": "direct", "echo zzz": "direct", "ls": None,
                           f"sudo {K} x": "wrapped", "sudo kill 1": "wrapped", f"/usr/bin/{K} x": "direct"})
 
     def test_direct_beats_wrapped_on_the_same_rule(self) -> None:
-        self.kinds(rule_of(program=K), {f"sudo {K} a; {K} b": "direct", f"{K} a | cat; sudo {K} b": "wrapped"})
+        self.assert_kinds(rule_of(program=K), {f"sudo {K} a; {K} b": "direct", f"{K} a | cat; sudo {K} b": "wrapped"})
 
     def test_ast_rules_naming_a_command_get_a_wrapper_branch_and_others_do_not(self) -> None:
-        self.kinds(rule_of(ast={"pattern": f"{K} $$$"}), {f"{K} x": "direct", f"sudo {K} x": "wrapped",
+        self.assert_kinds(rule_of(ast={"pattern": f"{K} $$$"}), {f"{K} x": "direct", f"sudo {K} x": "wrapped",
                                                           f"xargs {K}": "wrapped", f"/usr/bin/{K} x": "direct",
                                                           f"'{K}' x": "direct", f"echo {K}": None})
         named = {"kind": "command", "has": {"field": "name", "regex": f"^{K}$"}}
-        self.kinds(rule_of(ast=named), {f"{K} x": "direct", f"sudo {K} x": "wrapped"})
+        self.assert_kinds(rule_of(ast=named), {f"{K} x": "direct", f"sudo {K} x": "wrapped"})
         by_text = {"kind": "command", "regex": f"^{K}"}
-        self.kinds(rule_of(ast=by_text), {f"{K} x": "direct", f"sudo {K} x": "wrapped"})
+        self.assert_kinds(rule_of(ast=by_text), {f"{K} x": "direct", f"sudo {K} x": "wrapped"})
 
 
 class ShellStrings(AstIsolated):
-    def kinds(self, rule: policy.Rule, commands: dict[str, str | None]) -> None:
-        for command, expected in commands.items():
-            with self.subTest(command=command):
-                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
-
     def test_scripts_of_shells_and_eval_are_scanned(self) -> None:
-        self.kinds(rule_of(program=K), {
+        self.assert_kinds(rule_of(program=K), {
             f"bash -c '{K} x'": "wrapped", f'sh -c "a; {K} x"': "wrapped", f"zsh -c 'echo; {K} y'": "wrapped",
             f"dash -c '{K} x'": "wrapped", f"ksh -c '{K} x'": "wrapped", f"bash -lc '{K} x'": "wrapped",
             f"bash -ic '{K} x'": "wrapped", f"bash -o pipefail -c '{K} x'": "wrapped", f"sudo bash -c '{K} x'": "wrapped",
@@ -154,14 +144,14 @@ class ShellStrings(AstIsolated):
         })
 
     def test_heredocs_and_here_strings_fed_to_a_shell_are_scripts(self) -> None:
-        self.kinds(rule_of(program=K), {
+        self.assert_kinds(rule_of(program=K), {
             f"bash <<EOF\n{K} x\nEOF": "wrapped", f"sh <<'EOF'\necho a\n{K} x\nEOF": "wrapped",
             f"sudo bash <<EOF\n{K} x\nEOF": "wrapped", f"bash <<< '{K} x'": "wrapped", f"sh -s <<< \"{K} x\"": "wrapped",
             f"script -c '{K} x' out": "wrapped",
             f"cat <<EOF\n{K} x\nEOF": None, f"cat <<< '{K} x'": None, "bash <<EOF\necho hi\nEOF": None})
 
     def test_substitutions_in_unquoted_heredoc_bodies_run_and_the_rest_is_data(self) -> None:
-        self.kinds(rule_of(program=K), {
+        self.assert_kinds(rule_of(program=K), {
             f"cat <<EOF\n`{K} x`\nEOF": "wrapped", f"cat <<EOF\nfoo `{K} x` bar\nEOF": "wrapped",
             f"cat <<-EOF\n\t`{K} x`\n\tEOF": "wrapped", f"cat <<EOF\n\t$({K} x)\nEOF": "wrapped",
             f"cat <<EOF\n  $({K} x)\nEOF": "wrapped", f"x=$(cat <<EOF\n`{K} x`\nEOF\n)": "wrapped",
@@ -169,19 +159,19 @@ class ShellStrings(AstIsolated):
             f"cat <<EOF\necho `echo hi` {K}\nEOF": None})
 
     def test_scripts_nest(self) -> None:
-        self.kinds(rule_of(program=K), {nest(f"{K} x", 7): "wrapped",
+        self.assert_kinds(rule_of(program=K), {nest(f"{K} x", 7): "wrapped",
                                         f"eval \"bash -c 'eval {K} x'\"": "wrapped",
                                         "sudo bash -c 'sudo bash -c \"sudo " + f"{K} x" + "\"'": "wrapped"})
 
     def test_a_script_is_judged_by_its_own_text(self) -> None:
         rule = rule_of(ast={"kind": "command", "has": {"field": "name", "regex": f"^{K}$"},
                             "not": {"inside": {"kind": "if_statement", "stopBy": "end"}}})
-        self.kinds(rule, {f"{K} x": "direct", f"if true; then {K} x; fi": None, f"bash -c '{K} x'": "wrapped",
+        self.assert_kinds(rule, {f"{K} x": "direct", f"if true; then {K} x; fi": None, f"bash -c '{K} x'": "wrapped",
                           f"bash -c 'if true; then {K} x; fi'": None, f"bash -c 'if a; then b; fi; {K} x'": "wrapped",
                           f"eval 'if a; then {K} x; fi'": None})
 
     def test_quoting_of_the_script_is_undone_once(self) -> None:
-        self.kinds(rule_of(program=K), {f"bash -c \"{K} \\$HOME\"": "wrapped", f"bash -c '{K} \"x y\"'": "wrapped",
+        self.assert_kinds(rule_of(program=K), {f"bash -c \"{K} \\$HOME\"": "wrapped", f"bash -c '{K} \"x y\"'": "wrapped",
                                         f"bash -c \"bash -c '{K} x'\"": "wrapped", f"bash -c '{K}' '{K}'": "wrapped"})
 
 class WrappedTag(AstIsolated):

@@ -5,6 +5,7 @@ import os
 import re
 import shutil
 import subprocess
+import sys
 import time
 import unittest
 from pathlib import Path
@@ -28,6 +29,14 @@ class Source(Isolated):
         self.assertNotIn("export", SCRIPT)
         for forbidden in ("dirname", "command -v", "bash", "[["):
             self.assertNotIn(forbidden, SCRIPT)
+
+    def test_the_cli_modules_import_and_run_without_the_ast_grep_library(self) -> None:
+        code = ("import sys\nsys.modules['ast_grep_py'] = None\nsys.path.insert(0, sys.argv[1])\n"
+                "import guard, cli, engine, matching, rulebuilder\nraise SystemExit(guard.main(['preset', 'list']))")
+        result = subprocess.run([sys.executable, "-c", code, str(LIB)], capture_output=True, text=True, check=False,
+                                env=dict(os.environ))
+        self.assertEqual((result.returncode, result.stderr), (0, ""))
+        self.assertIn("docs-first", result.stdout)
 
     def test_it_parses_under_every_available_shell(self) -> None:
         for shell in SHELLS:
@@ -100,6 +109,7 @@ class StubbedCases(Base):
                 shutil.rmtree(self.data / "runtime", ignore_errors=True)
                 setup()
                 self.assertEqual(self.run_script(self.host_stub()).stdout, boot)
+        self.assertTrue(self.run_script(self.host_stub(), data=None).stdout.startswith("HOST -I -S "), "no data dir variable")
 
     def test_a_data_dir_that_is_not_safe_never_runs_anything_from_it(self) -> None:
         boot = f"HOST -I -S {self.script.parent}/../lib/bootstrap.py hook\n"
@@ -120,9 +130,6 @@ class StubbedCases(Base):
                 self.assertEqual(out, boot)
                 self.assertNotIn("READY", out)
         self.assertTrue(self.run_script(self.host_stub(), data=str(repo)).stdout.startswith("READY"), "the same dir, canonical")
-
-    def test_without_the_data_dir_variable_the_bootstrap_decides(self) -> None:
-        self.assertTrue(self.run_script(self.host_stub(), data=None).stdout.startswith("HOST -I -S "))
 
     def test_the_first_trusted_python3_on_path_is_used_and_each_mode_passes_its_arguments(self) -> None:
         self.stub(self.tmp / "a" / "python3", "a")
@@ -162,14 +169,9 @@ class StubbedCases(Base):
                     if mode == "hook":
                         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"],
                                          json.loads(proc.stdout)["systemMessage"])
-
-    def test_a_working_python_after_a_broken_one_is_used(self) -> None:
-        broken = self.tmp / "bad" / "python3"
-        broken.parent.mkdir()
-        broken.write_text("#!/bin/sh\nexit 1\n")
-        broken.chmod(0o755)
         self.stub(self.tmp / "ok" / "python3", "ok")
-        self.assertTrue(self.run_script(f"{broken.parent}:{self.tmp}/ok", "session-start").stdout.startswith("ok -I -S "))
+        both = f"{self.tmp}/exits-1/py thon:{self.tmp}/ok"
+        self.assertTrue(self.run_script(both, "session-start").stdout.startswith("ok -I -S "), "a working python after a broken one")
 
     def test_a_hook_python_that_dies_is_never_silent(self) -> None:
         self.ready_runtime(body="exit 7\n")
@@ -253,22 +255,16 @@ class RealWrapperReady(RealRuntime):
         return subprocess.run(["sh", str(HOOKS / "guardrails.sh"), *args], input="{}", capture_output=True, text=True,
                               check=False, env=env or dict(os.environ), cwd=cwd or self.proj)
 
-    def test_session_start_is_quiet_when_the_runtime_is_ready(self) -> None:
+    def test_session_start_is_quiet_and_the_cli_runs_on_the_managed_python_through_the_wrapper(self) -> None:
         proc = self.run_script("session-start")
         self.assertEqual((proc.returncode, proc.stdout), (0, ""))
-
-    def test_the_cli_runs_on_the_managed_python_and_engine_status_reads_the_runtime(self) -> None:
-        proc = subprocess.run(["sh", str(ROOT / "bin" / "guardrails"), "engine", "status"], capture_output=True,
-                              text=True, check=False, env=dict(os.environ), cwd=self.proj)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        for line in ("runtime: ready", "pins: uv ", "ast-grep-py 0.45.3", "platform: ", "installed: Python 3.13."):
-            self.assertIn(line, proc.stdout)
-
-    def test_the_cli_works_through_the_wrapper(self) -> None:
-        proc = subprocess.run(["sh", str(ROOT / "bin" / "guardrails"), "preset", "list"], capture_output=True, text=True,
-                              check=False, env=dict(os.environ), cwd=self.proj)
-        self.assertEqual(proc.returncode, 0, proc.stderr)
-        self.assertIn("process-safety", proc.stdout)
+        for argv, needles in ((("engine", "status"), ("runtime: ready", "pins: uv ", "ast-grep-py 0.45.3", "platform: ",
+                                                        "installed: Python 3.13.")), (("preset", "list"), ("process-safety",))):
+            proc = subprocess.run(["sh", str(ROOT / "bin" / "guardrails"), *argv], capture_output=True, text=True,
+                                  check=False, env=dict(os.environ), cwd=self.proj)
+            self.assertEqual(proc.returncode, 0, proc.stderr)
+            for needle in needles:
+                self.assertIn(needle, proc.stdout)
 
     def deny_rule(self) -> str:
         self.put(self.gpath, {"rules": {"no-pkill": {"match": {"program": "pkill"}, "message": "No pkill.",

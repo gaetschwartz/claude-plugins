@@ -137,6 +137,13 @@ class AstIsolated(Isolated):
                 self.fail(SKIP_AST)
             self.skipTest(SKIP_AST)
 
+    def assert_kinds(self, rule: Any, commands: dict[str, str | None]) -> None:
+        import matching
+
+        for command, expected in commands.items():
+            with self.subTest(command=command):
+                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
+
     def break_engine(self, reason: str = "it misparsed a test command") -> None:
         """Make the library fail on every command and its self-test fail, as a broken install would."""
         import scanner
