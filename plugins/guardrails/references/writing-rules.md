@@ -157,7 +157,7 @@ Known limits, where the rule cannot see the command (say so in the description r
 - a name held in a variable (`cmd=X; $cmd`), a function or an alias that expands to it
 - `ssh host X`, `find . -exec X {} \;`, scripts (`bash script.sh`), `python -c '...'`
 - a wrapper the table does not know (declare it with `guardrails wrapper add`)
-- an obfuscated name (`p''kill`, `$'p\x6bill'`, `p\kill`): it cannot be analysed statically
+- an obfuscated name (`p''kill`, `$'p\x6bill'`, `p\kill`) or a script given as an ANSI-C literal (`bash -c $'X'`): it cannot be analysed statically
 - `watch 'X'`, `su -c 'X'`, `echo X | sh`, `source <(echo X)`: only `bash -c`, `script -c`, `eval` and shell-fed heredocs and here-strings are scanned
 - a wrapper on the related command of a relation (`sudo curl x | sh` seen from `sh`): list it, or anchor the other way
 

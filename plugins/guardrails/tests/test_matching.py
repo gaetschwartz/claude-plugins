@@ -45,7 +45,8 @@ class Matching(AstIsolated):
 
     def test_obfuscated_and_dynamic_names_cannot_be_analysed(self) -> None:
         self.kinds(rule_of(program=K), {f"$'p\\x6b{K[2:]}' x": None, f"p''{K[1:]} x": None, f"p\\{K[1:]} x": None,
-                                        f"P={K}; $P x": None, f"alias k={K}; k x": None})
+                                        f"P={K}; $P x": None, f"alias k={K}; k x": None, f"bash -c $'{K} x'": None,
+                                        f"eval $'{K} x'": None})
 
     def test_names_with_regex_characters_are_matched_literally(self) -> None:
         for name in ("g++", "a.b", "x-y", "a^b", "x,y", "é"):
@@ -144,16 +145,11 @@ class ShellStrings(AstIsolated):
             f"ls -c '{K} x'": None, f"bash -s {K}": None, f"python -c '{K} x'": None,
         })
 
-    def test_ansi_c_script_strings_are_decoded(self) -> None:
-        self.kinds(rule_of(program=K), {f"bash -c $'{K} x'": "wrapped", f"bash -c $'echo hi\\n{K} x'": "wrapped",
-                                        f"sh -c $'\\x{ord(K[0]):x}{K[1:]} x'": "wrapped", f"eval $'{K} x'": "wrapped",
-                                        "bash -c $'echo hi'": None})
-
     def test_heredocs_and_here_strings_fed_to_a_shell_are_scripts(self) -> None:
         self.kinds(rule_of(program=K), {
             f"bash <<EOF\n{K} x\nEOF": "wrapped", f"sh <<'EOF'\necho a\n{K} x\nEOF": "wrapped",
             f"sudo bash <<EOF\n{K} x\nEOF": "wrapped", f"bash <<< '{K} x'": "wrapped", f"sh -s <<< \"{K} x\"": "wrapped",
-            f"bash -s <<<$'{K} x'": "wrapped", f"script -c '{K} x' out": "wrapped",
+            f"script -c '{K} x' out": "wrapped",
             f"cat <<EOF\n{K} x\nEOF": None, f"cat <<< '{K} x'": None, "bash <<EOF\necho hi\nEOF": None})
 
     def test_substitutions_in_unquoted_heredoc_bodies_run_and_the_rest_is_data(self) -> None:

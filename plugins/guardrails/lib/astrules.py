@@ -19,7 +19,7 @@ HEREDOC_BODY, SHELL_HEREDOC, SHELL_HERESTRING, SUBSTITUTION = ("heredoc-body", "
                                                                 "substitution")
 CONTEXT = {"any": [{"kind": "pipeline"}, {"kind": "command_substitution"}, {"kind": "process_substitution"}],
            "stopBy": "end"}
-ARGUMENT_KINDS = ("raw_string", "string", "ansi_c_string", "word", "number", "concatenation", "simple_expansion",
+ARGUMENT_KINDS = ("raw_string", "string", "word", "number", "concatenation", "simple_expansion",
                   "expansion", "command_substitution", "arithmetic_expansion", "process_substitution")
 COMMAND_STRING_FLAG = r"^-[A-Za-z]*c[A-Za-z]*$"
 RECURSIVE_FLAG = r"^(?:-[A-Za-z&&[^efmABCdD]]*[rR][A-Za-z]*|-drecurse|--recursive|--dereference-recursive|--directories=recurse)$"

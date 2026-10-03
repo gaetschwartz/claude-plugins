@@ -20,9 +20,7 @@ MAX_SCRIPT_BYTES = 256 << 10
 MAX_RULES_BYTES = 256 * 1024
 LEAF_KINDS = ("word", "command_name", "raw_string", "number")
 ESCAPED_IN_DOUBLE_QUOTES = re.compile(r'\\([\\"$`])')
-WORD_PIECE = re.compile(r"""\$'((?:\\.|[^'\\])*)'|'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)|([^'"\\]+)""", re.DOTALL)
-ANSI_ESCAPE = re.compile(r"\\(x[0-9A-Fa-f]{1,2}|[0-7]{1,3}|u[0-9A-Fa-f]{1,4}|U[0-9A-Fa-f]{1,8}|c.|.)", re.DOTALL)
-SINGLE_ESCAPES = {"n": "\n", "t": "\t", "e": "\x1b", "E": "\x1b", "a": "\a", "b": "\b", "f": "\f", "r": "\r", "v": "\v"}
+WORD_PIECE = re.compile(r"""'([^']*)'|"((?:\\.|[^"\\])*)"|\\(.)|([^'"\\]+)""", re.DOTALL)
 
 Rule = dict[str, Any]
 
@@ -38,29 +36,11 @@ class Unit(NamedTuple):
     restricted: bool
 
 
-def ansi_c(body: str) -> str:
-    """The text inside `$'...'`: backslash escapes decoded the way the shell does."""
-
-    def decoded(found: re.Match[str]) -> str:
-        code = found.group(1)
-        if len(code) > 1 and code[0] in "xuU":
-            return chr(min(int(code[1:], 16), 0x10FFFF))
-        if code[0] in "01234567":
-            return chr(int(code, 8) & 0xFF)
-        if len(code) > 1 and code[0] == "c":
-            return chr(ord(code[1]) & 0x1F)
-        return SINGLE_ESCAPES.get(code[0], code[0])
-
-    return ANSI_ESCAPE.sub(decoded, body)
-
-
 def unquote(word: str) -> str:
-    """The text one shell word stands for: its ANSI-C, single-quoted, double-quoted, backslashed and bare pieces joined."""
+    """The text one shell word stands for: its single-quoted, double-quoted, backslashed and bare pieces joined."""
 
     def piece(found: re.Match[str]) -> str:
-        ansi, single, double, escaped, bare = found.groups()
-        if ansi is not None:
-            return ansi_c(ansi)
+        single, double, escaped, bare = found.groups()
         if double is not None:
             return ESCAPED_IN_DOUBLE_QUOTES.sub(r"\1", double)
         return next(text for text in (single, escaped, bare) if text is not None)

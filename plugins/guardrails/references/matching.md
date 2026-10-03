@@ -42,7 +42,7 @@ and `command -v pkill` also match `pkill` (known false positives, see below).
 
 Shell strings, the script branch: the script of `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'` (also behind a
 wrapper, and in a cluster such as `-lc`), the arguments of `eval`, and a heredoc or here-string fed to a shell
-(`bash <<EOF`, `sh -s <<< 'cmd'`) are unquoted (one shell word; `$'...'` escapes decoded) and scanned as a unit of
+(`bash <<EOF`, `sh -s <<< 'cmd'`) are unquoted (one shell word) and scanned as a unit of
 their own, recursively; every hit in a unit counts as wrapped. The body of an unquoted heredoc that contains `$(` or a
 backtick is scanned too, but only what lies inside those substitutions counts (the rest is data). Units are de-duplicated and bounded: depth 8, 64 distinct units, 256 KiB of
 script text. A command that goes past a bound is denied unparsed with "command too complex to check".
@@ -51,7 +51,8 @@ Not commands, so never matched by `program`: heredoc bodies, redirect targets (`
 commands (`echo pkill`, `man pkill`), quoted data.
 
 Cannot be analysed statically, so not matched: obfuscated or dynamic command names. `$'p\x6bill'`, `p''kill`, `p\kill`,
-a name held in a variable (`P=pkill; $P x`), an alias or a function. Also not looked through: `ssh host pkill x`,
+a name held in a variable (`P=pkill; $P x`), an alias or a function; a script written as an ANSI-C literal
+(`bash -c $'pkill x'`, `eval $'pkill x'`) is not unpacked either. Also not looked through: `ssh host pkill x`,
 `find . -exec pkill {} ;`, the contents of a script file (`bash script.sh`), `python -c '...'`, `echo pkill | sh` and
 `cat <<EOF | sh`, `source <(echo pkill)`, `su -c`, `env -S '...'`, and `watch 'pkill x'` (only `bash -c`, `eval`,
 `script -c` and shell-fed heredocs and here-strings are scanned). `find` and similar can be declared a wrapper with
@@ -132,7 +133,7 @@ Verified with `guardrails rule ast '<command>'`:
 | `word`, `number` | an unquoted argument or flag (`-0` is a `number`) |
 | `string` (child `string_content`) | a double-quoted argument; `$(...)` inside it runs |
 | `raw_string` | a single-quoted argument: data, except as the `-c` string of a shell |
-| `ansi_c_string`, `concatenation` | `$'...'`; adjacent pieces such as `a"b"$c` |
+| `ansi_c_string`, `concatenation` | `$'...'` (data, never unpacked as a script); adjacent pieces such as `a"b"$c` |
 | `command_substitution` | `$(...)` and backticks; the body is code |
 | `process_substitution` | `<(...)` and `>(...)` |
 | `simple_expansion`, `expansion`, `arithmetic_expansion` | `$x`, `${x}`, `$((1+2))` |

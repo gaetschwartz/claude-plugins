@@ -166,7 +166,7 @@ evaluated, so the hook allows the command and says so loudly, and `regex` rules 
 match"), and `status --problems` lists the rules that are not enforced and why.
 
 Known gaps, for any engine: `find -exec`/`-execdir`, variable-held or obfuscated names (`P=pkill; $P x`, `$'p\x6bill'`),
-`echo cmd | sh`, `cat <<EOF | sh`, `source <(echo cmd)`, `su -c`, `ssh host cmd`, `watch 'cmd'`, scripts run from a file.
+`bash -c $'cmd'` and `eval $'cmd'` (ANSI-C script literals), `echo cmd | sh`, `cat <<EOF | sh`, `source <(echo cmd)`, `su -c`, `ssh host cmd`, `watch 'cmd'`, scripts run from a file.
 
 ### Worked example: one bundled policy, three rules
 
