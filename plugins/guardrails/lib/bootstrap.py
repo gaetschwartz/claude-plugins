@@ -292,7 +292,7 @@ def install(rt: Path, pins: Pins, plat: str, deadline: Deadline, progress: Calla
     extract_uv(wheel, rt / "uv.whl", uv)
     (rt / "uv.whl").unlink()
     python = rt / "venv" / "bin" / "python"
-    progress(f"installing Python {pins.python} (standalone build from GitHub releases)")
+    progress(f"installing Python {pins.python} (a standalone build, hash-checked by uv)")
     run_tool([str(uv), "python", "install", "--no-config", pins.python], rt, env, deadline, "uv python install")
     run_tool([str(uv), "venv", "--no-config", "--python", pins.python, "--quiet", str(rt / "venv")], rt, env, deadline,
              "uv venv")
@@ -372,7 +372,7 @@ def inspect(data: Path) -> Inspection:
     except Unsupported as exc:
         plat = str(exc)
     rt = runtime_dir(data, pins)
-    problem = marker_problem(rt, pins, optional_path("CLAUDE_PROJECT_DIR"), Path.cwd())
+    problem = marker_problem(rt, pins, optional_path("CLAUDE_PROJECT_DIR"), working_dir())
     try:
         marker = json.loads((rt / "marker.json").read_text())
     except (OSError, ValueError):
@@ -423,7 +423,7 @@ def status_now(data: Path) -> Outcome:
         platform_key()
     except Unsupported as exc:
         return Outcome("unsupported", str(exc))
-    if marker_problem(runtime_dir(data, pins), pins, optional_path("CLAUDE_PROJECT_DIR"), Path.cwd()) is None:
+    if marker_problem(runtime_dir(data, pins), pins, optional_path("CLAUDE_PROJECT_DIR"), working_dir()) is None:
         return Outcome("ready")
     if time.time() < retry_at(data):
         return Outcome("backoff", (read_failure(data) or Failure(0, "")).reason, retry_at(data))
@@ -469,7 +469,7 @@ def hook(stdin_text: str, data: Path) -> str:
 def cli_ensure(args: list[str]) -> int:
     quiet = "--quiet" in args
     outcome = ensure(data_dir(), wait=0 if "--no-wait" in args else 120.0, retry_now="--retry-now" in args, project=optional_path("CLAUDE_PROJECT_DIR"),
-                     cwd=Path.cwd(), progress=(lambda text: None) if quiet else lambda text: print(f"guardrails: {text}",
+                     cwd=working_dir(), progress=(lambda text: None) if quiet else lambda text: print(f"guardrails: {text}",
                                                                                                      file=sys.stderr))
     if outcome.state in ("ready", "installed"):
         if outcome.state == "installed" and not quiet:
@@ -481,6 +481,12 @@ def cli_ensure(args: list[str]) -> int:
     return 2
 
 
+def working_dir() -> Path | None:
+    """The cwd, unless it is `/` or the home directory, which contain everything and so say nothing."""
+    cwd = Path.cwd()
+    return None if cwd in (Path("/"), Path.home()) else cwd
+
+
 def optional_path(name: str) -> Path | None:
     value = os.environ.get(name)
     return Path(value) if value else None
@@ -488,7 +494,7 @@ def optional_path(name: str) -> Path | None:
 
 def session_start() -> str:
     """SessionStart: install synchronously when needed; only trouble produces output."""
-    outcome = ensure(data_dir(), project=optional_path("CLAUDE_PROJECT_DIR"), cwd=Path.cwd())
+    outcome = ensure(data_dir(), project=optional_path("CLAUDE_PROJECT_DIR"), cwd=working_dir())
     if outcome.state in ("ready", "installed"):
         return json.dumps({"systemMessage": "guardrails: the rules runtime was installed"}) if outcome.state == "installed" else ""
     return json.dumps({"systemMessage": notice(outcome)})

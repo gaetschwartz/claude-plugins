@@ -337,6 +337,13 @@ class Install(Pinned):
         self.assertEqual(self.ensure(wait=0).state, "installed")
 
 
+class WorkingDir(unittest.TestCase):
+    def test_a_cwd_that_contains_everything_says_nothing(self) -> None:
+        for cwd, expected in ((Path("/"), None), (Path.home(), None), (Path("/some/project"), Path("/some/project"))):
+            with self.subTest(cwd=cwd), mock.patch.object(Path, "cwd", return_value=cwd):
+                self.assertEqual(bootstrap.working_dir(), expected)
+
+
 class Hook(Pinned):
     def hook(self, session: str = "s1") -> dict[str, Any]:
         out = bootstrap.hook(json.dumps({"session_id": session}), self.data)
