@@ -50,13 +50,13 @@ class RuleCommands(AstIsolated):
         self.assertEqual(self.cli("rule", "rm", "ghost")[0], 2)
 
     def test_project_add_goes_to_project_file(self) -> None:
-        self.assertEqual(self.cli("rule", "add", "no-strings", "--json", RULE, "--project")[0], 0)
+        self.assertEqual(self.cli("rule", "add", "no-strings", "--json", RULE, "--scope", "project")[0], 0)
         self.assertIn("no-strings", self.get(self.ppath)["rules"])
         self.assertFalse(self.gpath.exists())
 
     def test_project_override_of_global_rule(self) -> None:
         self.cli("rule", "add", "no-strings", "--json", RULE)
-        code, out, _ = self.cli("rule", "set", "no-strings", "action=deny", "enabled=false", "args=-a", "--project")
+        code, out, _ = self.cli("rule", "set", "no-strings", "action=deny", "enabled=false", "args=-a", "--scope", "project")
         self.assertEqual(code, 0)
         entry = self.get(self.ppath)["rules"]["no-strings"]
         self.assertEqual(entry["action"], "deny")
@@ -69,7 +69,7 @@ class RuleCommands(AstIsolated):
         del os.environ["CLAUDE_PROJECT_DIR"]
         self.addCleanup(os.chdir, os.getcwd())
         os.chdir(self.tmp)
-        self.assertEqual(self.cli("rule", "add", "no-strings", "--json", RULE, "--project")[0], 2)
+        self.assertEqual(self.cli("rule", "add", "no-strings", "--json", RULE, "--scope", "project")[0], 2)
 
     def test_corrupt_state_is_not_overwritten(self) -> None:
         self.put(self.gpath, "{nope")
@@ -102,7 +102,7 @@ class Gate(AstIsolated):
         self.assertNotIn("disabledReason", state)
 
     def test_project_disable_only_touches_project(self) -> None:
-        self.assertEqual(self.cli("disable", "--project")[0], 0)
+        self.assertEqual(self.cli("disable", "--scope", "project")[0], 0)
         self.assertFalse(self.get(self.ppath)["enabled"])
         self.assertFalse(self.gpath.exists())
 
@@ -155,7 +155,7 @@ class ModeCommands(AstIsolated):
 
     def test_project_can_forbid_agent_enable(self) -> None:
         self.declare("--agent-may-enable")
-        self.assertEqual(self.cli("mode", "declare", "reverse-engineering", "--project")[0], 0)
+        self.assertEqual(self.cli("mode", "declare", "reverse-engineering", "--scope", "project")[0], 0)
         self.assertEqual(self.cli("mode", "on", "reverse-engineering", "--reason", "x", agent=True)[0], 3)
 
     def test_undeclared_mode(self) -> None:
@@ -176,7 +176,7 @@ class ModeCommands(AstIsolated):
         self.assertTrue(self.get(self.gpath)["modes"]["reverse-engineering"]["active"])
         self.assertEqual(self.cli("mode", "off", "reverse-engineering", "--scope", "global")[0], 0)
         self.assertFalse(self.get(self.gpath)["modes"]["reverse-engineering"]["active"])
-        self.assertEqual(self.cli("mode", "declare", "reverse-engineering", "--project")[0], 0)
+        self.assertEqual(self.cli("mode", "declare", "reverse-engineering", "--scope", "project")[0], 0)
         self.assertEqual(self.cli("mode", "on", "reverse-engineering", "--scope", "project")[0], 0)
         self.assertTrue(self.get(self.ppath)["modes"]["reverse-engineering"]["active"])
 
@@ -272,7 +272,7 @@ class RuleTest(AstIsolated):
         self.cli("rule", "add", "no-strings", "--json",
                  '{"match": {"program": "strings"}, "message": "docs", "action": "warn", '
                  '"retry": "same-command", "modes": ["reverse-engineering"]}')
-        self.cli("rule", "set", "no-strings", "action=deny", "--project")
+        self.cli("rule", "set", "no-strings", "action=deny", "--scope", "project")
         code, out, _ = self.cli("rule", "test", "--id", "no-strings", "strings a")
         self.assertEqual(code, 0)
         self.assertIn("rule no-strings [global+project]: deny retry modes=reverse-engineering", out)
@@ -349,7 +349,7 @@ class ManagedScope(AstIsolated):
                     code, _, err = self.cli(*argv, "--scope", scope)
                     self.assertEqual(code, 3)
                     self.assertIn("--scope managed", err)
-        self.assertEqual(self.cli("rule", "set", "no-strings", "action=warn", "--project")[0], 3)
+        self.assertEqual(self.cli("rule", "set", "no-strings", "action=warn", "--scope", "project")[0], 3)
         self.assertEqual(self.mpath.read_text(), before)
         self.assertFalse(self.gpath.exists())
         self.assertFalse(self.ppath.exists())
@@ -359,12 +359,6 @@ class ManagedScope(AstIsolated):
         code, out, _ = self.cli("rule", "add", "no-strings", "--json", RULE, "--scope", "project")
         self.assertEqual(code, 0)
         self.assertIn("also a managed rule", out)
-
-    def test_project_flag_conflicts_with_managed_scope(self) -> None:
-        code, _, err = self.cli("rule", "add", "x", "--json", RULE, "--project", "--scope", "managed")
-        self.assertEqual(code, 2)
-        self.assertIn("conflicts", err)
-        self.assertEqual(self.cli("rule", "add", "x", "--json", RULE, "--project", "--scope", "project")[0], 0)
 
     def test_scope_flag_selects_global_and_project(self) -> None:
         self.assertEqual(self.cli("rule", "add", "g", "--json", RULE, "--scope", "global")[0], 0)
@@ -463,7 +457,7 @@ class ManagedScope(AstIsolated):
         self.managed("rule", "add", "bare", "--json", MANAGED_RULE)
         self.managed("mode", "declare", "reverse-engineering")
         self.cli("rule", "add", "no-strings", "--json", RULE)
-        self.cli("rule", "add", "mine", "--json", MANAGED_RULE, "--project")
+        self.cli("rule", "add", "mine", "--json", MANAGED_RULE, "--scope", "project")
         code, out, _ = self.cli("status")
         self.assertEqual(code, 0)
         for expected in (f"managed state: {self.dpath} (absent)", f"managed override: {self.mpath}",
@@ -679,7 +673,7 @@ class PathOption(AstIsolated):
         p = str(self.fpath)
         for argv in (("rule", "add", "x", "--json", RULE, "--path", p),
                      ("rule", "add", "x", "--json", RULE, "--path", p, "--scope", "global"),
-                     ("rule", "add", "x", "--json", RULE, "--path", p, "--project"),
+                     ("rule", "add", "x", "--json", RULE, "--path", p, "--scope", "project"),
                      ("rule", "set", "x", "action=warn", "--path", p),
                      ("rule", "rm", "x", "--path", p),
                      ("mode", "declare", "m", "--path", p),
@@ -866,10 +860,10 @@ class PathOptionEdges(AstIsolated):
 
     def test_path_with_project_on_a_write_verb_is_an_error_and_read_verbs_accept_it(self) -> None:
         target = str(self.tmp / "p.json")
-        code, _, err = self.cli("rule", "add", "x", "--json", RULE, "--project", "--path", target)
+        code, _, err = self.cli("rule", "add", "x", "--json", RULE, "--scope", "project", "--path", target)
         self.assertEqual(code, 2)
         self.assertIn("needs --scope managed", err)
-        self.assertEqual(self.cli("status", "--project", "--path", target)[0], 0)
+        self.assertEqual(self.cli("status", "--scope", "project", "--path", target)[0], 0)
         self.assertEqual(self.cli("rule", "test", "--json", RULE, "strings x", "--path", target)[0], 0)
 
     def test_path_equal_to_the_platform_default_is_not_an_extra_source(self) -> None:
@@ -935,7 +929,7 @@ class RuleTestNotes(AstIsolated):
 
     def test_hook_and_project_rules_disabled(self) -> None:
         self.cli("rule", "add", "g", "--json", self.DRAFT)
-        self.cli("rule", "add", "p", "--json", self.DRAFT, "--project")
+        self.cli("rule", "add", "p", "--json", self.DRAFT, "--scope", "project")
         self.cli("disable")
         self.assertIn("the global hook is disabled", self.notes("--id", "g"))
         self.assertIn("the global hook is disabled", self.notes("--id", "p"))

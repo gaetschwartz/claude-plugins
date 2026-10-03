@@ -253,7 +253,7 @@ class Card(AstIsolated):
 
     def test_installed_rule_scope_is_its_layers(self) -> None:
         self.cli("rule", "add", "no-pkill", "--json", json.dumps(PKILL))
-        self.cli("rule", "set", "no-pkill", "retry=none", "--project")
+        self.cli("rule", "set", "no-pkill", "retry=none", "--scope", "project")
         code, out, _ = self.cli("rule", "test", "--render", "--id", "no-pkill", "pkill a", "ls")
         self.assertEqual(code, 0)
         self.assertTrue(out.startswith("### no-pkill · deny · global+project\n"))
@@ -401,9 +401,9 @@ class StatusRender(AstIsolated):
     def test_scope_filter(self) -> None:
         self.put(self.mpath, {"rules": {"m-rule": json.loads(self.rule())}})
         self.cli("rule", "add", "g-rule", "--json", self.rule())
-        self.cli("rule", "add", "p-rule", "--json", self.rule(), "--project")
+        self.cli("rule", "add", "p-rule", "--json", self.rule(), "--scope", "project")
         self.cli("mode", "declare", "gm")
-        self.cli("mode", "declare", "pm", "--project")
+        self.cli("mode", "declare", "pm", "--scope", "project")
         for scope, rule, mode in (("global", "g-rule", "gm"), ("project", "p-rule", "pm"), ("managed", "m-rule", None)):
             with self.subTest(scope=scope):
                 out = self.status("--scope", scope)
@@ -412,7 +412,7 @@ class StatusRender(AstIsolated):
                 self.assertEqual(f"`{mode}`" in out, mode is not None)
         empty = self.status("--scope", "project", "--path", str(self.tmp / "none.json"))
         self.assertIn("p-rule", empty)
-        self.cli("rule", "rm", "p-rule", "--project")
+        self.cli("rule", "rm", "p-rule", "--scope", "project")
         self.assertIn("No rules with a project entry.", self.status("--scope", "project"))
 
     def test_rule_flag_prints_one_row(self) -> None:
@@ -436,7 +436,7 @@ class StatusRender(AstIsolated):
 
     def test_plain_status_honours_scope_and_problems(self) -> None:
         self.cli("rule", "add", "g-rule", "--json", self.rule())
-        self.cli("rule", "add", "p-rule", "--json", self.rule(), "--project")
+        self.cli("rule", "add", "p-rule", "--json", self.rule(), "--scope", "project")
         out = self.cli("status", "--scope", "project")[1]
         self.assertIn("p-rule [project]", out)
         self.assertNotIn("g-rule", out)

@@ -79,7 +79,7 @@ class Presets(AstIsolated):
         self.assertEqual(self.get(self.gpath)["rules"]["no-strings"]["setBy"]["by"], "agent")
 
     def test_install_project(self) -> None:
-        self.assertEqual(self.cli("preset", "install", "process-safety", "--project")[0], 0)
+        self.assertEqual(self.cli("preset", "install", "process-safety", "--scope", "project")[0], 0)
         self.assertIn("no-pkill", self.get(self.ppath)["rules"])
 
     def test_docs_first_end_to_end(self) -> None:

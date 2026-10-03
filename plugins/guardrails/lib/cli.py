@@ -76,15 +76,9 @@ def project_path() -> str:
 
 
 def resolve_scope(args: Args) -> str:
-    scope = getattr(args, "scope", None)
-    if args.project:
-        if scope not in (None, "project"):
-            raise Invalid(f"--project conflicts with --scope {scope}")
-        resolved = "project"
-    else:
-        resolved = scope or "global"
-    check_path_scope(args, resolved)
-    return resolved
+    scope = getattr(args, "scope", None) or "global"
+    check_path_scope(args, scope)
+    return scope
 
 
 def extra_path(args: Args) -> str | None:
@@ -1053,7 +1047,7 @@ def set_enabled(args: Args, enabled: bool) -> int:
             state["disabledReason"] = args.reason or "disabled by user"
 
     store.mutate(path, change)
-    print(f"{'project rules' if args.project else 'guardrails hook'} {'enabled' if enabled else 'disabled'} ({path})")
+    print(f"{'project rules' if args.scope == 'project' else 'guardrails hook'} {'enabled' if enabled else 'disabled'} ({path})")
     return 0
 
 
@@ -1129,7 +1123,6 @@ def cmd_preset_install(args: Args) -> int:
 
 def build_parser() -> argparse.ArgumentParser:
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--project", action="store_true", help="shorthand for --scope project")
     common.add_argument("--as-user", action="store_true", help="agents only: the user explicitly asked for this change")
     common.add_argument("--session-id", help="session to act on (default: $CLAUDE_CODE_SESSION_ID)")
     common.add_argument("--reason", help="recorded with the change")
@@ -1211,8 +1204,9 @@ def build_parser() -> argparse.ArgumentParser:
     engine.add_parser("status", help="which ast-grep the hook uses, where it came from, and how to fix a missing one")
     engine.add_parser("verify", help="re-hash the active ast-grep binary against the committed manifest")
 
-    verbs.add_parser("enable", parents=[common], help="turn the hook (with --project: project rules) on")
-    verbs.add_parser("disable", parents=[common], help="turn the hook (with --project: project rules) off")
+    for name, state in (("enable", "on"), ("disable", "off")):
+        toggle = verbs.add_parser(name, parents=[common], help=f"turn the hook (with --scope project: project rules) {state}")
+        toggle.add_argument("--scope", choices=("global", "project"), default="global")
     return parser
 
 
