@@ -120,21 +120,14 @@ def status_text(data: Path) -> str:
 
 
 def ensure_command(args: list[str]) -> int:
-    import argparse
-
-    parser = argparse.ArgumentParser(prog="ensure", add_help=False)
-    parser.add_argument("--quiet", action="store_true")
-    parser.add_argument("--retry-now", action="store_true")
-    parser.add_argument("--no-wait", action="store_true")
-    flags, _ = parser.parse_known_args(args)
-    found = bootstrap.ensure(bootstrap.data_dir(), wait=not flags.no_wait, retry_now=flags.retry_now,
-                             progress=(lambda text: None) if flags.quiet
-                             else lambda text: print(f"guardrails: {text}", file=sys.stderr))
+    quiet = "--quiet" in args
+    found = bootstrap.ensure(bootstrap.data_dir(), wait="--no-wait" not in args, retry_now="--retry-now" in args,
+                             progress=(lambda text: None) if quiet else lambda text: print(f"guardrails: {text}", file=sys.stderr))
     if found.state in ("ready", "installed"):
-        if found.state == "installed" and not flags.quiet:
+        if found.state == "installed" and not quiet:
             print("guardrails: the rules runtime is installed", file=sys.stderr)
         return 0
-    if not flags.quiet:
+    if not quiet:
         print("guardrails: another install is still running" if found.state == "busy" else notice(found), file=sys.stderr)
     return 2
 
