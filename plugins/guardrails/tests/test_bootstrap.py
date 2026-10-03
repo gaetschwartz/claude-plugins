@@ -489,6 +489,13 @@ class Failures(Pinned):
         (self.rt / "marker.json").unlink()
         self.assertEqual(int(self.fail_with(urllib.error.URLError(ConnectionRefusedError())).retry_at - self.clock[0]), 600)
 
+    def test_the_first_backoff_step_ends_exactly_ten_minutes_after_the_attempt(self) -> None:
+        self.fail_with(urllib.error.URLError(ConnectionRefusedError()))
+        start = self.clock[0]
+        for waited, state in ((1, "backoff"), (599, "backoff"), (601, "missing")):
+            self.clock[0] = start + waited
+            self.assertEqual(bootstrap.diagnose(self.data).state, state, f"after {waited} s")
+
     def test_session_start_does_not_try_while_in_backoff_and_names_the_retry_time(self) -> None:
         found = self.fail_with(urllib.error.URLError(socket.gaierror(8, "nodename nor servname provided")))
         with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(self.data)}), \
