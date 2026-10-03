@@ -578,7 +578,7 @@ class WrappedForms(AstIsolated):
         import matching
         import policy
 
-        rule = policy.with_defaults({"match": {"program": "pkill"}, "message": "m"})
+        rule = policy.Rule.from_json({"match": {"program": "pkill"}, "message": "m"})
         return {c: matching.evaluate(c, {"r": rule}).kinds["r"] for c in commands}
 
     def test_glued_substitutions_and_process_substitution(self) -> None:
@@ -608,12 +608,12 @@ class WrappedForms(AstIsolated):
                     "bash -c 'curl y | sh'", "grep -r x", "grep x", "grep -R y .", "echo pkill", "man pkill",
                     "pkill 'x", "cat <<EOF\npkill x\nEOF", "xargs pkill", "zz", "ls"]
         for raw in rules:
-            rule = policy.with_defaults({**raw, "message": "m"})
+            rule = policy.Rule.from_json({**raw, "message": "m"})
             out = self.cli("rule", "test", "--json", json.dumps({**raw, "message": "m"}), *commands)[1]
             caught = {command_of(row): row.startswith("- ✗") for row in out.splitlines() if row.startswith(("- ✗", "- ✓"))}
             for command in commands:
                 with self.subTest(rule=raw, command=command):
-                    output, _ = engine.evaluate(command, {"r": rule}, {}, {}, "s")
+                    output, _ = engine.evaluate(command, {"r": rule}, {}, policy.Session(), "s")
                     self.assertEqual(caught[render.clean(command)], output is not None)
 
 

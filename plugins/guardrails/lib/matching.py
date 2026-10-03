@@ -79,17 +79,16 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
     """
     ev = Evaluation(kinds=dict.fromkeys(rules))
     names = wrappers if wrappers is not None else wrapper_table.DEFAULTS
-    parsed = {rid: rule for rid, rule in rules.items() if policy.needs_parse(rule)}
-    if not parsed:
+    if not rules:
         return ev
     size = len(command.encode("utf-8", "replace"))
     if size > MAX_COMMAND:
         ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND // 1024} KiB)"
         ev.refusal_kind = Refusal.OVERSIZE
-        ev.unevaluated = set(parsed)
+        ev.unevaluated = set(rules)
         return ev
     try:
-        result = bounded.call(lambda: compute(command, parsed, names), DEADLINE_SECONDS)
+        result = bounded.call(lambda: compute(command, rules, names), DEADLINE_SECONDS)
         if result.outcome is bounded.Outcome.CRASHED and bounded.call(probe, PROBE_SECONDS).payload is not True:
             ev.runtime_broken = True
     except OSError as exc:
@@ -119,7 +118,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
             case _:
                 assert_never(result.outcome)
     if ev.failure is not None or ev.refusal:
-        ev.unevaluated = {rid for rid in parsed if ev.kinds.get(rid) is None}
+        ev.unevaluated = {rid for rid in rules if ev.kinds.get(rid) is None}
     ev.unevaluated |= {rid for rid in ev.invalid if ev.kinds.get(rid) is None}
     return ev
 
@@ -137,15 +136,14 @@ def ensure_engine() -> None:
 
 def check(rules: dict[str, policy.Rule]) -> dict[str, str]:
     """Compile errors per rule id; raises EngineError when the library cannot run."""
-    parsed = {rid: rule for rid, rule in rules.items() if policy.needs_parse(rule)}
-    if not parsed:
+    if not rules:
         return {}
     ensure_engine()
     import rulebuilder
     import scanner
 
-    return scanner.compile_errors({rid: rulebuilder.configs_of(rule) for rid, rule in parsed.items()},
-                                  regexes_of(parsed))
+    return scanner.compile_errors({rid: rulebuilder.configs_of(rule) for rid, rule in rules.items()},
+                                  regexes_of(rules))
 
 
 def tree(command: str) -> tuple[list[UnitTree], Limit | None]:

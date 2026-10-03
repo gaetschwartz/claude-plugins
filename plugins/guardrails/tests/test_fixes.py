@@ -21,7 +21,7 @@ from verdict import Kind, Refusal
 
 K = "pk" + "ill"
 BY_NAME: dict[str, Any] = {"any": [{"pattern": f"{K} $$$"}, {"pattern": "killall $$$"}]}
-PROGRAM_RULE = policy.with_defaults({"match": {"program": [K, "killall"]}, "message": "m"})
+PROGRAM_RULE = policy.Rule.from_json({"match": {"program": [K, "killall"]}, "message": "m"})
 
 
 def deny_text(out: dict[str, Any] | None) -> str:
@@ -75,8 +75,8 @@ class Layering(AstIsolated):
         self.assertFalse(self.gpath.exists())
 
     def test_adding_names_never_reduces_detection(self) -> None:
-        rules = {"p": PROGRAM_RULE, "s": policy.with_defaults({"match": {"program": "strings"}, "message": "m"}),
-                 "g": policy.with_defaults({"match": {"ast": GREP_RECURSIVE}, "message": "m"})}
+        rules = {"p": PROGRAM_RULE, "s": policy.Rule.from_json({"match": {"program": "strings"}, "message": "m"}),
+                 "g": policy.Rule.from_json({"match": {"ast": GREP_RECURSIVE}, "message": "m"})}
         corpus = [*DENY, *ALLOW[:20], f"sudo -E {K} x", f"nohup {K} x", f"timeout 5 {K} a", f"bash -c '{K} x'",
                   "grep -r foo .", "sudo grep -rn foo .", "strings -n 4 /bin/ls"]
         base = {c: matching.evaluate(c, rules).kinds for c in corpus}
@@ -212,7 +212,7 @@ class FailurePolicy(AstIsolated):
 
     def test_a_hit_stands_when_a_cap_is_hit_later(self) -> None:
         command = "zap x; " + "; ".join(f"bash -c 'echo {n}'" for n in range(80))
-        ev = matching.evaluate(command, {"z": policy.with_defaults({"match": {"program": "zap"}, "message": "m"})})
+        ev = matching.evaluate(command, {"z": policy.Rule.from_json({"match": {"program": "zap"}, "message": "m"})})
         self.assertEqual((ev.kinds["z"], ev.refusal_kind), (Kind.DIRECT, Refusal.COMPLEX))
         out = self.hook(command, "hit")
         self.assertTrue(is_denied(out))

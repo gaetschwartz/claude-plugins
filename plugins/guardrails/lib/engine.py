@@ -5,15 +5,13 @@ from __future__ import annotations
 import json
 import sys
 import time
-from typing import IO, Any, TypedDict
+from typing import IO, TypedDict
 
 import matching
 import policy
 import store
 import wrappers as wrapper_table
 from verdict import FAILED_PREFIX, Evaluation
-
-Session = dict[str, Any]
 
 
 class HookDecision(TypedDict, total=False):
@@ -34,11 +32,8 @@ def digest(text: str) -> str:
     return hashlib.sha256(text.encode()).hexdigest()[:16]
 
 
-def remember(session: Session, key: str, value: str) -> bool:
-    """Add value to the list session[key]; True if it was not there yet."""
-    items = session.get(key)
-    if not isinstance(items, list):
-        items = session[key] = []
+def remember(items: list[str], value: str) -> bool:
+    """Add value to the list; True if it was not there yet."""
     if value in items:
         return False
     items.append(value)
@@ -48,31 +43,28 @@ def remember(session: Session, key: str, value: str) -> bool:
 REPEAT_AFTER = 600.0
 
 
-def due(session: Session, key: str) -> bool:
+def due(session: policy.Session, key: str) -> bool:
     """True when this warning should be shown now: once per session, except engine failures, which repeat."""
     if not key.startswith(FAILED_PREFIX):
-        return remember(session, "reported", key)
-    stamps = session.get("reportedAt")
-    if not isinstance(stamps, dict):
-        stamps = session["reportedAt"] = {}
+        return remember(session.reported, key)
     now = time.time()
-    last = stamps.get(key)
-    if isinstance(last, (int, float)) and 0 <= now - last < REPEAT_AFTER:
+    last = session.reported_at.get(key)
+    if last is not None and 0 <= now - last < REPEAT_AFTER:
         return False
-    stamps[key] = now
+    session.reported_at[key] = now
     return True
 
 
 def hints(rule: policy.Rule, modes: dict[str, policy.Mode], session_id: str) -> str:
-    if rule.get("action") != "deny":
+    if rule.action is not policy.Action.DENY:
         return ""
     text = ""
-    if rule.get("retry") == "same-command":
+    if rule.retry is policy.Retry.SAME_COMMAND:
         text += " If you still need this exact command, re-run it unchanged to proceed."
-    for name in policy.modes_of(rule):
+    for name in rule.modes:
         if name not in modes:
             continue
-        if modes[name]["agentMayEnable"]:
+        if modes[name].agent_may_enable:
             text += (f" If this session is genuinely '{name}' work, ask the user; once they confirm, "
                      "enable it with the guardrails:mode skill.")
         else:
@@ -81,20 +73,19 @@ def hints(rule: policy.Rule, modes: dict[str, policy.Mode], session_id: str) -> 
     return text
 
 
-def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode], session: Session,
+def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode], session: policy.Session,
             shown_before: set[str], session_id: str, managed_ids: frozenset[str] = frozenset()) -> tuple[str, bool]:
     """Render texts (messageShort once the full message was shown), merging rules that render identically."""
     changed = False
     groups: dict[str, list[str]] = {}
     tails: dict[str, str] = {}
     for rid, rule in items:
-        full = policy.render(rule["message"])
+        full = policy.render(rule.message)
         text = full
-        short = rule.get("messageShort")
-        if isinstance(short, str) and short:
+        if rule.message_short:
             if digest(full) in shown_before:
-                text = policy.render(short)
-            elif remember(session, "shown", digest(full)):
+                text = policy.render(rule.message_short)
+            elif remember(session.shown, digest(full)):
                 changed = True
         groups.setdefault(text, []).append(f"{rid} (managed)" if rid in managed_ids else rid)
         tails.setdefault(text, hints(rule, modes, session_id))
@@ -106,25 +97,8 @@ TOOLS = ("Bash", "Monitor")
 
 
 def candidates_of(rules: dict[str, policy.Rule]) -> dict[str, policy.Rule]:
-    """The rules that could act on this command here: enabled, valid, binaries installed."""
-    out: dict[str, policy.Rule] = {}
-    for rid in sorted(rules):
-        rule = rules[rid]
-        if rule.get("enabled") is not True:
-            continue
-        try:
-            policy.validate_rule(rule)
-        except policy.Invalid:
-            continue
-        if policy.requirements_met(rule):
-            out[rid] = rule
-    return out
-
-
-def oversized_of(rules: dict[str, policy.Rule]) -> list[str]:
-    """Enabled rules whose match.ast is over the size limit (the hook skips them and says so)."""
-    return [rid for rid in sorted(rules) if rules[rid].get("enabled") is True
-            and (ast := policy.ast_of(rules[rid])) and policy.ast_size(ast) > policy.MAX_AST_BYTES]
+    """The rules that could act on this command here: enabled and with their binaries installed."""
+    return {rid: rules[rid] for rid in sorted(rules) if rules[rid].enabled and policy.requirements_met(rules[rid])}
 
 
 def report_broken() -> None:
@@ -144,28 +118,21 @@ def judge(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_table.N
 
 
 def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, policy.Mode],
-             session: Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
+             session: policy.Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
              warnings: tuple[str, ...] = (), wrappers: wrapper_table.Names | None = None,
              pre: Evaluation | None = None,
 ) -> tuple[Output | None, bool]:
     active = policy.active_modes(modes, session)
-    shown = session.get("shown")
-    shown_before = {x for x in shown if isinstance(x, str)} if isinstance(shown, list) else set()
+    shown_before = set(session.shown)
     changed = False
     notices: list[str] = []
     for warning in warnings:
-        if remember(session, "reported", digest(warning)):
+        if remember(session.reported, digest(warning)):
             changed = True
             notices.append(warning)
     denies: list[tuple[str, policy.Rule]] = []
     warns: list[tuple[str, policy.Rule]] = []
 
-    for rid in oversized_of(rules):
-        text = (f"guardrails: match.ast rule {rid} is larger than {policy.MAX_AST_BYTES // 1024} KiB and is skipped; "
-                "split it into several rules")
-        if remember(session, "reported", digest(text)):
-            changed = True
-            notices.append(text)
     candidates = candidates_of(rules)
     evaluation = pre if pre is not None and all(rid in pre.kinds for rid in candidates) \
         else judge(command, candidates, wrappers)
@@ -176,14 +143,14 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
             notices.append(warning)
             agent_notes.append(warning)
             if key.startswith(FAILED_PREFIX):
-                session["engineFailure"] = {"kind": evaluation.failure_kind(), "at": store.now(),
-                                            "reason": str(evaluation.failure)[:200]}
+                session.engine_failure = policy.EngineFailure(evaluation.failure_kind(), store.now(),
+                                                              str(evaluation.failure)[:200])
 
     def unsuspended(rule: policy.Rule) -> bool:
-        return not any(name in active for name in policy.modes_of(rule))
+        return not any(name in active for name in rule.modes)
 
     refused = bool(evaluation.refusal) and any(
-        candidates[rid].get("action") == "deny" and unsuspended(candidates[rid])
+        candidates[rid].action is policy.Action.DENY and unsuspended(candidates[rid])
         for rid in evaluation.unevaluated if rid in candidates)
     if evaluation.refusal and not refused:
         key = FAILED_PREFIX + evaluation.failure_kind()
@@ -197,20 +164,20 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     for rid, rule in candidates.items():
         if evaluation.kinds.get(rid) is None:
             continue
-        suspending = [name for name in policy.modes_of(rule) if name in active]
+        suspending = [name for name in rule.modes if name in active]
         if suspending:
             name = suspending[0]
             record = active[name]
-            if record.get("by") == "agent" and remember(session, "reported", f"{rid}:{name}"):
+            if record.by is policy.Actor.AGENT and remember(session.reported, f"{rid}:{name}"):
                 changed = True
                 notices.append(f"guardrails: rule {rid} suspended by mode {name} "
-                               f"(enabled by agent: {record.get('reason') or 'no reason given'})")
+                               f"(enabled by agent: {record.reason or 'no reason given'})")
             continue
-        if rule["action"] == "warn":
+        if rule.action is policy.Action.WARN:
             warns.append((rid, rule))
             continue
-        if rule.get("retry") == "same-command":
-            if not remember(session, "acknowledged", f"{rid}:{digest(command)}"):
+        if rule.retry is policy.Retry.SAME_COMMAND:
+            if not remember(session.acknowledged, f"{rid}:{digest(command)}"):
                 continue
             changed = True
         denies.append((rid, rule))
@@ -227,7 +194,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
         output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "permissionDecision": "deny",
                                         "permissionDecisionReason": text + extra}
     else:
-        fresh = [(rid, rule) for rid, rule in warns if remember(session, "warned", rid)]
+        fresh = [(rid, rule) for rid, rule in warns if remember(session.warned, rid)]
         if fresh:
             changed = True
             text, _ = compose(fresh, modes, session, shown_before, session_id, managed_ids)
@@ -268,10 +235,13 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
     except store.StateError:
         pstate = {}
 
-    def layers(g: store.State) -> tuple[dict[str, policy.Rule], dict[str, policy.Mode]]:
+    def layers(g: store.State) -> policy.Effective:
         killed = not gstate_ok or g.get("enabled", True) is False
-        args = (managed, {}, {}) if killed else (managed, g, pstate)
-        return policy.effective_rules(*args), policy.effective_modes(*args)
+        return policy.effective(*((managed, {}, {}) if killed else (managed, g, pstate)))
+
+    def modes_of(g: store.State) -> dict[str, policy.Mode]:
+        killed = not gstate_ok or g.get("enabled", True) is False
+        return policy.effective_modes(*((managed, {}, {}) if killed else (managed, g, pstate)))
 
     def wrapper_layers(g: store.State) -> wrapper_table.Names:
         killed = not gstate_ok or g.get("enabled", True) is False
@@ -279,34 +249,32 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
 
     if gstate_ok and gstate.get("enabled", True) is not False:
         warnings += tuple(f"guardrails: {problem}" for problem in policy.wrapper_problems(managed, gstate, pstate))
-    if not layers(gstate)[0] and not warnings:
+    found = layers(gstate)
+    warnings += tuple(f"guardrails: rule {rid} is invalid ({why}) and is skipped" for rid, why in found.problems.items())
+    if not found.rules and not warnings:
         return
 
     sid = str(payload.get("session_id") or "nosession")
     output: Output | None = None
-    pre = judge(command, candidates_of(layers(gstate)[0]), wrapper_layers(gstate))
+    pre = judge(command, candidates_of(found.rules), wrapper_layers(gstate))
     stateless = not gstate_ok
     if gstate_ok:
         try:
             with store.locked(gpath):
                 gstate = store.load(gpath)
-                sessions_raw = gstate.get("sessions")
-                sessions = sessions_raw if isinstance(sessions_raw, dict) else {}
-                session_raw = sessions.get(sid)
-                session = session_raw if isinstance(session_raw, dict) else {}
-                rules, modes = layers(gstate)
-                output, changed = evaluate(command, rules, modes, session, sid, managed_ids, warnings,
-                                           wrapper_layers(gstate), pre)
+                sessions = policy.view(gstate, "sessions")
+                session = policy.Session.from_json(sessions.get(sid))
+                output, changed = evaluate(command, layers(gstate).rules, modes_of(gstate), session, sid, managed_ids,
+                                           warnings, wrapper_layers(gstate), pre)
                 if changed:
-                    session["seenAt"] = store.now()
-                    sessions[sid] = session
+                    sessions[sid] = session.to_json(store.now())
                     gstate["sessions"] = sessions
                     store.write(gpath, gstate)
         except OSError:
             stateless = True
     if stateless:
-        rules, modes = layers(gstate)
-        output, _ = evaluate(command, rules, modes, {}, sid, managed_ids, warnings, wrapper_layers(gstate), pre)
+        output, _ = evaluate(command, layers(gstate).rules, modes_of(gstate), policy.Session(), sid, managed_ids,
+                             warnings, wrapper_layers(gstate), pre)
     if output:
         json.dump(output, stdout)
 

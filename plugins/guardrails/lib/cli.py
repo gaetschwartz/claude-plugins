@@ -143,7 +143,7 @@ def refuse_managed_rule(args: Args, scope: str, rid: str, path: str) -> None:
 
 
 def always_enforced(scope: str, rid: str, rule: policy.Rule) -> str:
-    if scope == "managed" and not policy.modes_of(rule):
+    if scope == "managed" and not rule.modes:
         return f"note: managed rule {rid} lists no modes, so it is always enforced and cannot be suspended"
     return ""
 
@@ -194,7 +194,7 @@ class Snapshot:
     hook_on: bool
     rules: dict[str, policy.Rule]
     modes: dict[str, policy.Mode]
-    active: dict[str, dict[str, Any]]
+    active: dict[str, policy.Activation]
     rule_origins: dict[str, list[str]]
     mode_origins: dict[str, list[str]]
     problems: list[str]
@@ -235,24 +235,22 @@ def snapshot(args: Args) -> Snapshot:
     for name, m in view(pstate, "modes").items():
         if name in view(mstate, "modes") and isinstance(m, dict) and m.get("active") is True:
             report(f"project state switches on mode '{name}', which the managed file declares (ignored)", "project")
-    rules, modes = policy.effective_rules(mstate, gstate, pstate), policy.effective_modes(mstate, gstate, pstate)
+    found = policy.effective(mstate, gstate, pstate)
+    rules, modes = found.rules, policy.effective_modes(mstate, gstate, pstate)
     sid = args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
-    session = view(view(gstate, "sessions"), sid) if sid else {}
+    session = policy.Session.from_json(view(view(gstate, "sessions"), sid) if sid else {})
     rule_origins = policy.origins("rules", mstate, gstate, pstate)
     mode_origins = policy.origins("modes", mstate, gstate, pstate)
+    for rid, why in sorted(found.problems.items()):
+        report(f"rule {rid}: {why} (ignored by the hook)", *rule_origins.get(rid, []))
     for rid in sorted(rules):
-        try:
-            policy.validate_rule(rules[rid])
-        except Invalid as exc:
-            if "managed" not in rule_origins.get(rid, []):
-                report(f"rule {rid}: {exc} (ignored by the hook)", *rule_origins.get(rid, []))
-        for m in policy.modes_of(rules[rid]):
+        for m in rules[rid].modes:
             if m not in modes:
                 report(f"rule {rid}: mode '{m}' is not declared (the rule stays enforced)",
                        *rule_origins.get(rid, []))
     for text in policy.wrapper_problems(mstate, gstate, pstate):
         report(text, "managed", "global", "project")
-    parsed = {rid: rule for rid, rule in rules.items() if rule.get("enabled") is True and policy.needs_parse(rule)
+    parsed = {rid: rule for rid, rule in rules.items() if rule.enabled
               and not any(p.startswith(f"rule {rid}:") for p in problems)}
     failures = [f for f in (view(v, "engineFailure") for v in view(gstate, "sessions").values()) if f.get("at")]
     if failures:
@@ -276,15 +274,15 @@ def snapshot(args: Args) -> Snapshot:
                     frozenset(blind))
 
 
-def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, dict[str, Any]], blind: bool = False) -> str:
-    if rule.get("enabled") is not True:
+def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, policy.Activation], blind: bool = False) -> str:
+    if not rule.enabled:
         return "disabled"
-    suspended = [m for m in policy.modes_of(rule) if m in active]
+    suspended = [m for m in rule.modes if m in active]
     if suspended:
         return "suspended by " + ", ".join(suspended)
     if blind:
         return "NOT enforced: engine unavailable"
-    if "managed" in layers and not policy.modes_of(rule):
+    if "managed" in layers and not rule.modes:
         return "always enforced"
     return "enabled"
 
@@ -317,7 +315,7 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
     def keep(origins: dict[str, list[str]], name: str) -> bool:
         return scope is None or scope in origins.get(name, [])
 
-    rules = [render.RuleRow(rid, str(snap.rules[rid].get("action")), snap.rule_origins.get(rid, []),
+    rules = [render.RuleRow(rid, str(snap.rules[rid].action), snap.rule_origins.get(rid, []),
                             rule_state(snap.rules[rid], snap.rule_origins.get(rid, []), snap.active, rid in snap.blind))
              for rid in sorted(snap.rules) if keep(snap.rule_origins, rid)]
     modes = []
@@ -326,11 +324,11 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
             continue
         if name in snap.active:
             record = snap.active[name]
-            why = f": {record['reason']}" if record.get("reason") else ""
-            on = "on (persistent)" if snap.modes[name]["active"] else f"on (by {record.get('by', 'user')}{why})"
+            why = f": {record.reason}" if record.reason else ""
+            on = "on (persistent)" if snap.modes[name].active else f"on (by {record.by}{why})"
         else:
             on = "off"
-        modes.append(render.ModeRow(name, on, snap.modes[name]["agentMayEnable"], snap.mode_origins.get(name, [])))
+        modes.append(render.ModeRow(name, on, snap.modes[name].agent_may_enable, snap.mode_origins.get(name, [])))
     notes = []
     if not snap.hook_on:
         reason = f" ({snap.gstate['disabledReason']})" if snap.gstate.get("disabledReason") else ""
@@ -365,8 +363,6 @@ def cmd_status(args: Args) -> int:
 
 def check_ast_rule(rule: policy.Rule) -> str:
     """Raise Invalid when the rule does not compile; a note when it could not be checked."""
-    if not policy.needs_parse(rule):
-        return ""
     try:
         errors = matching.check({"rule": rule})
     except matching.EngineError as exc:
@@ -381,8 +377,8 @@ def cmd_rule_add(args: Args) -> int:
     require_user(args, "rule add")
     check_name("rule", args.id)
     rule, _ = split_envelope(load_json(args.json, "--json"))
-    policy.validate_rule(rule)
-    unchecked = check_ast_rule(rule)
+    parsed = policy.Rule.from_json(rule)
+    unchecked = check_ast_rule(parsed)
     rule["setBy"] = stamp(args.reason)
     scope = resolve_scope(args)
     path = scope_path(scope, args)
@@ -399,7 +395,7 @@ def cmd_rule_add(args: Args) -> int:
         print(unchecked)
     if scope != "managed" and args.id in managed_rule_ids(args):
         print(f"note: {args.id} is also a managed rule; this entry can only tighten it, not reword it")
-    note = always_enforced(scope, args.id, rule)
+    note = always_enforced(scope, args.id, parsed)
     if note:
         print(note)
     return 0
@@ -425,7 +421,7 @@ def ineffective(fields: dict[str, Any], base: policy.Rule) -> list[str]:
         if (key, value) in (("action", "warn"), ("retry", "same-command"), ("enabled", False)):
             notes.append(shown)
         elif key == "modes":
-            added = [m for m in value if m not in policy.modes_of(base)] if isinstance(value, list) else []
+            added = [m for m in value if m not in base.modes] if isinstance(value, list) else []
             if added:
                 notes.append(f"modes {','.join(map(str, added))} (a project can only remove suspending modes)")
         elif key in policy.MATCH_KEYS or key == "requires":
@@ -448,8 +444,9 @@ def cmd_rule_set(args: Args) -> int:
         if scope == "project" else None
 
     unchecked: list[str] = []
+    candidate: list[policy.Rule] = []
 
-    def change(state: store.State) -> policy.Rule:
+    def change(state: store.State) -> None:
         rules = table(state, "rules")
         if not isinstance(rules.get(args.id), dict):
             if base is None:
@@ -457,12 +454,12 @@ def cmd_rule_set(args: Args) -> int:
             rules[args.id] = {}
         rule = rules[args.id]
         apply_fields(rule, fields)
-        policy.validate_rule(policy.merge_rule(base, rule) if base is not None else rule)
-        unchecked.append(check_ast_rule(rule))
+        candidate.append(policy.merge_rule(base, rule) if base is not None else policy.Rule.from_json(rule))
+        if base is None:
+            unchecked.append(check_ast_rule(candidate[-1]))
         rule["setBy"] = stamp(args.reason)
-        return rule
 
-    rule = change_state(scope, path, change)
+    change_state(scope, path, change)
     print(f"updated rule {args.id} in {path}")
     if unchecked and unchecked[-1]:
         print(unchecked[-1])
@@ -470,7 +467,7 @@ def cmd_rule_set(args: Args) -> int:
         notes = ineffective(fields, base)
         if notes:
             print("note: a project entry can only tighten a global rule; no effect: " + ", ".join(notes))
-    note = always_enforced(scope, args.id, rule)
+    note = always_enforced(scope, args.id, candidate[-1])
     if note:
         print(note)
     return 0
@@ -496,16 +493,16 @@ def cmd_rule_rm(args: Args) -> int:
 def effect_notes(args: Args, rule: policy.Rule, layers: list[str], mstate: store.State,
                  gstate: store.State, pstate: store.State) -> list[str]:
     notes = []
-    if rule.get("enabled") is False:
+    if not rule.enabled:
         notes.append("rule is disabled")
-    if rule.get("requires") and not policy.requirements_met(rule):
-        notes.append(f"none of {'|'.join(rule['requires'])} is installed here, so the hook skips this rule")
+    if rule.requires and not policy.requirements_met(rule):
+        notes.append(f"none of {'|'.join(rule.requires)} is installed here, so the hook skips this rule")
     if "managed" not in layers and gstate.get("enabled", True) is False:
         notes.append("the global hook is disabled, so the hook does not enforce this rule")
-    listed = policy.modes_of(rule)
+    listed = list(rule.modes)
     if listed:
         sid = args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
-        session = view(view(gstate, "sessions"), sid) if sid else {}
+        session = policy.Session.from_json(view(view(gstate, "sessions"), sid) if sid else {})
         active = policy.active_modes(policy.effective_modes(mstate, gstate, pstate), session)
         on = [m for m in listed if m in active]
         if on:
@@ -575,22 +572,23 @@ def cmd_rule_test(args: Args) -> int:
         draft, carried = split_envelope(load_json(args.json, "--json"))
         if carried is not None:
             examples += example_list(carried)
-        policy.validate_rule(draft)
-        rule = policy.with_defaults(draft)
+        rule = policy.Rule.from_json(draft)
         layers: list[str] = []
-        named = args.id_name or rule.get("id")
+        named = args.id_name or draft.get("id")
         rid = named if isinstance(named, str) and named else "new-rule"
         scope = args.scope or "global"
         if scope == "managed" and store.managed_write_path(extra_path(args)) != store.default_managed_path():
             file = store.managed_write_path(extra_path(args))
     else:
-        rules = policy.effective_rules(mstate, gstate, pstate)
+        found = policy.effective(mstate, gstate, pstate)
+        rules = found.rules
+        if args.id in found.problems:
+            raise Invalid(f"rule '{args.id}' is invalid and ignored by the hook: {found.problems[args.id]}")
         if args.id not in rules:
             hidden = pstate.get("enabled", True) is False and args.id in view(pstate, "rules")
             raise Invalid(f"no rule '{args.id}'" + (" (project rules are disabled, so project entries are not "
                                                      "loaded)" if hidden else ""))
         rule = rules[args.id]
-        policy.validate_rule(rule)
         layers = policy.origins("rules", mstate, gstate, pstate)[args.id]
         rid, scope = args.id, "+".join(layers)
 
@@ -609,7 +607,7 @@ def cmd_rule_test(args: Args) -> int:
         notes.append(cannot_evaluate_note(unjudged))
     results = [render.Result(cmd, source, render.UNEVALUATED if rid in ev.unevaluated else ev.kinds[rid], expect)
                for (cmd, source, expect), ev in zip(examples, evaluations)]
-    print(render.rule_card(rid, rule, policy.programs_of(rule), policy.render(rule["message"]), scope,
+    print(render.rule_card(rid, rule, policy.render(rule.message), scope,
                            args.intent or "", results, notes, file))
     return 0
 
@@ -760,8 +758,8 @@ def set_persistent(args: Args, active: bool) -> int:
 
     change_state(args.scope, path, change)
     print(f"mode {args.name} {'on' if active else 'off'} for every session ({args.scope} scope)")
-    if not active and args.scope != "managed" and policy.effective_modes(managed, {}, {}).get(
-            args.name, {}).get("active"):
+    if not active and args.scope != "managed" and getattr(
+            policy.effective_modes(managed, {}, {}).get(args.name), "active", False):
         print(f"note: the managed scope keeps mode {args.name} on")
     if active and args.scope == "project" and args.name in view(managed, "modes"):
         print(f"note: mode {args.name} is declared in the managed file, so a project cannot switch it on")
@@ -776,7 +774,7 @@ def cmd_mode_on(args: Args) -> int:
     if args.name not in modes:
         raise Invalid(f"mode '{args.name}' is not declared (declared: {', '.join(sorted(modes)) or 'none'})")
     if is_agent():
-        if not modes[args.name]["agentMayEnable"]:
+        if not modes[args.name].agent_may_enable:
             forbid_agent(f"Enabling mode '{args.name}' (it does not allow agents to enable it)")
         if not args.reason:
             raise Invalid("--reason is required: quote what the user said about this session's work")
@@ -857,7 +855,7 @@ def cmd_preset_install(args: Args) -> int:
     if unknown:
         raise Invalid(f"preset {args.name} has no rule {', '.join(unknown)} (it has {', '.join(sorted(rules))})")
     chosen = {rid: r for rid, r in rules.items() if not only or rid in only}
-    wanted = {m for r in chosen.values() for m in policy.modes_of(r)}
+    wanted = {m for r in chosen.values() for m in policy.json_modes(r)}
     modes = {name: m for name, m in view(preset, "modes").items() if name in wanted}
     scope = resolve_scope(args)
     path = scope_path(scope, args)
@@ -871,7 +869,7 @@ def cmd_preset_install(args: Args) -> int:
             if isinstance(current, dict) and {k: v for k, v in current.items() if k != "setBy"} == rule:
                 report.append(f"rule {rid}: unchanged")
                 continue
-            always = " (no modes: always enforced)" if scope == "managed" and not policy.modes_of(rule) else ""
+            always = " (no modes: always enforced)" if scope == "managed" and not policy.json_modes(rule) else ""
             report.append(f"rule {rid}: {'replaced' if rid in srules else 'added'}{always}")
             srules[rid] = {**rule, "setBy": by}
         smodes = table(state, "modes")

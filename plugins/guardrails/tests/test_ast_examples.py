@@ -25,8 +25,7 @@ def examples() -> list[tuple[Path, dict[str, Any]]]:
 
 
 def rule_of(example: dict[str, Any]) -> policy.Rule:
-    rule = policy.with_defaults({"match": example["rule"], "message": "m", "action": example["action"]})
-    policy.validate_rule(rule)
+    rule = policy.Rule.from_json({"match": example["rule"], "message": "m", "action": example["action"]})
     return rule
 
 

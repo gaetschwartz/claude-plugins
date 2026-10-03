@@ -23,7 +23,7 @@ XARGS_KILL: dict[str, Any] = {"pattern": f"xargs {KILL} $$$", "inside": {"kind":
 
 
 def rule_of(ast: dict[str, Any], **extra: Any) -> policy.Rule:
-    return policy.with_defaults({"match": {"ast": ast, **extra}, "message": "m"})
+    return policy.Rule.from_json({"match": {"ast": ast, **extra}, "message": "m"})
 
 
 class Kinds(AstIsolated):
@@ -135,7 +135,7 @@ class RuleSize(AstIsolated):
         first = self.hook("echo $(ls)", session="a")
         assert first is not None
         self.assertEqual(first["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertIn("match.ast rule huge is larger than 16 KiB and is skipped", first["systemMessage"])
+        self.assertIn("rule huge is invalid ('match.ast' is", first["systemMessage"])
         self.assertNotIn("Argument list too long", json.dumps(first))
         again = self.hook("echo $(ls)", session="a")
         assert again is not None
@@ -195,13 +195,13 @@ class Validation(AstIsolated):
     def test_the_shape_of_match_ast_and_its_size_are_checked_before_ast_grep_sees_it(self) -> None:
         for ast in ({}, [], "x", {"kind": "command", "regex": "x" * 20000}):
             with self.subTest(ast=str(ast)[:20]), self.assertRaises(policy.Invalid):
-                policy.validate_rule({"match": {"ast": ast}, "message": "m"})
-        policy.validate_rule({"match": {"ast": {"pattern": "a $$$", "inside": {"kind": "pipeline"}}}, "message": "m"})
+                policy.Rule.from_json({"match": {"ast": ast}, "message": "m"})
+        policy.Rule.from_json({"match": {"ast": {"pattern": "a $$$", "inside": {"kind": "pipeline"}}}, "message": "m"})
 
     def test_ast_alone_is_a_matcher(self) -> None:
-        policy.validate_rule({"match": {"ast": {"kind": "command"}}, "message": "m"})
+        policy.Rule.from_json({"match": {"ast": {"kind": "command"}}, "message": "m"})
         with self.assertRaises(policy.Invalid):
-            policy.validate_rule({"match": {"args": "x"}, "message": "m"})
+            policy.Rule.from_json({"match": {"args": "x"}, "message": "m"})
 
 
 class Cli(AstIsolated):

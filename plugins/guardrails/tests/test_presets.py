@@ -17,8 +17,8 @@ class Presets(AstIsolated):
             self.assertTrue(preset.get("description"))
             for rid, rule in preset["rules"].items():
                 with self.subTest(preset=name, rule=rid):
-                    policy.validate_rule(rule)
-                    for mode in policy.modes_of(rule):
+                    policy.Rule.from_json(rule)
+                    for mode in policy.json_modes(rule):
                         self.assertIn(mode, preset.get("modes", {}))
 
     def test_modern_cli_sheet_is_fully_substituted(self) -> None:

@@ -17,7 +17,7 @@ K = "pk" + "ill"
 
 
 def rule_of(ast: dict[str, Any]) -> policy.Rule:
-    return policy.with_defaults({"match": {"ast": ast}, "message": "m"})
+    return policy.Rule.from_json({"match": {"ast": ast}, "message": "m"})
 
 
 def nest(command: str, levels: int) -> str:
@@ -91,7 +91,7 @@ class ThroughWrappers(AstIsolated):
                     "sh; curl x": None})
 
     def test_program_args_and_a_grep_rule_read_through_wrappers_by_the_same_mechanism(self) -> None:
-        self.kinds(policy.with_defaults({"match": {"program": "rm", "args": "-rf"}, "message": "m"}), {
+        self.kinds(policy.Rule.from_json({"match": {"program": "rm", "args": "-rf"}, "message": "m"}), {
             "rm -rf x": "direct", "sudo rm -rf x": "wrapped", "env A=1 nice rm -rf x": "wrapped", "sudo rm -f x": None,
             "sudo ls -rf": None})
         self.kinds(rule_of(GREP_RECURSIVE), {
@@ -107,7 +107,7 @@ class ThroughWrappers(AstIsolated):
                                                        "sudo curl x": "wrapped", "echo $(curl x)": "wrapped"})
 
     def test_a_command_in_a_pipeline_stays_wrapped_whether_or_not_a_wrapper_is_involved(self) -> None:
-        rule = policy.with_defaults({"match": {"program": K}, "message": "m"})
+        rule = policy.Rule.from_json({"match": {"program": K}, "message": "m"})
         self.kinds(rule, {f"{K} x | head": "wrapped", f"sudo {K} x | head": "wrapped", f"{K} x": "direct",
                           f"sudo {K} x": "wrapped"})
 
@@ -167,7 +167,7 @@ class Units(AstIsolated):
             count[0] += 1
             return real(text, language)
 
-        rule = policy.with_defaults({"match": {"program": K}, "message": "m"})
+        rule = policy.Rule.from_json({"match": {"program": K}, "message": "m"})
         with mock.patch.object(scanner, "SgRoot", spy):
             matching.compute(command, {"r": rule}, wrappers.DEFAULTS)
         return count[0] - 1
@@ -272,7 +272,7 @@ class Text(AstIsolated):
         self.assertEqual((hit.kind, hit.start, hit.end), (Kind.DIRECT, 8, 8 + len(f"{K} x")))
 
     def test_a_wrapped_bare_name_after_a_syntax_error_tree_is_still_found(self) -> None:
-        rule = policy.with_defaults({"match": {"program": [K, "killall"]}, "message": "m"})
+        rule = policy.Rule.from_json({"match": {"program": [K, "killall"]}, "message": "m"})
         cases = {f"{{ ; }}; xargs -r {K}": "wrapped", "{ ; }; sudo killall": "wrapped", f"{{ ; }}; sudo -n {K}": "wrapped",
                  f"{{ ; }}; nohup {K}": "wrapped", f"{{ ; }}; {K}": "direct", f"{{ ; }}; sudo {K} x": "wrapped",
                  f"echo 'x; {K} y": None, f"echo {K} 'unterminated": None, f"{{ ; }}; echo {K}": None,

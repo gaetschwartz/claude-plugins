@@ -107,28 +107,23 @@ def compact(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
-def describe_match(match: dict[str, object], programs: list[str]) -> str:
+def describe_match(match: policy.Match) -> str:
     parts = []
-    if programs:
-        parts.append("program = " + words(programs))
+    if match.program:
+        parts.append("program = " + words(list(match.program)))
     for key in ("args", "regex"):
-        value = match.get(key)
-        if isinstance(value, str) and value:
+        if value := getattr(match, key):
             parts.append(f"{key} = {span(value)}")
-    if isinstance(match.get("ast"), dict) and match["ast"]:
-        parts.append(f"ast = {span(compact(match['ast']))}")
+    if match.ast:
+        parts.append(f"ast = {span(compact(match.ast))}")
     return "; ".join(parts) or "(no matcher)"
 
 
-def raw_matcher(match: dict[str, object]) -> str:
-    value = match.get("regex")
-    if isinstance(value, str) and value:
-        return value
-    patterns = policy.ast_patterns(match.get("ast"))
-    if patterns:
-        return " | ".join(patterns)
-    value = match.get("args")
-    return value if isinstance(value, str) else ""
+def raw_matcher(match: policy.Match) -> str:
+    if match.regex:
+        return match.regex
+    patterns = policy.ast_patterns(match.ast)
+    return " | ".join(patterns) if patterns else (match.args or "")
 
 
 def plural(n: int, word: str) -> str:
@@ -139,11 +134,11 @@ def kind_group(result: Result) -> str | None:
     return "direct" if result.matched else result.kind if result.kind == UNEVALUATED else None
 
 
-def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: str, scope: str, intent: str,
+def rule_card(rid: str, rule: policy.Rule, message: str, scope: str, intent: str,
               results: list[Result], notes: list[str], file: str = "") -> str:
-    action = str(rule.get("action"))
+    action = str(rule.action)
     head = [f"### {clean(rid)}", clean(action)]
-    if rule.get("retry") == "same-command":
+    if rule.retry is policy.Retry.SAME_COMMAND:
         head.append("retry same-command")
     head.append(scope)
     lines = [" · ".join(head)]
@@ -152,14 +147,12 @@ def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: s
     lines.append("")
     if intent:
         lines.append(f"**Intent** {prose(intent)}")
-    match = rule.get("match")
-    match = match if isinstance(match, dict) else {}
-    lines.append(f"**Match** {describe_match(match, programs)}")
+    lines.append(f"**Match** {describe_match(rule.match)}")
     lines.append(f"**Message** {prose(message)}")
 
     shown = [clean(r.cmd) for r in results]
     width = common_width(shown)
-    hit = "Warn" if action == "warn" else "Block"
+    hit = "Warn" if rule.action is policy.Action.WARN else "Block"
     for heading, glyph, wanted in ((hit, "✗", "direct"), ("Allow", "✓", None), ("Not evaluated", "?", UNEVALUATED)):
         group = [(text, r) for text, r in zip(shown, results) if kind_group(r) == wanted]
         if not group:
@@ -178,7 +171,7 @@ def rule_card(rid: str, rule: dict[str, object], programs: list[str], message: s
               else f"**Verified** matcher checked with `rule test`, {count}"]
     if notes:
         lines.append(f"**Note** {prose('; '.join(notes))}")
-    raw = raw_matcher(match)
+    raw = raw_matcher(rule.match)
     if raw:
         lines.append(f"**Raw** {span(raw)}")
     return "\n".join(lines)

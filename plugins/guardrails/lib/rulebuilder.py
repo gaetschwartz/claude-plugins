@@ -38,14 +38,13 @@ def orphan_name(names: Sequence[str]) -> Rule:
     return {"any": [{"kind": "command_name", "regex": found, "inside": {"kind": "ERROR"}}, bare]}
 
 
-def shorthand(match: dict[str, Any]) -> Rule | None:
+def shorthand(match: policy.Match) -> Rule | None:
     """The rule for program/args, or None when the rule has no program."""
-    programs = policy.programs_of({"match": match})
-    if not programs:
+    if not match.program:
         return None
-    extra: list[Rule] = [{"regex": match["args"]}] if match.get("args") else []
-    rule: Rule = {"all": [command_named(programs), *extra]}
-    return rule if extra else {"any": [rule, orphan_name(programs)]}
+    extra: list[Rule] = [{"regex": match.args}] if match.args else []
+    rule: Rule = {"all": [command_named(match.program), *extra]}
+    return rule if extra else {"any": [rule, orphan_name(match.program)]}
 
 
 def widen(rule: Any) -> Any:
@@ -122,9 +121,9 @@ def loosened(node: Any) -> Any:
 
 def found_rule(rule: policy.Rule, plain: bool) -> Rule | None:
     """Where this rule matches (`plain`: the ast rule exactly as written)."""
-    ast = policy.ast_of(rule)
+    ast = rule.match.ast
     tolerant = None if plain or not ast else loosened(ast)
-    parts = [part for part in (shorthand(policy.view(rule, "match")), widen(tolerant or ast) if ast else None) if part]
+    parts = [part for part in (shorthand(rule.match), widen(tolerant or ast) if ast else None) if part]
     if not parts:
         return None
     return parts[0] if len(parts) == 1 else {"any": parts}
@@ -141,5 +140,5 @@ def configs_of(rule: policy.Rule) -> tuple[Config, ...]:
 
 def regex_config(rule: policy.Rule) -> Config | None:
     """The config that finds `match.regex` in the whole command's text (ast-grep's regex engine runs in linear time)."""
-    pattern = policy.view(rule, "match").get("regex")
-    return {"rule": {"kind": "program", "regex": pattern}} if isinstance(pattern, str) and pattern else None
+    pattern = rule.match.regex
+    return {"rule": {"kind": "program", "regex": pattern}} if pattern else None

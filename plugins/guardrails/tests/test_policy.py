@@ -9,6 +9,10 @@ from helpers import Isolated
 import policy
 
 
+def rules_of(managed: Any, g: Any, p: Any) -> dict[str, policy.Rule]:
+    return policy.effective_rules(managed, g, p)
+
+
 def rule(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {"match": {"program": "strings"}, "message": "use docs"}
     base.update(overrides)
@@ -17,8 +21,8 @@ def rule(**overrides: Any) -> dict[str, Any]:
 
 class Validate(unittest.TestCase):
     def test_minimal_rule_is_valid(self) -> None:
-        policy.validate_rule(rule())
-        policy.validate_rule(rule(match={"ast": {"kind": "command"}}, requires=["rg"], messageShort="s"))
+        policy.Rule.from_json(rule())
+        policy.Rule.from_json(rule(match={"ast": {"kind": "command"}}, requires=["rg"], messageShort="s"))
 
     def test_rejects_malformed(self) -> None:
         bad: list[Any] = [
@@ -44,63 +48,62 @@ class Validate(unittest.TestCase):
         ]
         for r in bad:
             with self.subTest(rule=r), self.assertRaises(policy.Invalid):
-                policy.validate_rule(r)
+                policy.Rule.from_json(r)
 
 
 class Layering(unittest.TestCase):
     def test_project_can_tighten(self) -> None:
         g = {"rules": {"r": rule(action="warn", retry="same-command", modes=["re", "ops"])}}
         p = {"rules": {"r": {"action": "deny", "retry": "none", "modes": ["re"]}}}
-        eff = policy.effective_rules({}, g, p)["r"]
-        self.assertEqual((eff["action"], eff["retry"], eff["modes"]), ("deny", "none", ["re"]))
+        eff = rules_of({}, g, p)["r"]
+        self.assertEqual((eff.action, eff.retry, eff.modes), ("deny", "none", ("re",)))
 
     def test_project_cannot_relax(self) -> None:
         g = {"rules": {"r": rule(action="deny", retry="none", modes=["re"])}}
         p = {"rules": {"r": {"action": "warn", "retry": "same-command", "enabled": False, "modes": ["re", "x"]}}}
-        eff = policy.effective_rules({}, g, p)["r"]
-        self.assertEqual((eff["action"], eff["retry"], eff["enabled"], eff["modes"]), ("deny", "none", True, ["re"]))
+        eff = rules_of({}, g, p)["r"]
+        self.assertEqual((eff.action, eff.retry, eff.enabled, eff.modes), ("deny", "none", True, ("re",)))
 
     def test_project_can_reenable(self) -> None:
         g = {"rules": {"r": rule(enabled=False)}}
-        self.assertTrue(policy.effective_rules({}, g, {"rules": {"r": {"enabled": True}}})["r"]["enabled"])
+        self.assertTrue(rules_of({}, g, {"rules": {"r": {"enabled": True}}})["r"].enabled)
 
     def test_project_replaces_text_and_match(self) -> None:
         g = {"rules": {"r": rule()}}
-        eff = policy.effective_rules({}, g, {"rules": {"r": {"message": "m2", "match": {"program": "nm"}}}})["r"]
-        self.assertEqual((eff["message"], eff["match"]), ("m2", {"program": "strings"}))
+        eff = rules_of({}, g, {"rules": {"r": {"message": "m2", "match": {"program": "nm"}}}})["r"]
+        self.assertEqual((eff.message, eff.match), ("m2", policy.Match(("strings",))))
 
     def test_project_requires_override_ignored(self) -> None:
         g = {"rules": {"r": rule(requires=["rg"])}}
-        eff = policy.effective_rules({}, g, {"rules": {"r": {"requires": ["fd"]}}})["r"]
-        self.assertEqual(eff["requires"], ["rg"])
+        eff = rules_of({}, g, {"rules": {"r": {"requires": ["fd"]}}})["r"]
+        self.assertEqual(eff.requires, ("rg",))
 
     def test_project_empty_message_falls_back_to_global(self) -> None:
         g = {"rules": {"r": rule(message="global text")}}
-        eff = policy.effective_rules({}, g, {"rules": {"r": {"message": ""}}})["r"]
-        self.assertEqual(eff["message"], "global text")
+        eff = rules_of({}, g, {"rules": {"r": {"message": ""}}})["r"]
+        self.assertEqual(eff.message, "global text")
 
     def test_project_only_rule_gets_defaults(self) -> None:
-        eff = policy.effective_rules({}, {}, {"rules": {"p": rule()}})["p"]
-        self.assertEqual((eff["action"], eff["retry"], eff["enabled"], eff["modes"]),
-                         ("deny", "none", True, []))
+        eff = rules_of({}, {}, {"rules": {"p": rule()}})["p"]
+        self.assertEqual((eff.action, eff.retry, eff.enabled, eff.modes), ("deny", "none", True, ()))
 
     def test_project_disabled_drops_project_entries_only(self) -> None:
         g = {"rules": {"r": rule(action="warn")}}
         p = {"enabled": False, "rules": {"r": {"action": "deny"}, "p": rule()}}
-        eff = policy.effective_rules({}, g, p)
+        eff = rules_of({}, g, p)
         self.assertEqual(sorted(eff), ["r"])
-        self.assertEqual(eff["r"]["action"], "warn")
+        self.assertEqual(eff["r"].action, "warn")
 
     def test_malformed_tables_ignored(self) -> None:
-        self.assertEqual(policy.effective_rules({}, {"rules": ["x"]}, {"rules": {"a": "junk"}}), {})
+        self.assertEqual(rules_of({}, {"rules": ["x"]}, {"rules": {"a": "junk"}}), {})
 
 
 class ManagedLayering(unittest.TestCase):
     MANAGED: ClassVar[dict[str, Any]] = {"rules": {"r": rule(action="deny", retry="none", requires=["rg"], modes=["re"])},
                "modes": {"re": {"description": "m", "agentMayEnable": False}}}
 
-    def eff(self, g: Any = None, p: Any = None) -> dict[str, Any]:
-        return policy.effective_rules(self.MANAGED, g or {}, p or {})["r"]
+    def eff(self, g: Any = None, p: Any = None) -> policy.Rule:
+        return rules_of(self.MANAGED, g or {}, p or {})["r"]
 
     def test_each_loosening_is_ignored_on_its_own(self) -> None:
         for field, value in (("action", "warn"), ("retry", "same-command"), ("enabled", False),
@@ -116,43 +119,43 @@ class ManagedLayering(unittest.TestCase):
                    "modes": {"re": {}, "ops": {}}}
         g = {"rules": {"r": {"action": "deny", "retry": "none", "modes": ["re"], "enabled": True, "message": "g",
                              "description": "gd"}}}
-        eff = policy.effective_rules(managed, g, {"rules": {"r": {"messageShort": "s"}}})["r"]
-        self.assertEqual((eff["action"], eff["retry"], eff["modes"], eff["enabled"]), ("deny", "none", ["re"], True))
-        self.assertEqual((eff["message"], eff["messageShort"], eff["description"]), ("use docs", "short", "d"))
+        eff = rules_of(managed, g, {"rules": {"r": {"messageShort": "s"}}})["r"]
+        self.assertEqual((eff.action, eff.retry, eff.modes, eff.enabled), ("deny", "none", ("re",), True))
+        self.assertEqual((eff.message, eff.message_short, eff.description), ("use docs", "short", "d"))
 
     def test_non_managed_rules_can_still_be_reworded(self) -> None:
-        eff = policy.effective_rules({}, {"rules": {"r": rule()}}, {"rules": {"r": {"message": "p"}}})["r"]
-        self.assertEqual(eff["message"], "p")
+        eff = rules_of({}, {"rules": {"r": rule()}}, {"rules": {"r": {"message": "p"}}})["r"]
+        self.assertEqual(eff.message, "p")
 
     def test_modes_not_declared_in_managed_are_dropped_from_managed_rules(self) -> None:
         managed = {"rules": {"r": rule(modes=["re", "ghost"])}, "modes": {"re": {}}}
         lower = {"modes": {"ghost": {"active": True}}, "rules": {"r": {"modes": ["re", "ghost"]}}}
         for layers in ((lower, {}), ({}, lower)):
-            self.assertEqual(policy.effective_rules(managed, *layers)["r"]["modes"], ["re"])
-        self.assertEqual(policy.effective_rules({"rules": {"r": rule(modes=["re"])}}, {}, {})["r"]["modes"], [])
+            self.assertEqual(rules_of(managed, *layers)["r"].modes, ("re",))
+        self.assertEqual(rules_of({"rules": {"r": rule(modes=["re"])}}, {}, {})["r"].modes, ())
 
     def test_rule_without_modes_can_never_gain_any(self) -> None:
         managed = {"rules": {"r": rule()}}
         for lower in ({"rules": {"r": {"modes": ["re"]}}}, {"rules": {"r": {"modes": []}}}):
             for layers in ((lower, {}), ({}, lower)):
-                self.assertEqual(policy.effective_rules(managed, *layers)["r"]["modes"], [])
+                self.assertEqual(rules_of(managed, *layers)["r"].modes, ())
 
     def test_lower_layers_keep_their_own_rules(self) -> None:
-        eff = policy.effective_rules(self.MANAGED, {"rules": {"g": rule()}}, {"rules": {"p": rule()}})
+        eff = rules_of(self.MANAGED, {"rules": {"g": rule()}}, {"rules": {"p": rule()}})
         self.assertEqual(sorted(eff), ["g", "p", "r"])
 
     def test_invalid_override_falls_back_to_managed(self) -> None:
-        self.assertEqual(self.eff({"rules": {"r": {"message": ""}}})["message"], "use docs")
+        self.assertEqual(self.eff({"rules": {"r": {"message": ""}}}).message, "use docs")
 
     def test_project_switched_off_still_leaves_managed(self) -> None:
-        eff = policy.effective_rules(self.MANAGED, {}, {"enabled": False, "rules": {"p": rule()}})
+        eff = rules_of(self.MANAGED, {}, {"enabled": False, "rules": {"p": rule()}})
         self.assertEqual(sorted(eff), ["r"])
 
     def test_global_tightening_carries_to_project_fold(self) -> None:
         managed = {"rules": {"r": rule(action="warn")}}
-        eff = policy.effective_rules(managed, {"rules": {"r": {"action": "deny"}}},
+        eff = rules_of(managed, {"rules": {"r": {"action": "deny"}}},
                                      {"rules": {"r": {"action": "warn"}}})["r"]
-        self.assertEqual(eff["action"], "deny")
+        self.assertEqual(eff.action, "deny")
 
     def test_origins(self) -> None:
         m, g, p = {"rules": {"a": rule()}}, {"rules": {"a": {}, "b": rule()}}, {"rules": {"b": {}, "c": rule()}}
@@ -169,47 +172,47 @@ class ManagedModes(unittest.TestCase):
     def test_agent_permission_cannot_be_flipped_on(self) -> None:
         flip = {"modes": {"re": {"agentMayEnable": True}}}
         for layers in ((flip, {}), ({}, flip), (flip, flip)):
-            self.assertFalse(policy.effective_modes(self.MANAGED, *layers)["re"]["agentMayEnable"])
+            self.assertFalse(policy.effective_modes(self.MANAGED, *layers)["re"].agent_may_enable)
 
     def test_lower_layers_can_forbid_agents(self) -> None:
         g = {"modes": {"ops": {"agentMayEnable": False}}}
-        self.assertFalse(policy.effective_modes(self.MANAGED, g, {})["ops"]["agentMayEnable"])
+        self.assertFalse(policy.effective_modes(self.MANAGED, g, {})["ops"].agent_may_enable)
 
     def test_active_cannot_be_switched_off(self) -> None:
         off = {"modes": {"always": {"active": False}}}
         for layers in ((off, {}), ({}, off), (off, off)):
-            self.assertTrue(policy.effective_modes(self.MANAGED, *layers)["always"]["active"])
+            self.assertTrue(policy.effective_modes(self.MANAGED, *layers)["always"].active)
 
     def test_active_managed_mode_is_always_on(self) -> None:
         modes = policy.effective_modes(self.MANAGED, {"modes": {"always": {"active": False}}}, {})
-        self.assertEqual(policy.active_modes(modes, {"modes": {}}), {"always": {"by": "user",
-                                                                             "reason": "persistently active"}})
+        self.assertEqual(policy.active_modes(modes, policy.Session()),
+                         {"always": policy.Activation(policy.Actor.USER, "persistently active")})
 
     def test_global_can_add_modes_and_switch_managed_ones_on(self) -> None:
         g = {"modes": {"mine": {"agentMayEnable": True}, "re": {"active": True}}}
         modes = policy.effective_modes(self.MANAGED, g, {})
-        self.assertTrue(modes["mine"]["agentMayEnable"])
-        self.assertEqual((modes["re"]["active"], modes["re"]["description"]), (True, "m"))
+        self.assertTrue(modes["mine"].agent_may_enable)
+        self.assertEqual((modes["re"].active, modes["re"].description), (True, "m"))
 
     def test_project_cannot_switch_a_managed_mode_on(self) -> None:
         p = {"modes": {"re": {"active": True}, "mine": {"active": True}}}
         for g in ({}, {"modes": {"re": {"active": False}}}):
             modes = policy.effective_modes(self.MANAGED, g, p)
-            self.assertFalse(modes["re"]["active"])
-            self.assertTrue(modes["mine"]["active"])
+            self.assertFalse(modes["re"].active)
+            self.assertTrue(modes["mine"].active)
 
     def test_project_activation_of_a_global_mode_still_counts(self) -> None:
         modes = policy.effective_modes({}, {"modes": {"m": {}}}, {"modes": {"m": {"active": True}}})
-        self.assertTrue(modes["m"]["active"])
+        self.assertTrue(modes["m"].active)
 
     def test_managed_and_global_activation_survive_a_project_layer(self) -> None:
         p = {"modes": {"re": {"active": False}}}
         g = {"modes": {"re": {"active": True}}}
-        self.assertTrue(policy.effective_modes(self.MANAGED, g, p)["re"]["active"])
+        self.assertTrue(policy.effective_modes(self.MANAGED, g, p)["re"].active)
 
     def test_agent_session_activation_respects_managed_lock(self) -> None:
         modes = policy.effective_modes(self.MANAGED, {"modes": {"re": {"agentMayEnable": True}}}, {})
-        session = {"modes": {"re": {"by": "agent"}, "ops": {"by": "agent"}}}
+        session = policy.Session.from_json({"modes": {"re": {"by": "agent"}, "ops": {"by": "agent"}}})
         self.assertEqual(sorted(policy.active_modes(modes, session)), ["always", "ops"])
 
 
@@ -249,10 +252,10 @@ class ManagedLayer(unittest.TestCase):
         layer, problems = policy.managed_layer([("a", first), ("b", second)])
         self.assertEqual(problems, [])
         self.assertFalse(layer["modes"]["m"]["active"])
-        rules = policy.effective_rules(layer, {}, {})
+        rules = rules_of(layer, {}, {})
         modes = policy.effective_modes(layer, {}, {})
-        self.assertEqual(policy.active_modes(modes, {}), {})
-        self.assertEqual(policy.modes_of(rules["r"]), ["m"])
+        self.assertEqual(policy.active_modes(modes, policy.Session()), {})
+        self.assertEqual(rules["r"].modes, ("m",))
 
     def test_a_mode_first_declared_by_a_source_keeps_its_own_active(self) -> None:
         layer, _ = policy.managed_layer([("a", {}), ("b", {"modes": {"m": {"active": True}}})])
@@ -262,14 +265,14 @@ class ManagedLayer(unittest.TestCase):
         first = {"rules": {"r": rule()}, "modes": {"m": {}}}
         second = {"rules": {"r": rule(modes=["m"])}, "modes": {"m": {}}}
         layer, _ = policy.managed_layer([("a", first), ("b", second)])
-        self.assertEqual(policy.modes_of(layer["rules"]["r"]), [])
+        self.assertEqual(policy.json_modes(layer["rules"]["r"]), [])
 
     def test_later_source_cannot_make_an_undeclared_mode_suspend_an_earlier_rule(self) -> None:
         first = {"rules": {"r": rule(modes=["m"])}}
         second = {"modes": {"m": {"active": True}}}
         layer, problems = policy.managed_layer([("a", first), ("b", second)])
         self.assertTrue(any("rule r lists mode 'm'" in p for p in problems))
-        self.assertEqual(policy.modes_of(layer["rules"]["r"]), [])
+        self.assertEqual(policy.json_modes(layer["rules"]["r"]), [])
 
     def test_non_dict_state_is_tolerated(self) -> None:
         self.assertEqual(policy.managed_layer([("/p", [])])[0], {"rules": {}, "modes": {}})
@@ -283,29 +286,28 @@ class Modes(unittest.TestCase):
                        "ops": {"agentMayEnable": True},
                        "local": {"agentMayEnable": True}}}
         m = policy.effective_modes({}, g, p)
-        self.assertEqual(m["re"], {"description": "g", "agentMayEnable": False, "active": True})
-        self.assertFalse(m["ops"]["agentMayEnable"])
-        self.assertTrue(m["ops"]["active"])
-        self.assertTrue(m["local"]["agentMayEnable"])
+        self.assertEqual(m["re"], policy.Mode("g", False, True))
+        self.assertFalse(m["ops"].agent_may_enable)
+        self.assertTrue(m["ops"].active)
+        self.assertTrue(m["local"].agent_may_enable)
 
     def test_active_modes_scopes(self) -> None:
-        modes = {"re": {"description": "", "agentMayEnable": True, "active": False},
-                 "ops": {"description": "", "agentMayEnable": False, "active": True},
-                 "inc": {"description": "", "agentMayEnable": False, "active": False}}
-        session = {"modes": {"re": {"by": "agent", "reason": "user said RE"},
-                             "inc": {"by": "agent", "reason": "x"},
-                             "ghost": {"by": "user"}}}
+        modes = {"re": policy.Mode("", True, False), "ops": policy.Mode("", False, True),
+                 "inc": policy.Mode("", False, False)}
+        session = policy.Session.from_json({"modes": {"re": {"by": "agent", "reason": "user said RE"},
+                                                      "inc": {"by": "agent", "reason": "x"},
+                                                      "ghost": {"by": "user"}}})
         active = policy.active_modes(modes, session)
         self.assertEqual(sorted(active), ["ops", "re"])
-        self.assertEqual(active["re"]["by"], "agent")
+        self.assertEqual(active["re"].by, "agent")
 
     def test_user_session_activation_needs_no_agent_permission(self) -> None:
-        modes = {"inc": {"description": "", "agentMayEnable": False, "active": False}}
-        self.assertIn("inc", policy.active_modes(modes, {"modes": {"inc": {"by": "user"}}}))
+        modes = {"inc": policy.Mode()}
+        self.assertIn("inc", policy.active_modes(modes, policy.Session.from_json({"modes": {"inc": {"by": "user"}}})))
 
     def test_malformed_session_ignored(self) -> None:
-        modes = {"re": {"description": "", "agentMayEnable": True, "active": False}}
-        self.assertEqual(policy.active_modes(modes, {"modes": "junk"}), {})
+        modes = {"re": policy.Mode("", True, False)}
+        self.assertEqual(policy.active_modes(modes, policy.Session.from_json({"modes": "junk"})), {})
 
 
 class Rendering(Isolated):
@@ -325,6 +327,6 @@ class Rendering(Isolated):
 
     def test_requires(self) -> None:
         os.environ["PATH"] = self.make_tool("fdfind")
-        self.assertTrue(policy.requirements_met(rule(requires=["fd", "fdfind"])))
-        self.assertFalse(policy.requirements_met(rule(requires=["nope"])))
-        self.assertTrue(policy.requirements_met(rule()))
+        self.assertTrue(policy.requirements_met(policy.Rule.from_json(rule(requires=["fd", "fdfind"]))))
+        self.assertFalse(policy.requirements_met(policy.Rule.from_json(rule(requires=["nope"]))))
+        self.assertTrue(policy.requirements_met(policy.Rule.from_json(rule())))

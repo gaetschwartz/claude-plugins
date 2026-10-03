@@ -21,7 +21,7 @@ def nest(command: str, levels: int) -> str:
 
 
 def rule_of(**match: Any) -> policy.Rule:
-    return policy.with_defaults({"match": match, "message": "m"})
+    return policy.Rule.from_json({"match": match, "message": "m"})
 
 
 class Matching(AstIsolated):
@@ -90,7 +90,7 @@ class Matching(AstIsolated):
 
     def test_args_alone_and_with_regex_stay_alternatives_only_where_documented(self) -> None:
         with self.assertRaises(policy.Invalid):
-            policy.validate_rule({"match": {"args": "x"}, "message": "m"})
+            policy.Rule.from_json({"match": {"args": "x"}, "message": "m"})
         rule = rule_of(program="kill", regex="zzz")
         self.kinds(rule, {"kill 1": "direct", "echo zzz": "direct", "ls": None})
 

@@ -12,9 +12,7 @@ import policy
 
 
 def matches(rule: dict, command: str) -> bool:
-    rule = policy.with_defaults(rule)
-    policy.validate_rule(rule)
-    return matching.evaluate(command, {"r": rule}).kinds["r"] is not None
+    return matching.evaluate(command, {"r": policy.Rule.from_json(rule)}).kinds["r"] is not None
 
 
 class MatchingClaims(AstIsolated):

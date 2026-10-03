@@ -1,26 +1,39 @@
-"""Rule and mode schema: validation, managed/global/project layering, matching and message rendering."""
+"""The typed rule, mode and session model: parsing, managed/global/project layering and message rendering."""
 
 from __future__ import annotations
 
 import json
 import re
-from collections.abc import Sequence
-from typing import Any
+from collections.abc import Mapping, Sequence
+from dataclasses import dataclass, field, replace
+from enum import StrEnum
+from typing import Any, Self
 
 import wrappers as wrapper_table
 
-Rule = dict[str, Any]
-Mode = dict[str, Any]
-
-ACTIONS = ("deny", "warn")
-RETRIES = ("none", "same-command")
 MAX_AST_BYTES = 16384  # bounds nesting too: ast-grep overflows its stack past about 4000 levels
 MATCH_KEYS = ("program", "args", "regex", "ast")
+LAYERS = ("managed", "global", "project")
 PLACEHOLDER = re.compile(r"\{which:([^{}]+)\}")
 
 
 class Invalid(Exception):
     """A rule, mode or CLI argument is malformed."""
+
+
+class Action(StrEnum):
+    DENY = "deny"
+    WARN = "warn"
+
+
+class Retry(StrEnum):
+    NONE = "none"
+    SAME_COMMAND = "same-command"
+
+
+class Actor(StrEnum):
+    USER = "user"
+    AGENT = "agent"
 
 
 def view(mapping: object, key: str) -> dict[str, Any]:
@@ -29,29 +42,185 @@ def view(mapping: object, key: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def programs_of(rule: Rule) -> list[str]:
-    program = view(rule, "match").get("program")
-    if isinstance(program, str):
-        return [program]
-    return [p for p in program if isinstance(p, str)] if isinstance(program, list) else []
+def text_list(value: object, what: str, *, required: bool = False) -> tuple[str, ...]:
+    if not (isinstance(value, list) and all(isinstance(x, str) and x for x in value)) or (required and not value):
+        raise Invalid(f"'{what}' must be a {'non-empty ' if required else ''}list of "
+                      f"{'binary' if what == 'requires' else 'mode'} names")
+    return tuple(value)
 
 
-def modes_of(rule: Rule) -> list[str]:
-    modes = rule.get("modes")
+def json_modes(raw: object) -> list[str]:
+    """The mode names a raw rule entry lists (for entries that are not parsed, such as a preset's)."""
+    modes = raw.get("modes") if isinstance(raw, dict) else None
     return [m for m in modes if isinstance(m, str)] if isinstance(modes, list) else []
 
 
-def _str_list(value: object) -> bool:
-    return isinstance(value, list) and all(isinstance(x, str) and x for x in value)
+@dataclass(frozen=True, slots=True)
+class Match:
+    program: tuple[str, ...] = ()
+    args: str | None = None
+    regex: str | None = None
+    ast: dict[str, Any] | None = None
+
+    @classmethod
+    def from_json(cls, raw: object) -> Self:
+        if not isinstance(raw, dict) or not any(raw.get(k) for k in ("program", "regex", "ast")):
+            raise Invalid("'match' needs at least one of 'program', 'regex', 'ast'")
+        if unknown := set(raw) - set(MATCH_KEYS):
+            raise Invalid(f"unknown match keys: {', '.join(sorted(unknown))}")
+        program = raw.get("program")
+        names = [program] if isinstance(program, str) else program
+        if program is not None and not (isinstance(names, list) and names
+                                        and all(wrapper_table.is_command_name(n) for n in names)):
+            raise Invalid("'match.program' must be a command name or a list of them (no spaces or '/')")
+        ast = raw.get("ast")
+        if "ast" in raw:
+            if not isinstance(ast, dict) or not ast:
+                raise Invalid("'match.ast' must be a non-empty object")
+            if (size := ast_size(ast)) > MAX_AST_BYTES:
+                raise Invalid(f"'match.ast' is {size} bytes, over the {MAX_AST_BYTES // 1024} KiB limit; split it into rules")
+        for key in ("args", "regex"):
+            if key in raw and not isinstance(raw[key], str):
+                raise Invalid(f"'match.{key}' must be a string")
+        return cls(tuple(names or ()), raw.get("args"), raw.get("regex"), ast)
+
+    def to_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        if self.program:
+            out["program"] = list(self.program)
+        for key in ("args", "regex", "ast"):
+            if getattr(self, key) is not None:
+                out[key] = getattr(self, key)
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class Rule:
+    match: Match
+    message: str
+    action: Action = Action.DENY
+    retry: Retry = Retry.NONE
+    enabled: bool = True
+    modes: tuple[str, ...] = ()
+    requires: tuple[str, ...] = ()
+    message_short: str | None = None
+    description: str | None = None
+
+    @classmethod
+    def from_json(cls, raw: object) -> Self:
+        if not isinstance(raw, dict):
+            raise Invalid("a rule must be a JSON object")
+        message = raw.get("message")
+        if not isinstance(message, str) or not message.strip():
+            raise Invalid("'message' is required")
+        if "messageShort" in raw and not isinstance(raw["messageShort"], str):
+            raise Invalid("'messageShort' must be a string")
+        match = Match.from_json(raw.get("match"))
+        try:
+            action, retry = Action(raw.get("action", "deny")), Retry(raw.get("retry", "none"))
+        except ValueError:
+            raise Invalid(f"'action' must be one of {', '.join(Action)} and 'retry' one of "
+                          f"{', '.join(Retry)}") from None
+        modes = text_list(raw.get("modes", []), "modes")
+        requires = text_list(raw["requires"], "requires", required=True) if "requires" in raw else ()
+        if "enabled" in raw and not isinstance(raw["enabled"], bool):
+            raise Invalid("'enabled' must be true or false")
+        description = raw.get("description")
+        return cls(match, message, action, retry, raw.get("enabled", True), modes, requires, raw.get("messageShort"),
+                   description if isinstance(description, str) else None)
+
+    def to_json(self) -> dict[str, Any]:
+        out: dict[str, Any] = {"match": self.match.to_json(), "message": self.message, "action": str(self.action),
+                               "retry": str(self.retry), "enabled": self.enabled, "modes": list(self.modes)}
+        for key, value in (("requires", list(self.requires)), ("messageShort", self.message_short),
+                           ("description", self.description)):
+            if value:
+                out[key] = value
+        return out
+
+
+@dataclass(frozen=True, slots=True)
+class Mode:
+    description: str = ""
+    agent_may_enable: bool = False
+    active: bool = False
+
+    @classmethod
+    def from_json(cls, raw: Mapping[str, Any]) -> Self:
+        return cls(str(raw.get("description", "")), raw.get("agentMayEnable") is True, raw.get("active") is True)
+
+    def tightened_by(self, override: Mapping[str, Any], trust_active: bool = True) -> Self:
+        return replace(self, description=str(override.get("description") or self.description),
+                       agent_may_enable=self.agent_may_enable and override.get("agentMayEnable", True) is not False,
+                       active=self.active or (trust_active and override.get("active") is True))
+
+
+@dataclass(frozen=True, slots=True)
+class Activation:
+    """How a mode came to be on: who said so and why."""
+
+    by: Actor
+    reason: str | None = None
+    at: str | None = None
+
+    @classmethod
+    def from_json(cls, raw: Mapping[str, Any]) -> Self:
+        reason, at = raw.get("reason"), raw.get("at")
+        return cls(Actor.AGENT if raw.get("by") == "agent" else Actor.USER, reason if isinstance(reason, str) else None,
+                   at if isinstance(at, str) else None)
+
+    def to_json(self) -> dict[str, str]:
+        return {key: value for key, value in (("by", str(self.by)), ("at", self.at), ("reason", self.reason)) if value}
+
+
+@dataclass(frozen=True, slots=True)
+class EngineFailure:
+    kind: str
+    at: str
+    reason: str
+
+
+@dataclass(slots=True)
+class Session:
+    """What the hook remembers about one session; every list is a set of things already said or acknowledged."""
+
+    reported: list[str] = field(default_factory=list)
+    shown: list[str] = field(default_factory=list)
+    acknowledged: list[str] = field(default_factory=list)
+    warned: list[str] = field(default_factory=list)
+    reported_at: dict[str, float] = field(default_factory=dict)
+    modes: dict[str, Activation] = field(default_factory=dict)
+    engine_failure: EngineFailure | None = None
+
+    @classmethod
+    def from_json(cls, raw: object) -> Self:
+        def strings(key: str) -> list[str]:
+            value = raw.get(key) if isinstance(raw, dict) else None
+            return [x for x in value if isinstance(x, str)] if isinstance(value, list) else []
+
+        failure = view(raw, "engineFailure")
+        return cls(strings("reported"), strings("shown"), strings("acknowledged"), strings("warned"),
+                   {k: float(v) for k, v in view(raw, "reportedAt").items() if isinstance(v, (int, float))},
+                   {k: Activation.from_json(v) for k, v in view(raw, "modes").items() if isinstance(v, dict)},
+                   EngineFailure(str(failure.get("kind", "")), str(failure["at"]), str(failure.get("reason", "")))
+                   if failure.get("at") else None)
+
+    def to_json(self, seen_at: str) -> dict[str, Any]:
+        out: dict[str, Any] = {"seenAt": seen_at}
+        for key, items in (("reported", self.reported), ("shown", self.shown), ("acknowledged", self.acknowledged),
+                           ("warned", self.warned), ("reportedAt", self.reported_at)):
+            if items:
+                out[key] = items
+        if self.modes:
+            out["modes"] = {name: record.to_json() for name, record in self.modes.items()}
+        if self.engine_failure:
+            out["engineFailure"] = {"kind": self.engine_failure.kind, "at": self.engine_failure.at,
+                                    "reason": self.engine_failure.reason}
+        return out
 
 
 def ast_size(ast: object) -> int:
     return len(json.dumps(ast))
-
-
-def ast_of(rule: Rule) -> dict[str, Any] | None:
-    ast = view(rule, "match").get("ast")
-    return ast if isinstance(ast, dict) else None
 
 
 def ast_patterns(node: object) -> list[str]:
@@ -69,119 +238,93 @@ def ast_patterns(node: object) -> list[str]:
     return out
 
 
-def validate_rule(rule: object) -> None:
-    if not isinstance(rule, dict):
-        raise Invalid("a rule must be a JSON object")
-    message = rule.get("message")
-    if not isinstance(message, str) or not message.strip():
-        raise Invalid("'message' is required")
-    if "messageShort" in rule and not isinstance(rule["messageShort"], str):
-        raise Invalid("'messageShort' must be a string")
-    match = rule.get("match")
-    if not isinstance(match, dict) or not any(match.get(k) for k in ("program", "regex", "ast")):
-        raise Invalid("'match' needs at least one of 'program', 'regex', 'ast'")
-    unknown = set(match) - set(MATCH_KEYS)
-    if unknown:
-        raise Invalid(f"unknown match keys: {', '.join(sorted(unknown))}")
-    program = match.get("program")
-    names = [program] if isinstance(program, str) else program
-    if program is not None and not (isinstance(names, list) and names
-                                    and all(wrapper_table.is_command_name(n) for n in names)):
-        raise Invalid("'match.program' must be a command name or a list of them (no spaces or '/')")
-    if "ast" in match:
-        if not isinstance(match["ast"], dict) or not match["ast"]:
-            raise Invalid("'match.ast' must be a non-empty object")
-        size = ast_size(match["ast"])
-        if size > MAX_AST_BYTES:
-            raise Invalid(f"'match.ast' is {size} bytes, over the {MAX_AST_BYTES // 1024} KiB limit; split it into rules")
-    for key in ("args", "regex"):
-        if key in match and not isinstance(match[key], str):
-            raise Invalid(f"'match.{key}' must be a string")
-    if rule.get("action", "deny") not in ACTIONS:
-        raise Invalid(f"'action' must be one of {', '.join(ACTIONS)}")
-    if rule.get("retry", "none") not in RETRIES:
-        raise Invalid(f"'retry' must be one of {', '.join(RETRIES)}")
-    if not _str_list(rule.get("modes", [])):
-        raise Invalid("'modes' must be a list of mode names")
-    if "requires" in rule and not (_str_list(rule["requires"]) and rule["requires"]):
-        raise Invalid("'requires' must be a non-empty list of binary names")
-    if "enabled" in rule and not isinstance(rule["enabled"], bool):
-        raise Invalid("'enabled' must be true or false")
+def merge_rule(base: Rule, override: Mapping[str, Any], reword: bool = True) -> Rule:
+    """Layer a lower-precedence entry onto a rule from a higher layer; only tightening changes apply.
 
-
-def with_defaults(rule: Rule) -> Rule:
-    out = dict(rule)
-    out.setdefault("enabled", True)
-    out.setdefault("action", "deny")
-    out.setdefault("retry", "none")
-    out.setdefault("modes", [])
-    return out
-
-
-def merge_rule(base: Rule, override: Rule, reword: bool = True) -> Rule:
-    """Layer a lower-precedence entry onto a defaulted rule from a higher layer; only tightening changes apply.
-
-    An override can never change what the rule matches: 'match' and 'requires' are ignored, and a
-    merge that fails validation falls back to the base rule unchanged. With reword=False the texts
+    An override can never change what the rule matches: 'match' and 'requires' are ignored, and an
+    override whose texts are malformed leaves the base rule unchanged. With reword=False the texts
     are ignored too.
     """
-    out = dict(base)
-    for key in ("message", "messageShort", "description") if reword else ():
-        if key in override:
-            out[key] = override[key]
+    changes: dict[str, Any] = {}
+    if reword:
+        texts = {attribute: override[key] for key, attribute in (("message", "message"), ("messageShort", "message_short"),
+                                                                 ("description", "description")) if key in override}
+        if not all(isinstance(text, str) for text in texts.values()) or not str(texts.get("message", base.message)).strip():
+            return base
+        changes.update(texts)
     if override.get("action") == "deny":
-        out["action"] = "deny"
+        changes["action"] = Action.DENY
     if override.get("retry") == "none":
-        out["retry"] = "none"
+        changes["retry"] = Retry.NONE
     if override.get("enabled") is True:
-        out["enabled"] = True
+        changes["enabled"] = True
     if isinstance(override.get("modes"), list):
-        out["modes"] = [m for m in modes_of(base) if m in override["modes"]]
-    try:
-        validate_rule(out)
-    except Invalid:
-        return base
-    return out
+        changes["modes"] = tuple(m for m in base.modes if m in override["modes"])
+    return replace(base, **changes)
 
 
 def _entries(state: object, key: str) -> dict[str, dict[str, Any]]:
     return {str(k): v for k, v in view(state, key).items() if isinstance(v, dict)}
 
 
-LAYERS = ("managed", "global", "project")
-
-
 def origins(key: str, managed: object, global_state: object, project_state: object) -> dict[str, list[str]]:
     """Entry id (of 'rules' or 'modes') → the layers that define it, highest precedence first."""
     out: dict[str, list[str]] = {}
-    for layer, state in zip(LAYERS, (managed, global_state, project_state)):
+    for layer, state in zip(LAYERS, (managed, global_state, project_state), strict=True):
         for name in _entries(state, key):
             out.setdefault(name, []).append(layer)
     return out
 
 
-def effective_rules(managed: object, global_state: object, project_state: object) -> dict[str, Rule]:
+@dataclass(frozen=True, slots=True)
+class Effective:
+    rules: dict[str, Rule]
+    problems: dict[str, str]
+
+
+def project_enabled(project_state: object) -> bool:
+    return not isinstance(project_state, dict) or project_state.get("enabled", True) is not False
+
+
+def effective(managed: object, global_state: object, project_state: object) -> Effective:
     """Fold the layers in precedence order; each later layer may only tighten what an earlier one defined.
 
-    A managed rule keeps its own texts, and only suspends for modes the managed layer declares.
+    A managed rule keeps its own texts, and only suspends for modes the managed layer declares. An entry that does
+    not parse is left out and named in `problems`; a lower layer cannot take its place.
     """
     managed_rules = _entries(managed, "rules")
     declared = set(_entries(managed, "modes"))
-    rules = {rid: with_defaults(r) for rid, r in managed_rules.items()}
-    for rule in rules.values():
-        rule["modes"] = [m for m in modes_of(rule) if m in declared]
-    layers = [global_state]
-    if not isinstance(project_state, dict) or project_state.get("enabled", True) is not False:
-        layers.append(project_state)
-    for state in layers:
-        for rid, r in _entries(state, "rules").items():
-            rules[rid] = merge_rule(rules[rid], r, rid not in managed_rules) if rid in rules else with_defaults(r)
-    return rules
+    rules: dict[str, Rule] = {}
+    problems: dict[str, str] = {}
+
+    def add(rid: str, raw: Mapping[str, Any]) -> None:
+        try:
+            rules[rid] = Rule.from_json(raw)
+        except Invalid as exc:
+            problems[rid] = str(exc)
+
+    for rid, raw in managed_rules.items():
+        add(rid, raw)
+        if rid in rules:
+            rules[rid] = replace(rules[rid], modes=tuple(m for m in rules[rid].modes if m in declared))
+    for state in [global_state, *([project_state] if project_enabled(project_state) else [])]:
+        for rid, raw in _entries(state, "rules").items():
+            if rid in problems:
+                continue
+            if rid in rules:
+                rules[rid] = merge_rule(rules[rid], raw, rid not in managed_rules)
+            else:
+                add(rid, raw)
+    return Effective(rules, problems)
+
+
+def effective_rules(managed: object, global_state: object, project_state: object) -> dict[str, Rule]:
+    return effective(managed, global_state, project_state).rules
 
 
 def wrapper_layers(managed: object, global_state: object, project_state: object) -> list[tuple[str, object]]:
     layers = [("managed state", managed), ("global state", global_state)]
-    if not isinstance(project_state, dict) or project_state.get("enabled", True) is not False:
+    if project_enabled(project_state):
         layers.append(("project state", project_state))
     return layers
 
@@ -195,29 +338,16 @@ def wrapper_problems(managed: object, global_state: object, project_state: objec
     return wrapper_table.resolve(wrapper_layers(managed, global_state, project_state))[1]
 
 
-def _mode(m: dict[str, Any]) -> Mode:
-    return {"description": str(m.get("description", "")), "agentMayEnable": m.get("agentMayEnable") is True,
-            "active": m.get("active") is True}
-
-
-def merge_mode(base: Mode, override: dict[str, Any], trust_active: bool = True) -> Mode:
-    return {
-        "description": str(override.get("description") or base["description"]),
-        "agentMayEnable": base["agentMayEnable"] and override.get("agentMayEnable", True) is not False,
-        "active": base["active"] or (trust_active and override.get("active") is True),
-    }
-
-
 def effective_modes(managed: object, global_state: object, project_state: object) -> dict[str, Mode]:
     """A project (repo-controlled) cannot switch on a mode the managed layer declares."""
     modes: dict[str, Mode] = {}
     declared = set(_entries(managed, "modes"))
     for layer, state in enumerate((managed, global_state, project_state)):
-        for name, m in _entries(state, "modes").items():
+        for name, raw in _entries(state, "modes").items():
             if name not in modes:
-                modes[name] = _mode(m)
+                modes[name] = Mode.from_json(raw)
             else:
-                modes[name] = merge_mode(modes[name], m, layer < 2 or name not in declared)
+                modes[name] = modes[name].tightened_by(raw, layer < 2 or name not in declared)
     return modes
 
 
@@ -252,52 +382,44 @@ def managed_layer(sources: Sequence[tuple[str, object]]) -> tuple[dict[str, Any]
                 problems.append(f"managed state {path}: {exc}, so it is ignored")
                 continue
             extra.setdefault(name, {})
-        for name, m in _entries(state, "modes").items():
-            modes[name] = merge_mode(modes[name], m, False) if name in modes else _mode(m)
-        for rid, r in _entries(state, "rules").items():
+        for name, raw in _entries(state, "modes").items():
+            modes[name] = modes[name].tightened_by(raw, False) if name in modes else Mode.from_json(raw)
+        for rid, raw in _entries(state, "rules").items():
+            if rid in rules:
+                rules[rid] = merge_rule(rules[rid], raw, False)
+                continue
             try:
-                validate_rule(r)
+                rule = Rule.from_json(raw)
             except Invalid as exc:
                 problems.append(f"managed rule {rid} is invalid and ignored: {exc}")
-            if rid in rules:
-                rules[rid] = merge_rule(rules[rid], r, False)
                 continue
-            rule = with_defaults(r)
             problems += [f"managed rule {rid} lists mode '{m}', which the managed file does not declare, so it cannot "
-                         "suspend the rule" for m in modes_of(rule) if m not in modes]
-            rule["modes"] = [m for m in modes_of(rule) if m in modes]
-            rules[rid] = rule
-    layer: dict[str, Any] = {"rules": rules, "modes": modes}
+                         "suspend the rule" for m in rule.modes if m not in modes]
+            rules[rid] = replace(rule, modes=tuple(m for m in rule.modes if m in modes))
+    layer: dict[str, Any] = {"rules": {rid: rule.to_json() for rid, rule in rules.items()},
+                    "modes": {name: {"description": m.description, "agentMayEnable": m.agent_may_enable,
+                                     "active": m.active} for name, m in modes.items()}}
     if extra:
         layer["wrappers"] = extra
     return layer, problems
 
 
-def active_modes(modes: dict[str, Mode], session: object) -> dict[str, dict[str, Any]]:
+def active_modes(modes: Mapping[str, Mode], session: Session) -> dict[str, Activation]:
     """Mode name → activation record for every mode that is currently on."""
-    active: dict[str, dict[str, Any]] = {
-        name: {"by": "user", "reason": "persistently active"} for name, m in modes.items() if m["active"]
-    }
-    for name, record in view(session, "modes").items():
-        if name not in modes or name in active or not isinstance(record, dict):
+    active = {name: Activation(Actor.USER, "persistently active") for name, m in modes.items() if m.active}
+    for name, record in session.modes.items():
+        if name not in modes or name in active:
             continue
-        if record.get("by") == "agent" and not modes[name]["agentMayEnable"]:
+        if record.by is Actor.AGENT and not modes[name].agent_may_enable:
             continue
         active[name] = record
     return active
 
 
-def needs_parse(rule: Rule) -> bool:
-    """True when the rule is judged by the ast-grep library (program, ast and regex all are)."""
-    match = view(rule, "match")
-    return any(match.get(key) for key in ("program", "ast", "regex"))
-
-
 def requirements_met(rule: Rule) -> bool:
-    required = rule.get("requires")
     import shutil
 
-    return not required or any(shutil.which(b) for b in required)
+    return not rule.requires or any(shutil.which(b) for b in rule.requires)
 
 
 def render(text: str) -> str:
