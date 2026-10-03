@@ -285,7 +285,8 @@ imported or fails its self-test, rules cannot be evaluated, so the hook allows t
   (`$(` x tens of thousands) is quadratic, so the content is the cause and failing open would be a bypass. A hit already
   found stands.
 - **A rule that does not compile** (an `ast` rule, or a regex Rust cannot compile) is skipped and named once per session; the
-  others run.
+  others run. So is a rule with a field this version does not know (for example `match.builtin` from an old `modern-cli`
+  install): the warning and `status --problems` name the rule and the field and say to reinstall the preset.
 - **A command over 256 KiB, or one that nests shell strings more than 8 deep, unpacks into more than 64 distinct strings
   or 256 KiB of script text, or unwraps into more than 2048 variants or 512 KiB of variant text, is denied unparsed**
   ("command too large to check", "command too complex to check"): padding must never be a way past a rule. Only a deny rule

@@ -13,6 +13,10 @@ import wrappers as wrapper_table
 
 MAX_AST_BYTES = 16384  # bounds nesting too: ast-grep overflows its stack past about 4000 levels
 MATCH_KEYS = ("program", "args", "regex", "ast")
+RULE_KEYS = ("match", "message", "messageShort", "action", "retry", "enabled", "modes", "requires", "description",
+             "setBy", "id")
+UNKNOWN_FIELD_HINT = ("this version does not know it; reinstall the preset that added it (`guardrails preset install "
+                      "<name>`) or remove the field")
 LAYERS = ("managed", "global", "project")
 PLACEHOLDER = re.compile(r"\{which:([^{}]+)\}")
 
@@ -64,10 +68,10 @@ class Match:
 
     @classmethod
     def from_json(cls, raw: object) -> Self:
+        if isinstance(raw, dict) and (unknown := set(raw) - set(MATCH_KEYS)):
+            raise Invalid(f"unknown field match.{sorted(unknown)[0]}: {UNKNOWN_FIELD_HINT}")
         if not isinstance(raw, dict) or not any(raw.get(k) for k in ("program", "regex", "ast")):
             raise Invalid("'match' needs at least one of 'program', 'regex', 'ast'")
-        if unknown := set(raw) - set(MATCH_KEYS):
-            raise Invalid(f"unknown match keys: {', '.join(sorted(unknown))}")
         program = raw.get("program")
         names = [program] if isinstance(program, str) else program
         if program is not None and not (isinstance(names, list) and names
@@ -110,6 +114,8 @@ class Rule:
     def from_json(cls, raw: object) -> Self:
         if not isinstance(raw, dict):
             raise Invalid("a rule must be a JSON object")
+        if unknown := set(raw) - set(RULE_KEYS):
+            raise Invalid(f"unknown field {sorted(unknown)[0]}: {UNKNOWN_FIELD_HINT}")
         message = raw.get("message")
         if not isinstance(message, str) or not message.strip():
             raise Invalid("'message' is required")

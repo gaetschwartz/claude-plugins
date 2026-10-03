@@ -43,6 +43,24 @@ class Hook(AstIsolated):
         self.assertIsNone(self.hook("strings x"))
         self.assertEqual(list(self.data.iterdir()), [])
 
+    def test_a_rule_with_an_unknown_field_is_skipped_with_a_warning_naming_it_and_the_others_run(self) -> None:
+        old_preset_rule = {"match": {"builtin": "grep-recursive"}, "message": "use rg", "action": "deny"}
+        for rid, rule in {"grep-rg": old_preset_rule, "tooled": {**STRINGS, "tool": "Bash"},
+                          "nested": {"match": {"program": "x", "flavour": 1}, "message": "m"}}.items():
+            self.put(self.gpath, {"rules": {"no-strings": dict(STRINGS), rid: rule}, "modes": dict(MODES)})
+            with self.subTest(rid):
+                first = self.hook("strings x", session=f"u-{rid}")
+                self.assertEqual(decision(first), "deny")
+                warning = first["systemMessage"]
+                self.assertIn(f"rule {rid} is invalid", warning)
+                self.assertRegex(warning, r"unknown field (match\.builtin|tool|match\.flavour)")
+                self.assertIn("reinstall the preset", warning)
+                again = self.hook("strings y", session=f"u-{rid}")
+                self.assertNotIn("is invalid", (again or {}).get("systemMessage", ""))
+                code, status, _ = self.cli("status", "--problems")
+                self.assertIn(f"rule {rid}", status)
+                self.assertIn("unknown field", status)
+
     def test_unmatched_command_is_silent(self) -> None:
         self.assertIsNone(self.hook("ls -la"))
 
