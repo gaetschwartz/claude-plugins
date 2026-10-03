@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from dataclasses import dataclass
 from pathlib import Path
 from typing import IO, TypedDict
 
@@ -208,18 +209,34 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     return (output or None), changed
 
 
-def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
+@dataclass(frozen=True, slots=True)
+class Call:
+    command: str
+    cwd: Path | None
+    session_id: str
+
+
+def parse_call(text: str) -> Call | None:
+    """The command of a Bash or Monitor PreToolUse payload; None when there is nothing to check."""
     try:
-        payload = json.load(stdin)
+        payload = json.loads(text)
     except ValueError:
-        return
-    tool = payload.get("tool_name") if isinstance(payload, dict) else None
-    if not isinstance(payload, dict) or tool not in TOOLS:
-        return
+        return None
+    if not isinstance(payload, dict) or payload.get("tool_name") not in TOOLS:
+        return None
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str) or not command.strip():
+        return None
+    cwd = payload.get("cwd")
+    return Call(command, Path(cwd) if isinstance(cwd, str) else None, bootstrap.session_id(payload))
+
+
+def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
+    call = parse_call(stdin.read())
+    if call is None:
         return
+    command, sid = call.command, call.session_id
 
     gpath = store.global_state_path()
     try:
@@ -231,34 +248,24 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
     for warning in warnings:
         print(warning, file=sys.stderr)
     managed_ids = frozenset(policy.origins("rules", managed, {}, {}))
-    cwd = payload.get("cwd")
     try:
-        pstate = store.load(store.project_state_path(Path(cwd) if isinstance(cwd, str) else None))
+        pstate = store.load(store.project_state_path(call.cwd))
     except store.StateError:
         pstate = {}
 
-    def layers(g: store.State) -> policy.Effective:
+    def states(g: store.State) -> tuple[store.State, store.State, store.State]:
         killed = not gstate_ok or g.get("enabled", True) is False
-        return policy.effective(*((managed, {}, {}) if killed else (managed, g, pstate)))
-
-    def modes_of(g: store.State) -> dict[str, policy.Mode]:
-        killed = not gstate_ok or g.get("enabled", True) is False
-        return policy.effective_modes(*((managed, {}, {}) if killed else (managed, g, pstate)))
-
-    def wrapper_layers(g: store.State) -> wrapper_table.Names:
-        killed = not gstate_ok or g.get("enabled", True) is False
-        return policy.effective_wrappers(*((managed, {}, {}) if killed else (managed, g, pstate)))
+        return (managed, {}, {}) if killed else (managed, g, pstate)
 
     if gstate_ok and gstate.get("enabled", True) is not False:
         warnings += tuple(f"guardrails: {problem}" for problem in policy.wrapper_problems(managed, gstate, pstate))
-    found = layers(gstate)
+    found = policy.effective(*states(gstate))
     warnings += tuple(f"guardrails: rule {rid} is invalid ({why}) and is skipped" for rid, why in found.problems.items())
     if not found.rules and not warnings:
         return
 
-    sid = bootstrap.session_id(payload)
     output: Output | None = None
-    pre = judge(command, candidates_of(found.rules), wrapper_layers(gstate))
+    pre = judge(command, candidates_of(found.rules), policy.effective_wrappers(*states(gstate)))
     stateless = not gstate_ok
     if gstate_ok:
         try:
@@ -266,8 +273,9 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
                 gstate = store.load(gpath)
                 sessions = policy.view(gstate, "sessions")
                 session = policy.Session.from_json(sessions.get(sid))
-                output, changed = evaluate(command, layers(gstate).rules, modes_of(gstate), session, sid, managed_ids,
-                                           warnings, wrapper_layers(gstate), pre)
+                output, changed = evaluate(command, policy.effective_rules(*states(gstate)),
+                                           policy.effective_modes(*states(gstate)), session, sid, managed_ids, warnings,
+                                           policy.effective_wrappers(*states(gstate)), pre)
                 if changed:
                     sessions[sid] = session.to_json(store.now())
                     gstate["sessions"] = sessions
@@ -275,19 +283,15 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         except OSError:
             stateless = True
     if stateless:
-        output, _ = evaluate(command, layers(gstate).rules, modes_of(gstate), policy.Session(), sid, managed_ids,
-                             warnings, wrapper_layers(gstate), pre)
+        output, _ = evaluate(command, found.rules, policy.effective_modes(*states(gstate)), policy.Session(), sid,
+                             managed_ids, warnings, policy.effective_wrappers(*states(gstate)), pre)
     if output:
         json.dump(output, stdout)
 
 
 def run_safe(text: str, stdout: IO[str], failure: BaseException) -> None:
     """After run_hook failed: allow, loudly. No rule is applied: every matcher runs in the bounded checker."""
-    payload = json.loads(text)
-    tool = payload.get("tool_name") if isinstance(payload, dict) else None
-    tool_input = payload.get("tool_input") if isinstance(payload, dict) else None
-    command = tool_input.get("command") if isinstance(tool_input, dict) else None
-    if tool not in TOOLS or not isinstance(command, str) or not command.strip():
+    if parse_call(text) is None:
         return
     notice = (f"[guardrails plugin notice] the guardrails hook failed internally ({type(failure).__name__}), so no rule "
               "was applied and this command was not checked. Tell the user about this now.")
