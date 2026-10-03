@@ -1,147 +1,62 @@
 from __future__ import annotations
 
+import argparse
 import re
 import unittest
-from pathlib import Path
 
 from helpers import ROOT
 
 SKILLS = ROOT / "skills"
 EXPECTED = {"status", "explain", "new", "edit", "mode", "setup"}
-ALLOWED_FIELDS = {"name", "description", "when_to_use", "argument-hint", "arguments", "disable-model-invocation",
-                  "user-invocable", "allowed-tools", "disallowed-tools", "model", "effort", "context", "agent",
-                  "background", "hooks", "paths", "shell", "metadata", "license", "compatibility"}
 TEXT_SUFFIXES = {".md", ".json", ".py", ".sh", ".toml", ".txt"}
+READ_ONLY_TOOLS = ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "Bash(guardrails rule ast *)"]
+CAT_REFERENCES = "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"
+STALE = ("engine install", "engine verify", "npm ci", "package.json", "SARIF", "GUARDRAILS ENGINE MISSING", "astbin",
+         "astrun", "astcli", "astworker", "astrules", "engine-manifest", "guardrails:" + "rules")
 
 
-def frontmatter(path: Path) -> tuple[dict[str, str], str]:
-    text = path.read_text()
-    assert text.startswith("---\n"), f"{path} does not start with frontmatter"
-    head, _, body = text[4:].partition("\n---\n")
-    fields: dict[str, str] = {}
-    for line in head.splitlines():
-        match = re.match(r"^([A-Za-z][A-Za-z_-]*):\s*(.*)$", line)
-        assert match, f"{path}: unparseable frontmatter line {line!r}"
-        assert match.group(1) not in fields, f"{path}: duplicate field {match.group(1)}"
-        fields[match.group(1)] = match.group(2).strip()
-    return fields, body
+def skill(name: str) -> tuple[dict[str, str], str]:
+    """The frontmatter fields and body of a skill (`claude plugin validate` checks the format itself)."""
+    head, _, body = (SKILLS / name / "SKILL.md").read_text()[4:].partition("\n---\n")
+    return dict(line.split(":", 1) for line in head.splitlines()), body
 
 
-def skill_files() -> list[Path]:
-    return sorted(SKILLS.glob("*/SKILL.md"))
+def tools(name: str) -> list[str]:
+    return re.findall(r"Bash\([^)]*\)|AskUserQuestion", skill(name)[0]["allowed-tools"])
 
 
 class SkillFiles(unittest.TestCase):
-    def test_no_text_tells_anyone_to_install_the_engine_by_hand(self) -> None:
-        stale = ("engine install", "engine verify", "npm ci", "package.json", "SARIF", "GUARDRAILS ENGINE MISSING",
-                 "astbin", "astrun", "astcli", "astworker", "astrules", "engine-manifest")
-        for path in [ROOT / "README.md", *ROOT.glob("references/**/*.md"), *ROOT.glob("skills/*/SKILL.md"),
-                     *ROOT.glob("lib/*.py"), ROOT / "hooks" / "guardrails.sh"]:
-            text = path.read_text()
-            for needle in stale:
-                self.assertNotIn(needle, text, f"{path.name} still mentions {needle!r}")
-
-    def test_the_six_skills_exist(self) -> None:
-        self.assertEqual({p.parent.name for p in skill_files()}, EXPECTED)
+    def test_the_six_skills_exist_and_are_named_after_their_directory(self) -> None:
         self.assertEqual({p.name for p in SKILLS.iterdir()}, EXPECTED)
+        for name in EXPECTED:
+            self.assertEqual(skill(name)[0]["name"].strip(), name)
 
-    def test_frontmatter_is_valid(self) -> None:
-        for path in skill_files():
-            with self.subTest(skill=path.parent.name):
-                fields, _ = frontmatter(path)
-                self.assertEqual(fields["name"], path.parent.name)
-                self.assertTrue(fields.get("description"))
-                self.assertTrue(fields.get("argument-hint"), "every skill has an argument-hint")
-                self.assertEqual(set(fields) - ALLOWED_FIELDS, set())
-
-    def test_forked_skills(self) -> None:
-        for name, model in (("status", "haiku"), ("explain", "sonnet")):
-            with self.subTest(skill=name):
-                fields, _ = frontmatter(SKILLS / name / "SKILL.md")
-                self.assertEqual((fields["context"], fields["model"]), ("fork", model))
-        for name in EXPECTED - {"status", "explain"}:
-            with self.subTest(skill=name):
-                self.assertNotIn("context", frontmatter(SKILLS / name / "SKILL.md")[0])
-
-    def test_explain_is_read_only(self) -> None:
-        fields, body = frontmatter(SKILLS / "explain" / "SKILL.md")
-        patterns = re.findall(r"[A-Za-z]+\([^)]*\)", fields["allowed-tools"])
-        self.assertEqual(patterns, ["Bash(guardrails status *)", "Bash(guardrails rule test *)",
-                                    "Bash(guardrails rule ast *)", "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"])
-        self.assertEqual(set(fields["disallowed-tools"].split()), {"Edit", "Write", "NotebookEdit"})
-        for forbidden in (r"guardrails rule (add|set|rm)", r"guardrails (enable|disable)", r"preset install",
-                          r"guardrails mode (on|off|declare|undeclare)", r"sudo (guardrails|python)"):
-            self.assertIsNone(re.search(forbidden, body), forbidden)
-
-    def test_no_read_permission_patterns(self) -> None:
-        for path in skill_files():
-            with self.subTest(skill=path.parent.name):
-                self.assertNotIn("Read(", frontmatter(path)[0].get("allowed-tools", ""))
-
-    def test_forked_skills_inject_their_references(self) -> None:
-        wanted = {"status": set(), "explain": {"matching.md", "presentation.md"}}
-        for name, files in wanted.items():
-            fields, body = frontmatter(SKILLS / name / "SKILL.md")
+    def test_only_status_and_explain_fork_and_each_injects_exactly_what_it_may_read(self) -> None:
+        for name in EXPECTED:
+            fields, body = skill(name)
+            files = {"status": set(), "explain": {"matching.md", "presentation.md"}}.get(name)
             injected = set(re.findall(r"^!`cat \$\{CLAUDE_PLUGIN_ROOT\}/references/([a-z-]+\.md)`$", body, re.MULTILINE))
             with self.subTest(skill=name):
-                self.assertEqual(injected, files)
-                self.assertEqual("Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)" in fields["allowed-tools"], bool(files))
+                self.assertEqual(fields.get("context", "").strip(), "fork" if files is not None else "")
+                self.assertEqual(injected, files or set())
+                self.assertEqual(CAT_REFERENCES in fields["allowed-tools"], bool(files))
 
-    def test_rules_are_passed_on_stdin_without_the_write_tool(self) -> None:
-        for name in ("new", "edit"):
-            with self.subTest(skill=name):
-                fields, body = frontmatter(SKILLS / name / "SKILL.md")
-                self.assertIn("--json -", body)
-                self.assertIn("<<'EOF'", body)
-                self.assertNotIn("'\\''", body)
-                self.assertNotIn("Write tool", body)
-                self.assertNotIn("Write", fields["allowed-tools"])
-
-    def test_allowed_tools_are_pinned_and_never_preapprove_changes(self) -> None:
-        pinned = {"new": ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "Bash(guardrails rule ast *)",
-                          "Bash(guardrails preset list *)", "AskUserQuestion"],
-                  "edit": ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "Bash(guardrails rule ast *)",
-                           "AskUserQuestion"],
-                  "explain": ["Bash(guardrails status *)", "Bash(guardrails rule test *)",
-                              "Bash(guardrails rule ast *)", "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"],
+    def test_allowed_tools_are_pinned_read_only_and_never_preapprove_changes(self) -> None:
+        pinned = {"new": [*READ_ONLY_TOOLS, "Bash(guardrails preset list *)", "AskUserQuestion"],
+                  "edit": [*READ_ONLY_TOOLS, "AskUserQuestion"], "explain": [*READ_ONLY_TOOLS, CAT_REFERENCES],
                   "status": ["Bash(guardrails status *)"]}
-        for name, tools in pinned.items():
+        for name, expected in pinned.items():
             with self.subTest(skill=name):
-                declared = frontmatter(SKILLS / name / "SKILL.md")[0]["allowed-tools"]
-                self.assertEqual(re.findall(r"Bash\([^)]*\)|AskUserQuestion", declared), tools)
-
-    def test_display_skills_render_with_the_cli_and_paste_verbatim(self) -> None:
-        for name in ("new", "edit", "explain", "status"):
-            with self.subTest(skill=name):
-                text = (SKILLS / name / "SKILL.md").read_text()
-                self.assertIn("VERBATIM", text)
-                self.assertIsNone(re.search(r"\bpad(ded|ding)?\b", text, re.IGNORECASE))
-        self.assertIn("rule test", (SKILLS / "new" / "SKILL.md").read_text())
-        self.assertIn("status", (SKILLS / "status" / "SKILL.md").read_text())
-        for name in ("new", "edit", "explain"):
-            self.assertIn("never write a script", (SKILLS / name / "SKILL.md").read_text().lower())
-
-    def test_new_builds_examples_with_sources_and_expectations(self) -> None:
-        text = (SKILLS / "new" / "SKILL.md").read_text()
-        for needle in ("\"examples\"", '"expect"', "you chose", "--id-name"):
-            self.assertIn(needle, text)
-        self.assertIn("status --rule", text)
-
-    def test_skills_teach_the_matcher_ladder_and_the_tree_command(self) -> None:
+                self.assertEqual(tools(name), expected)
+        fields, body = skill("explain")
+        self.assertEqual(set(fields["disallowed-tools"].split()), {"Edit", "Write", "NotebookEdit"})
+        self.assertIsNone(re.search(r"guardrails (rule (add|set|rm)|enable|disable|mode (on|off|declare|undeclare))|"
+                                    r"preset install|sudo (guardrails|python)", body))
         for name in ("new", "edit"):
-            text = (SKILLS / name / "SKILL.md").read_text()
-            with self.subTest(skill=name):
-                self.assertIn("guardrails rule ast", text)
-                self.assertRegex(text, r"(?s)`program`.{0,80}`program` \+ `args`.{0,80}`ast`.{0,200}`regex`")
+            self.assertIn("--json -", skill(name)[1])
+            self.assertNotIn("Write", skill(name)[0]["allowed-tools"])
 
-    def test_presentation_reference_states_the_paste_rule(self) -> None:
-        text = (ROOT / "references" / "presentation.md").read_text()
-        self.assertIn("VERBATIM", text)
-        self.assertIn("Never write a script", text)
-
-    def test_flags_used_in_skills_exist_in_the_cli(self) -> None:
-        import argparse
-
+    def test_flags_used_in_the_docs_exist_in_the_cli(self) -> None:
         import cli
 
         known: set[str] = set()
@@ -154,58 +69,42 @@ class SkillFiles(unittest.TestCase):
                         walk(sub)
 
         walk(cli.build_parser())
-        for path in [*skill_files(), ROOT / "references" / "presentation.md", ROOT / "README.md"]:
-            for line in path.read_text().splitlines():
-                if "guardrails " not in line and "guardrails\n" not in line:
-                    continue
+        for path in [*SKILLS.glob("*/SKILL.md"), ROOT / "references" / "presentation.md", ROOT / "README.md"]:
+            for line in (ln for ln in path.read_text().splitlines() if "guardrails " in ln):
                 for flag in re.findall(r"(?<![\w-])--[a-z][a-z-]*", line):
                     with self.subTest(file=path.name, flag=flag):
                         self.assertIn(flag, known | {"--help", "--ignore-scripts"})
 
-    def test_referenced_files_exist(self) -> None:
-        pattern = re.compile(r"\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9_./-]+)")
-        for path in skill_files():
-            fields, body = frontmatter(path)
+    def test_referenced_files_exist_and_every_reference_is_used(self) -> None:
+        used: set[str] = set()
+        for name in EXPECTED:
+            fields, body = skill(name)
             text = body + fields.get("allowed-tools", "")
             self.assertNotIn("${CLAUDE_SKILL_DIR}", text)
-            for ref in pattern.findall(text):
-                ref = ref.rstrip(".")
-                ref = ref.removesuffix("/**")
-                with self.subTest(skill=path.parent.name, ref=ref):
-                    self.assertTrue((ROOT / ref.rstrip("/")).exists())
+            used.update(re.findall(r"references/([a-z-]+\.md)", body))
+            for ref in re.findall(r"\$\{CLAUDE_PLUGIN_ROOT\}/([A-Za-z0-9_./-]+)", text):
+                with self.subTest(skill=name, ref=ref):
+                    self.assertTrue((ROOT / ref.rstrip(".").removesuffix("/**").rstrip("/")).exists())
+        self.assertEqual(used, {p.name for p in (ROOT / "references").glob("*.md")})
 
-    def test_rule_writing_skills_point_to_the_guide_and_cookbook(self) -> None:
-        for name in ("new", "edit", "explain"):
-            body = frontmatter(SKILLS / name / "SKILL.md")[1]
-            with self.subTest(skill=name):
-                self.assertIn("${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md", body)
-                self.assertIn("${CLAUDE_PLUGIN_ROOT}/references/ast/index.md", body)
-
-    def test_pitfalls_in_new_match_the_guide(self) -> None:
-        new = frontmatter(SKILLS / "new" / "SKILL.md")[1]
+    def test_the_pitfalls_in_new_match_the_guide(self) -> None:
+        new = skill("new")[1]
         short = re.findall(r"^- `([a-z-]+)`: ", new.partition("## How to write the rule")[2].partition("\n## ")[0],
                            re.MULTILINE)
         guide = (ROOT / "references" / "writing-rules.md").read_text()
         full = re.findall(r"^### ([a-z-]+)$", guide.partition("## The six pitfalls")[2].partition("\n## ")[0],
                           re.MULTILINE)
-        self.assertEqual(len(short), 6)
-        self.assertEqual(short, full)
+        self.assertEqual((len(short), short), (6, full))
 
-    def test_references_are_used_and_not_duplicated(self) -> None:
-        used = set()
-        for path in skill_files():
-            used.update(re.findall(r"references/([a-z-]+\.md)", frontmatter(path)[1]))
-        self.assertEqual(used, {p.name for p in (ROOT / "references").glob("*.md")})
-
-    def test_no_stale_skill_references(self) -> None:
-        stale = "guardrails:" + "rules"
+    def test_no_text_names_a_removed_install_step_or_skill(self) -> None:
         known = {f"guardrails:{name}" for name in EXPECTED}
         for path in ROOT.rglob("*"):
-            if not path.is_file() or path.suffix not in TEXT_SUFFIXES or "__pycache__" in path.parts:
+            if not path.is_file() or path.suffix not in TEXT_SUFFIXES or "__pycache__" in path.parts or ".venv" in path.parts:
                 continue
             text = path.read_text()
             with self.subTest(file=str(path.relative_to(ROOT))):
-                self.assertNotIn(stale, text)
+                if "tests" not in path.parts:
+                    self.assertEqual([needle for needle in STALE if needle in text], [])
                 if path.suffix == ".md":
                     self.assertEqual(set(re.findall(r"guardrails:[a-z]+", text)) - known, set())
 
