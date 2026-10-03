@@ -78,7 +78,7 @@ Python. That window is the first seconds of the first session; after a failed in
 until an attempt works. The notice (user-facing `systemMessage` and agent-facing `additionalContext`) says the runtime is
 being installed automatically and how long that takes, or the failure and the time of the next attempt, and that rules are
 NOT enforced meanwhile. Its wording is fixed by the plugin and a failure is only ever one of a few classes (dns, connect,
-timeout, tls, proxy, http, hash, disk, tool, crash), never text from the network or the repository; the raw detail goes to
+timeout, tls, http, hash, disk, tool, crash), never text from the network or the repository; the raw detail goes to
 `runtime/install.log` in the data dir, which `engine status` names. With no usable `python3` (3.9 or newer; the wrapper
 smoke-tests each candidate and names a broken one) it prints a fixed notice on every call.
 

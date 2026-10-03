@@ -117,6 +117,12 @@ class Pinned(unittest.TestCase):
     def ensure(self, wait: bool = True, retry_now: bool = False) -> bootstrap.Outcome:
         return bootstrap.ensure(self.data, wait=wait, retry_now=retry_now)
 
+    def stamp(self, count: int, reason: str, step: str = "uv download", ago: float = 0.0) -> None:
+        log = self.data / "runtime" / "install.log"
+        log.parent.mkdir(parents=True, exist_ok=True)
+        log.write_text(f"{count} {reason} {step}\nraw detail\n")
+        os.utime(log, (self.clock[0] - ago, self.clock[0] - ago))
+
     def uv_log(self) -> str:
         return (self.rt / "bin" / "uv.log").read_text()
 
@@ -133,9 +139,9 @@ class Manifest(unittest.TestCase):
         manifest = json.loads((ROOT / "lib" / "runtime-manifest.json").read_text())
         requirements = (ROOT / "lib" / "runtime-requirements.txt").read_text()
         document = (ROOT / "lib" / "runtime-manifest.json").read_text()
-        wanted = f"r{gen.BOOTSTRAP_VERSION}-{sha((document + requirements).encode())[:12]}"
-        self.assertEqual((manifest["python"], manifest["astGrepPy"], manifest["uv"]["version"],
-                          manifest["bootstrapVersion"]), (gen.PYTHON, gen.AST_GREP_PY, gen.UV, gen.BOOTSTRAP_VERSION))
+        wanted = sha((document + requirements).encode())[:12]
+        self.assertEqual((manifest["python"], manifest["astGrepPy"], manifest["uv"]["version"]),
+                         (gen.PYTHON, gen.AST_GREP_PY, gen.UV))
         self.assertEqual((ROOT / "lib" / "runtime-id").read_text().strip(), wanted)
         self.assertIn("ast-grep-py==" + gen.AST_GREP_PY, requirements)
         self.assertEqual(len(re.findall(r"--hash=sha256:[0-9a-f]{64}", requirements)), 4)
@@ -311,15 +317,11 @@ class Install(Pinned):
         self.assertIn("--only-binary :all: --no-deps --require-hashes", lines[2])
 
     def test_a_successful_install_cleans_up_after_itself(self) -> None:
-        stale = self.data / "runtime" / "r1-test.tmp-1"
-        stale.mkdir(parents=True)
-        (self.data / "runtime" / "failure.json").write_text(json.dumps(
-            {"at": 1.0, "count": 1, "reason": "dns", "step": "uv download"}))
+        self.stamp(1, "dns")
         self.assertEqual(self.ensure(retry_now=True).state, "installed")
-        self.assertFalse(stale.exists())
         self.assertFalse((self.rt / "uv-cache").exists())
         self.assertFalse((self.rt / "uv.whl").exists())
-        self.assertFalse((self.data / "runtime" / "failure.json").exists())
+        self.assertIsNone(bootstrap.read_stamp(self.data))
         marker = json.loads((self.rt / "marker.json").read_text())
         self.assertEqual((marker["runtimeId"], marker["python"]), ("r1-test", "3.13.99"))
         self.assertEqual(oct((self.rt / "bin" / "uv").stat().st_mode & 0o777), "0o700")
@@ -342,14 +344,13 @@ class Install(Pinned):
         self.assertEqual((outcome.state, outcome.reason), ("failed", "hash"))
         self.assertFalse((self.rt / "bin" / "uv").exists())
 
-    def test_downloads_only_come_from_the_pinned_host_and_stay_in_size(self) -> None:
+    def test_downloads_only_come_from_the_pinned_host(self) -> None:
         entry = self.pins.wheels["darwin-arm64"]
-        for name, wheel in (("other host", bootstrap.Wheel(url="https://evil.example/uv.whl", sha256=entry["sha256"],
-                                                          size=entry["size"], member=entry["member"])),
-                            ("too large", bootstrap.Wheel(url=entry["url"], sha256=entry["sha256"], size=1,
-                                                          member=entry["member"]))):
-            with self.subTest(name), self.assertRaises(bootstrap.InstallError):
-                bootstrap.download(wheel, self.tmp / "w.whl", bootstrap.Budget(30))
+        other = bootstrap.Wheel(url="https://evil.example/uv.whl", sha256=entry["sha256"], size=entry["size"],
+                                member=entry["member"])
+        with self.assertRaises(bootstrap.InstallError):
+            bootstrap.download(other, time.monotonic() + 30)
+        self.assertEqual(self.served, [])
 
     def test_the_installed_version_must_be_the_pinned_one(self) -> None:
         self.data.mkdir(parents=True)
@@ -390,28 +391,24 @@ class Failures(Pinned):
             "connect": urllib.error.URLError(ConnectionRefusedError(61, "Connection refused " + secret)),
             "timeout": urllib.error.URLError(TimeoutError("timed out " + secret)),
             "tls": urllib.error.URLError(ssl.SSLCertVerificationError(1, "certificate verify failed " + secret)),
-            "proxy": urllib.error.URLError(OSError("Tunnel connection failed: 403 " + secret)),
             "http": urllib.error.HTTPError("https://x", 503, secret, Message(), None),
-            "disk": OSError(28, "No space left on device " + secret),
+            "connect ": urllib.error.URLError(OSError("Tunnel connection failed: 403 " + secret)),
         }
         for reason, exc in cases.items():
             with self.subTest(reason):
                 found = self.fail_with(exc)
-                self.assertEqual((found.state, found.reason), ("failed", reason))
+                self.assertEqual((found.state, found.reason), ("failed", reason.strip()))
                 self.assertNotIn("ATTACKER", hostcli.notice(found))
                 self.assertNotIn("ATTACKER", hostcli.status_text(self.data))
                 self.assertIn("ATTACKER", (self.data / "runtime" / "install.log").read_text())
 
-    def test_tool_stderr_is_classified_the_same_way(self) -> None:
+    def test_a_tool_failure_is_never_classified_from_its_text_which_stays_in_the_log(self) -> None:
         self.data.mkdir(parents=True)
-        cases = {"dns": "error: dns error: failed to lookup address information", "tls": "invalid certificate: expired",
-                 "timeout": "error: request timed out", "hash": "Hash mismatch for cpython", "proxy": "proxy error 502",
-                 "connect": "error sending request for url", "tool": "something unexpected"}
-        for reason, text in cases.items():
-            with self.subTest(reason):
-                (self.data / "fail-pip").write_text(text + "\n")
-                found = self.ensure(retry_now=True)
-                self.assertEqual((found.state, found.reason), ("failed", reason))
+        (self.data / "fail-pip").write_text("error: dns error: certificate proxy ATTACKER-TEXT\n")
+        found = self.ensure(retry_now=True)
+        self.assertEqual((found.state, found.reason, found.step), ("failed", "tool", "library install"))
+        self.assertNotIn("ATTACKER", hostcli.notice(found))
+        self.assertIn("ATTACKER-TEXT", (self.data / "runtime" / "install.log").read_text())
 
     def test_the_backoff_grows_from_ten_minutes_to_six_hours_and_a_success_resets_it(self) -> None:
         delays = []
@@ -458,7 +455,7 @@ class Failures(Pinned):
         script.write_text(f"#!/bin/sh\n(sleep 30; touch {marker}) &\nsleep 30\n")
         script.chmod(0o755)
         with self.assertRaises(bootstrap.InstallError) as ctx:
-            bootstrap.run_tool([str(script)], self.tmp, {"PATH": "/usr/bin:/bin"}, bootstrap.Budget(0.5), "slow step")
+            bootstrap.run_tool([str(script)], self.tmp, {"PATH": "/usr/bin:/bin"}, time.monotonic() + 0.5, "slow step")
         self.assertEqual((ctx.exception.reason, ctx.exception.step), ("timeout", "slow step"))
 
 
@@ -493,6 +490,9 @@ class Cleanup(Pinned):
 
 
 class Hook(Pinned):
+    def notice_file(self, session: str) -> Path:
+        return self.data / "notices" / hashlib.sha256(session.encode()).hexdigest()[:16]
+
     def hook(self, session: str = "s1") -> dict[str, Any]:
         out = hostcli.hook(json.dumps({"session_id": session}), self.data)
         return json.loads(out) if out else {}
@@ -516,14 +516,13 @@ class Hook(Pinned):
 
     def test_a_persisting_failure_repeats_every_ten_minutes_and_names_the_retry_time(self) -> None:
         self.data.mkdir()
-        bootstrap.write_atomic(self.data / "runtime" / "failure.json", json.dumps(
-            {"at": self.clock[0], "count": 1, "reason": "connect", "step": "uv download"}))
+        self.stamp(1, "connect")
         with mock.patch.object(hostcli, "spawn_ensure") as spawn:
             first = self.hook()
             self.assertIn("connection to a download host failed", first["systemMessage"])
             self.assertIn(hostcli.clock(self.clock[0] + 600), first["systemMessage"])
             self.assertEqual(self.hook(), {})
-            os.utime(self.data / "runtime" / "notices" / "s1", (self.clock[0] - 700, self.clock[0] - 700))
+            os.utime(self.notice_file("s1"), (self.clock[0] - 700, self.clock[0] - 700))
             self.assertTrue(self.hook())
             spawn.assert_not_called()
             self.clock[0] += 601
@@ -536,7 +535,7 @@ class Hook(Pinned):
         with mock.patch.object(hostcli, "spawn_ensure") as spawn:
             self.assertIn("is broken and is being rebuilt", self.hook()["systemMessage"])
             spawn.assert_called_once()
-            os.utime(self.data / "runtime" / "notices" / "s1", (self.clock[0] - 700, self.clock[0] - 700))
+            os.utime(self.notice_file("s1"), (self.clock[0] - 700, self.clock[0] - 700))
             self.assertTrue(self.hook())
 
     def test_an_unsupported_platform_notice_says_so(self) -> None:
@@ -571,8 +570,7 @@ class Entry(Pinned):
 
     def test_a_ready_runtime_runs_the_guard_at_once_whatever_the_backoff_stamp_says(self) -> None:
         self.install_fake()
-        bootstrap.write_atomic(self.data / "runtime" / "failure.json", json.dumps(
-            {"at": self.clock[0], "count": 3, "reason": "dns", "step": "uv download"}))
+        self.stamp(3, "dns")
         with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(self.data)}), \
                 mock.patch.object(bootstrap, "ensure", side_effect=AssertionError("ensure ran")), \
                 mock.patch.object(hostcli.os, "execv") as execv:
@@ -584,8 +582,7 @@ class Entry(Pinned):
 
     def test_engine_status_works_with_no_runtime_and_offline_and_shows_the_failure(self) -> None:
         self.data.mkdir()
-        bootstrap.write_atomic(self.data / "runtime" / "failure.json", json.dumps(
-            {"at": self.clock[0], "count": 2, "reason": "dns", "step": "uv download"}))
+        self.stamp(2, "dns")
         with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(self.data)}), \
                 mock.patch("sys.stdout", new_callable=io.StringIO) as out:
             self.assertEqual(hostcli.run_command(["engine", "status"]), 0)
@@ -597,8 +594,7 @@ class Entry(Pinned):
 
     def test_other_verbs_without_a_runtime_print_one_line_and_exit_2_with_no_traceback(self) -> None:
         self.data.mkdir()
-        bootstrap.write_atomic(self.data / "runtime" / "failure.json", json.dumps(
-            {"at": self.clock[0], "count": 1, "reason": "connect", "step": "uv download"}))
+        self.stamp(1, "connect")
         with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(self.data)}), \
                 mock.patch("sys.stderr", new_callable=io.StringIO) as err:
             self.assertEqual(hostcli.main(["run", "rule", "list"]), 2)

@@ -236,8 +236,7 @@ class RealWrapperNotReady(Isolated):
     def setUp(self) -> None:
         super().setUp()
         (self.data / "runtime").mkdir(parents=True)
-        (self.data / "runtime" / "failure.json").write_text(json.dumps(
-            {"at": NOW(), "count": 1, "reason": "connect", "step": "uv download"}))
+        (self.data / "runtime" / "install.log").write_text("1 connect uv download\nraw detail\n")
 
     def run_script(self, *args: str, session: str = "s1") -> subprocess.CompletedProcess[str]:
         payload = json.dumps({"session_id": session, "tool_name": "Bash", "tool_input": {"command": "ls"}})

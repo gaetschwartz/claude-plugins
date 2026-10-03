@@ -3,9 +3,9 @@
 from __future__ import annotations
 
 import contextlib
+import hashlib
 import json
 import os
-import re
 import sys
 import time
 from pathlib import Path
@@ -17,7 +17,6 @@ NOTICE_REPEAT_SECONDS = 600
 REASON_TEXT: dict[Reason, str] = {
     "dns": "a download host could not be resolved (DNS)", "connect": "a connection to a download host failed",
     "timeout": "a download or install step timed out", "tls": "a TLS certificate check failed",
-    "proxy": "the configured proxy refused or failed the request",
     "http": "a download host answered with an error status",
     "hash": "a downloaded file did not match its pinned hash and was discarded",
     "disk": "a file could not be written (disk space or permissions)", "tool": "an install step failed",
@@ -63,7 +62,7 @@ def due(data: Path, session: str, found: Outcome) -> bool:
     """Show the notice once per session, and again every NOTICE_REPEAT_SECONDS while a failure persists."""
     if found.state == "unsafe":
         return True
-    stamp = data / "runtime" / "notices" / (re.sub(r"[^A-Za-z0-9_-]", "_", session)[:80] or "nosession")
+    stamp = data / "notices" / hashlib.sha256(session.encode()).hexdigest()[:16]
     try:
         seen = stamp.stat().st_mtime
     except OSError:

@@ -9,7 +9,6 @@ import urllib.request
 from pathlib import Path
 from typing import Any
 
-BOOTSTRAP_VERSION = 1
 PYTHON = "3.13"
 UV = "0.12.22"
 AST_GREP_PY = "0.45.3"
@@ -45,7 +44,7 @@ def manifest(wheels: dict[str, dict[str, Any]]) -> dict[str, object]:
         item = wheels[name]
         platforms[key] = {"url": item["url"], "sha256": item["digests"]["sha256"], "size": item["size"],
                           "member": f"uv-{UV}.data/scripts/uv"}
-    return {"bootstrapVersion": BOOTSTRAP_VERSION, "python": PYTHON, "astGrepPy": AST_GREP_PY,
+    return {"python": PYTHON, "astGrepPy": AST_GREP_PY,
             "uv": {"version": UV, "wheels": platforms}}
 
 
@@ -55,7 +54,7 @@ def main() -> None:
     digest = hashlib.sha256((document + pinned).encode()).hexdigest()[:12]
     (LIB / "runtime-manifest.json").write_text(document)
     (LIB / "runtime-requirements.txt").write_text(pinned)
-    (LIB / "runtime-id").write_text(f"r{BOOTSTRAP_VERSION}-{digest}\n")
+    (LIB / "runtime-id").write_text(f"{digest}\n")
 
 
 if __name__ == "__main__":

@@ -1,6 +1,5 @@
 {
   "astGrepPy": "0.45.3",
-  "bootstrapVersion": 1,
   "python": "3.13",
   "uv": {
     "version": "0.12.22",
