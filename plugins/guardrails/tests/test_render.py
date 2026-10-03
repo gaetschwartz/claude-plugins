@@ -104,8 +104,7 @@ class Card(AstIsolated):
                  render.RuleRow("old-rule", "deny", ["global"], "disabled")]
         modes = [render.ModeRow("incident", "off", False, ["global"]),
                  render.ModeRow("reverse-engineering", "on (by agent: user said RE work)", True, ["global"])]
-        managed = ("**Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` absent · "
-                   "override `/tmp/g.json` present · managed rules come only from `/tmp/g.json`")
+        managed = "**Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` present"
         text = render.status_listing(render.Status(managed, True, False, rules, modes, ["text as reported"]))
         self.assertEqual(text, doc_block("**Managed** platform file"))
 
@@ -166,13 +165,9 @@ class Card(AstIsolated):
         self.assertTrue(self.card(rule, [{"cmd": "ls"}]).startswith("### from-rule ·"))
         self.assertTrue(self.card(rule, [{"cmd": "ls"}], "--id-name", "named").startswith("### named ·"))
 
-    def test_draft_scope_label_and_managed_file(self) -> None:
+    def test_draft_scope_label(self) -> None:
         out = self.card(PKILL, [{"cmd": "ls"}], "--scope", "project")
         self.assertTrue(out.startswith("### new-rule · deny · retry same-command · project\n"))
-        out = self.card(PKILL, [{"cmd": "ls"}], "--scope", "managed")
-        self.assertIn(f"\n**File** `{self.mpath}`\n", out)
-        os.environ.pop("GUARDRAILS_MANAGED_PATH")
-        self.assertNotIn("**File**", self.card(PKILL, [{"cmd": "ls"}], "--scope", "managed"))
 
     def test_mismatches_are_flagged_and_counted(self) -> None:
         out = self.card(PKILL, [{"cmd": "pkill a", "expect": "pass"}, {"cmd": "ls", "expect": "match"},
@@ -294,47 +289,12 @@ class StatusRender(AstIsolated):
     def rule(self, **fields: object) -> str:
         return json.dumps({"match": {"program": "x"}, "message": "m", **fields})
 
-    def test_first_line_default_absent_no_override(self) -> None:
-        os.environ.pop("GUARDRAILS_MANAGED_PATH")
-        first = self.status().splitlines()[0]
-        self.assertEqual(first, f"**Managed** platform file `{self.dpath}` absent · no managed file is present, "
-                                "so there are no managed rules")
-
-    def test_first_line_default_present(self) -> None:
-        self.put(self.dpath, {})
-        os.environ.pop("GUARDRAILS_MANAGED_PATH")
-        self.assertEqual(self.status().splitlines()[0], f"**Managed** platform file `{self.dpath}` present")
-
-    def test_first_line_override_and_path(self) -> None:
+    def test_first_line_names_the_managed_file_and_whether_it_exists(self) -> None:
+        first = f"**Managed** platform file `{self.mpath}` "
+        self.assertEqual(self.status().splitlines()[0],
+                         first + "absent · no managed file is present, so there are no managed rules")
         self.put(self.mpath, {})
-        extra = self.tmp / "extra.json"
-        first = self.status("--path", str(extra)).splitlines()[0]
-        self.assertIn(f"platform file `{self.dpath}` absent", first)
-        self.assertIn(f"override `{self.mpath}` present", first)
-        self.assertIn(f"--path `{extra}` absent", first)
-        self.assertIn(f"managed rules come only from `{self.mpath}`", first)
-        self.assertIn("the --path file is read for this status only", first)
-
-    def test_managed_line_cases(self) -> None:
-        cases = {
-            "override only": ([self.mpath], (), [f"managed rules come only from `{self.mpath}`"], []),
-            "default and override": ([self.dpath, self.mpath], (), [], ["come only from"]),
-            "--path equal to the env override": ([self.mpath], ("--path", str(self.mpath)), [], ["--path `"]),
-            "--path equal to the platform default": ([self.dpath], ("--path", str(self.dpath)), [],
-                                                     ["--path `", "the hook enforces", "come only from"]),
-            "no managed file": ([], (), [], ["come only from"]),
-        }
-        for name, (files, argv, present, absent) in cases.items():
-            with self.subTest(case=name):
-                for path in files:
-                    self.put(path, {})
-                first = self.status(*argv).splitlines()[0]
-                for text in present:
-                    self.assertIn(text, first)
-                for text in absent:
-                    self.assertNotIn(text, first)
-                for path in files:
-                    path.unlink()
+        self.assertEqual(self.status().splitlines()[0], first + "present")
 
     def test_rule_rows_and_states(self) -> None:
         self.put(self.mpath, {"rules": {"kill-9": json.loads(self.rule(action="warn"))}})
@@ -382,9 +342,6 @@ class StatusRender(AstIsolated):
         self.assertTrue(only.startswith("**Problems**\n"))
         self.assertNotIn("### Guardrails", only)
         self.put(self.gpath, {})
-        os.chmod(self.tmp, 0o755)
-        self.put(self.mpath, {})
-        os.environ.pop("GUARDRAILS_MANAGED_PATH")
         self.assertEqual(self.status("--problems"), "No problems.\n")
 
     def test_scope_filter(self) -> None:
@@ -399,8 +356,6 @@ class StatusRender(AstIsolated):
                 self.assertIn("1 rule ·", out)
                 self.assertIn(f"`{rule}`", out)
                 self.assertEqual(f"`{mode}`" in out, mode is not None)
-        empty = self.status("--scope", "project", "--path", str(self.tmp / "none.json"))
-        self.assertIn("p-rule", empty)
         self.cli("rule", "rm", "p-rule", "--scope", "project")
         self.assertIn("No rules with a project entry.", self.status("--scope", "project"))
 
@@ -608,23 +563,6 @@ class NotEvaluated(AstIsolated):
 
 
 class Isolation(AstIsolated):
-    def test_render_stdout_is_only_the_block(self) -> None:
-        extra = self.tmp / "custom.json"
-        code, out, err = self.cli("rule", "test", "--json", json.dumps(PKILL), "--scope", "managed",
-                                  "--path", str(extra), "pkill a")
-        self.assertEqual(code, 0)
-        self.assertNotIn("\nnote:", "\n" + out)
-        self.assertIn(f"**File** `{extra}`", out)
-        self.assertIn(f"**Note** the hook enforces {extra} only if GUARDRAILS_MANAGED_PATH points at it", out)
-        self.assertIn("the hook enforces", err)
-        code, out, err = self.cli("status", "--scope", "managed", "--path", str(extra))
-        self.assertEqual(code, 0)
-        self.assertNotIn("\nnote:", "\n" + out)
-        self.assertTrue(out.startswith("**Managed**"))
-        code, out, _ = self.cli("rule", "add", "x", "--json", json.dumps(PKILL), "--scope", "managed", "--path",
-                                str(extra))
-        self.assertIn("note: the hook enforces", out)
-
     def test_status_scope_filters_problems(self) -> None:
         self.put(self.gpath, {"rules": {"g-bad": {"match": {"program": "x"}, "message": "m", "modes": ["a"]}}})
         self.put(self.ppath, {"rules": {"p-bad": {"match": {"program": "x"}, "message": "m", "modes": ["b"]}}})

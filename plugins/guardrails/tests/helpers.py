@@ -52,12 +52,11 @@ def caught(out: str) -> dict[str, bool]:
     return {row["cmd"]: row["glyph"] == "✗" for row in rows}
 
 
-SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR",
-            "GUARDRAILS_MANAGED_PATH")
+SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR")
 
 
 class Isolated(unittest.TestCase):
-    """Global state under <tmp>/data, managed override under <tmp>/managed, stand-in platform default <tmp>/sysdefault, project root <tmp>/proj, no agent markers."""
+    """Global state under <tmp>/data, the managed file at <tmp>/managed, project root <tmp>/proj, no agent markers."""
 
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -67,13 +66,11 @@ class Isolated(unittest.TestCase):
         self.proj = self.tmp / "proj"
         self.proj.mkdir()
         self.mpath = self.tmp / "managed" / "guardrails.json"
-        self.dpath = self.tmp / "sysdefault" / "guardrails.json"
-        patch_default = mock.patch.object(store, "default_managed_path", return_value=self.dpath)
-        patch_default.start()
-        self.addCleanup(patch_default.stop)
+        patch_managed = mock.patch.object(store, "MANAGED_PATH", self.mpath)
+        patch_managed.start()
+        self.addCleanup(patch_managed.stop)
         env = {k: v for k, v in os.environ.items() if k not in SCRUBBED}
-        env.update(CLAUDE_PLUGIN_DATA=str(self.data), CLAUDE_PROJECT_DIR=str(self.proj),
-                   GUARDRAILS_MANAGED_PATH=str(self.mpath))
+        env.update(CLAUDE_PLUGIN_DATA=str(self.data), CLAUDE_PROJECT_DIR=str(self.proj))
         patcher = mock.patch.dict(os.environ, env, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)

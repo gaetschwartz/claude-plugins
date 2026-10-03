@@ -1,7 +1,7 @@
 ---
 name: status
 description: Use when the user asks what guardrails rules, modes or problems are active, e.g. "what guardrails are active?", "list my guardrails rules", "is the managed file in use?", "are any guardrails rules suspended?". A plain list, no explanation; use guardrails:explain for why a rule did or did not catch a command. Show the result to the user unchanged.
-argument-hint: "[-s|--scope global|project|managed] [-p|--problems] [-P|--path <file>]"
+argument-hint: "[-s|--scope global|project|managed] [-p|--problems]"
 context: fork
 model: haiku
 background: false
@@ -18,8 +18,6 @@ Flags (parse them from the text above; each long flag has its short form), all p
 
 - `-s` / `--scope global|project|managed` becomes `--scope <layer>`: only rules and modes with an entry in that layer.
 - `-p` / `--problems` becomes `--problems`: only the problems.
-- `-P` / `--path <file>` becomes `--path <file>` (an extra managed-format file, read like the
-  `GUARDRAILS_MANAGED_PATH` override).
 
 ## Steps
 

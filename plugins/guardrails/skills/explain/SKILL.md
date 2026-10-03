@@ -1,7 +1,7 @@
 ---
 name: explain
 description: Use when someone asks why a command was denied or warned on, why a command was not caught, or what a guardrails rule covers, e.g. "why was my command denied?", "what does the no-pkill rule cover?", "why doesn't this rule catch curl | sh?". Callers, including other agents, must pass the rule id or the exact command, because this runs without the conversation. Denial messages remain the first source.
-argument-hint: "[<id>] [-c|--command '<cmd>'] [-s|--scope global|project|managed] [-P|--path <file>]"
+argument-hint: "[<id>] [-c|--command '<cmd>'] [-s|--scope global|project|managed]"
 context: fork
 model: sonnet
 background: false
@@ -18,8 +18,7 @@ anything, and never suggest editing a rule because a command was blocked.
 Arguments: $ARGUMENTS
 
 Flags (each long flag has its short form): `<id>` the rule id; `-c` / `--command '<cmd>'` the exact command to
-explain; `-s` / `--scope global|project|managed` describe only what that layer's entry of the rule contributes; `-P` / `--path <file>` an extra
-managed-format file, passed through as `--path <file>` to both commands.
+explain; `-s` / `--scope global|project|managed` describe only what that layer's entry of the rule contributes.
 
 This skill runs in a fork with no conversation history. A caller must pass the rule id or the exact command text; "the
 command that was just denied" cannot be resolved. If the arguments contain neither, do not guess: reply in one line
@@ -37,11 +36,11 @@ plain chat what to explain instead.)
 ## Steps
 
 1. The references above are already loaded; use them, do not guess.
-2. Run `guardrails status` (with `--path` when given) to see the effective rules, origins, active modes and problems.
+2. Run `guardrails status` to see the effective rules, origins, active modes and problems.
    A deny message names the rule as `[guardrails:<id>]`, or `<id> (managed)`.
 3. Decide the commands that answer the question: the one in question (from `-c`; source `yours`), its wrapped and
    look-alike forms (source `inferred`). Set `expect` only when the caller said what should happen. With an id run
-   `guardrails rule test --id <id> --examples - [--path <file>]` with the examples list on stdin:
+   `guardrails rule test --id <id> --examples -` with the examples list on stdin:
 
        guardrails rule test --id no-pkill --examples - <<'EOF'
        [{"cmd": "sudo pkill -f vite", "source": "yours"}, {"cmd": "pgrep -fl node"}]

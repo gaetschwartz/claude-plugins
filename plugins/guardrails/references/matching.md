@@ -337,10 +337,6 @@ Managed specifics:
 
 - Managed rules are always enforced unless their `modes` are declared by the managed file itself; a managed rule with
   no (declared) modes cannot be suspended by anything, and it still applies when the global hook is disabled.
-- Several managed files stack: platform default first, then the `GUARDRAILS_MANAGED_PATH` file, then a `--path` file
-  (status and `rule test` only); later ones can only tighten. For a mode an earlier file declares, a later file's
-  `active` is ignored, it cannot add suspending `modes` to an earlier rule, and it cannot make a mode the earlier file
-  left undeclared suspend that rule.
 - A project cannot switch on a mode the managed file declares, and cannot make a managed mode agent-enablable.
 - An unreadable or invalid managed file never turns the guard off: the broken part is skipped and reported.
 

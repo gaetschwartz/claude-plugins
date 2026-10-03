@@ -52,7 +52,7 @@ parsed in total per command (the 5 s deadline bounds the time as well); past tha
 `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'`, the arguments of `eval`, heredocs and here-strings fed to a shell, and
 the substitutions in unquoted heredoc bodies are unquoted (one shell word, nothing else) and scanned as units of their own
 (depth 8, 64 distinct units, 256 KiB). Add wrapper names with `guardrails wrapper add <name>`
-(`--scope global|project|managed`, `--path`, `--as-user` for agents, like `rule`); `wrapper rm` and `wrapper list` do the
+(`--scope global|project|managed`, `--as-user` for agents, like `rule`); `wrapper rm` and `wrapper list` do the
 rest. Look-through only ever grows: a layer adds names and never removes or changes a higher layer's.
 Obfuscated or dynamic command names (`$'p\x6bill'`, `p''kill`, variables, aliases, functions) cannot be analysed
 statically and are not matched; `references/matching.md` lists the known limits.
@@ -138,8 +138,6 @@ explicit request (`--as-user`).
 | project | `<project>/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` |
 | managed | `/Library/Application Support/ClaudeCode/guardrails.json` (macOS), `/etc/claude-code/guardrails.json` (Linux); POSIX only |
 
-`GUARDRAILS_MANAGED_PATH` adds a second managed file, for tests and odd setups. It never replaces the platform path: both are loaded, the platform file ranks higher, and the override can only add or tighten (it cannot switch on a mode the platform file declares or add suspending modes to its rules). `status` says when the platform file is absent and only an override is in use.
-
 Layers stack managed > global > project. Project entries can add rules, and for a global rule id can only: tighten `action`/`retry`, re-enable it, remove
 suspending modes, and reword `message`/`messageShort`/`description`. What a global rule matches (`match`,
 `requires`) cannot be changed by a project entry; an override that does not validate falls back to the global rule
@@ -168,26 +166,10 @@ sudo guardrails rule add <id> --scope managed --json @rule.json --reason "…"
 ```
 
 `rule add|set|rm`, `mode declare|undeclare|on|off` and `preset install` accept `--scope global|project|managed`; the
-default is unchanged and managed is never the default. `--scope managed` writes the override file when
-`GUARDRAILS_MANAGED_PATH` is set, else the platform file. When the file (or its directory, if absent) is not writable
+default is unchanged and managed is never the default. `--scope managed` writes the platform file. When it (or its directory, if absent) is not writable
 the CLI says so and prints the `sudo` command to re-run. Under root the parent directory is created (0755, whatever the
 umask) and the file is written mode 0644 atomically. `status` warns when the managed file or its directory
 is not owned by root or is writable by group or others, since that makes the layer decorative.
-
-### `--path <file>`
-
-`--path` names a managed-format file for one invocation, on every verb that takes `--scope` (`rule add|set|rm`,
-`mode declare|undeclare|on|off`, `preset install`) and on the read verbs `status`, `rule test` and session `mode on|off`.
-
-- With `--scope managed`, writes go to that file instead of the platform file or `GUARDRAILS_MANAGED_PATH`. On a write
-  verb, `--path` without `--scope managed` is an error (exit 2).
-- On `status`, `rule test --id` and `mode on|off` it is loaded as one more managed source, exactly like the
-  `GUARDRAILS_MANAGED_PATH` override: ranked below the platform file (and the env override), tightening only, with the
-  same validation and ownership/permission problems reported.
-- The hook reads only the platform file and `GUARDRAILS_MANAGED_PATH`. A write to any other `--path` prints a note that
-  the file is enforced only if `GUARDRAILS_MANAGED_PATH` points at it.
-- A not-writable target prints the usual error and a `sudo …` command that includes `--path`; when the target came from
-  `GUARDRAILS_MANAGED_PATH` (which `sudo` drops), the command gets an explicit `--path` for it.
 
 Managed rules keep their own `message`/`messageShort`; lower layers cannot reword them. A modes entry on a managed
 rule only counts when the managed file itself declares that mode; other entries are ignored (the rule stays always on)
@@ -238,7 +220,7 @@ Claude Code settings; guardrails does not manage these, they are shown here for 
 An agent runs the CLI as `guardrails <verb>` (the plugin's `bin/` is on the Bash tool's PATH); from your own terminal
 use `python3 <plugin dir>/lib/guard.py <verb>` (`--help` for the full
 list: `status`, `rule add|set|rm|test|ast`, `wrapper add|rm|list`, `mode declare|undeclare|on|off`,
-`preset list|show|install`, `enable|disable` (`--scope project` for the project rules); changes take `--scope global|project|managed`, with `--path <file>` to pick a managed-format file). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
+`preset list|show|install`, `enable|disable` (`--scope project` for the project rules); changes take `--scope global|project|managed`). When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user`, and
 `enable`/`disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample
 commands without changing anything. It checks the matcher only (a row is caught or allowed); it prints a `**Note**` line when the hook
 would not act on a match: rule disabled, `requires` binary missing, a listed mode that suspends it (and whether it is
@@ -274,8 +256,8 @@ gets a `⚠`. Every command is an inline-code span padded inside the backticks t
 at 40; longer ones go last, unpadded; CJK and emoji count two columns; a command with a backtick gets the longer fence;
 newlines show as `⏎`).
 
-`guardrails status` prints the state listing the same way: a first line about the managed files (platform file
-present or absent, overrides and `--path` files), one row per rule (`id`, action, origin layers, state: `always
+`guardrails status` prints the state listing the same way: a first line about the managed files (the platform file,
+present or absent), one row per rule (`id`, action, origin layers, state: `always
 enforced`, `suspended by <modes>`, `disabled`, `enabled`), the modes and the problems. `status` also takes
 `--scope global|project|managed` (only rules, modes and problems of that layer) and `--problems`; `--rule <id>` prints
 just that rule's row. `references/presentation.md` is the layout contract.
@@ -288,15 +270,15 @@ when a skill needs it.
 
 | skill | arguments |
 |---|---|
-| `guardrails:status` | `[-s/--scope global\|project\|managed] [-p/--problems] [-P/--path <file>]` |
-| `guardrails:explain` | `[<id>] [-c/--command '<cmd>'] [-s/--scope …] [-P/--path <file>]` |
-| `guardrails:new` | `[-B/--block <cmd>]… [-A/--allow <cmd>]… [-s/--scope …] [-P/--path <file>] [-a/--action deny\|warn] [-R/--retry] [-m/--modes a,b] [-i/--id <id>] [-y/--yes] [description]` |
-| `guardrails:edit` | `<id> [enable\|disable\|rm\|key=value …] [-s/--scope …] [-P/--path <file>] [-y/--yes]` |
-| `guardrails:mode` | `[on\|off\|declare\|undeclare] [<name>] [-s/--scope …] [-P/--path <file>] [-e/--agent-may-enable]` |
-| `guardrails:setup` | `[<preset>…] [-s/--scope …] [-P/--path <file>] [-y/--yes]` |
+| `guardrails:status` | `[-s/--scope global\|project\|managed] [-p/--problems]` |
+| `guardrails:explain` | `[<id>] [-c/--command '<cmd>'] [-s/--scope …]` |
+| `guardrails:new` | `[-B/--block <cmd>]… [-A/--allow <cmd>]… [-s/--scope …] [-a/--action deny\|warn] [-R/--retry] [-m/--modes a,b] [-i/--id <id>] [-y/--yes] [description]` |
+| `guardrails:edit` | `<id> [enable\|disable\|rm\|key=value …] [-s/--scope …] [-y/--yes]` |
+| `guardrails:mode` | `[on\|off\|declare\|undeclare] [<name>] [-s/--scope …] [-e/--agent-may-enable]` |
+| `guardrails:setup` | `[<preset>…] [-s/--scope …] [-y/--yes]` |
 
 - `status` is a plain, compact list (rules with origin and state, modes, problems) and says so when the platform
-  managed file is absent and an override or `--path` file is in use. It runs forked (`context: fork`) on Haiku and only
+  managed file is absent. It runs forked (`context: fork`) on Haiku and only
   pastes the output of `guardrails status` verbatim, so it is cheap and needs no conversation.
 - `explain` answers why a command was denied or not caught and what a rule covers, pasting the `rule test` card. It runs
   forked on Sonnet because it reasons over the matching semantics (wrappers, `args` versus

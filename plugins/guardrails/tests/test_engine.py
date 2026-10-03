@@ -356,38 +356,6 @@ class ManagedHook(AstIsolated):
         self.assertIn("NOT enforced", out["systemMessage"])
 
 
-class ManagedSources(AstIsolated):
-    def setUp(self) -> None:
-        super().setUp()
-        self.put(self.dpath, {"rules": {"no-pkill": dict(PKILL)}})
-
-    def test_the_platform_default_is_enforced_whatever_the_override_holds(self) -> None:
-        loosening = {"rules": {"no-pkill": {**PKILL, "message": "Allowed.", "action": "warn",
-                                            "retry": "same-command", "enabled": False}}}
-        for name, state in (("absent", None), ("empty", {}), ("loosening", loosening), ("unreadable", "{nope")):
-            with self.subTest(override=name):
-                if state is not None:
-                    self.put(self.mpath, state)
-                for _ in range(2):
-                    out = self.hook("pkill node", session=name)
-                    self.assertEqual(decision(out), "deny")
-                    self.assertIn("No pkill.", reason(out))
-                self.mpath.unlink(missing_ok=True)
-        del os.environ["GUARDRAILS_MANAGED_PATH"]
-        self.assertEqual(decision(self.hook("pkill node")), "deny")
-
-    def test_an_unreadable_override_is_reported(self) -> None:
-        self.put(self.mpath, "{nope")
-        out = self.hook("pkill node")
-        assert out is not None
-        self.assertIn("NOT enforced", out["systemMessage"])
-
-    def test_override_adds_rules(self) -> None:
-        self.put(self.mpath, {"rules": {"no-strings": dict(STRINGS)}})
-        self.assertEqual(decision(self.hook("strings a")), "deny")
-        self.assertEqual(decision(self.hook("pkill a")), "deny")
-
-
 class EndToEnd(RealRuntime):
     def test_deny_through_wrapper(self) -> None:
         self.put(self.gpath, {"rules": {"no-strings": dict(STRINGS)}, "modes": dict(MODES)})
@@ -411,24 +379,3 @@ class EndToEnd(RealRuntime):
             with self.subTest(payload=odd):
                 proc = self.run_guard(odd)
                 self.assertEqual((proc.returncode, proc.stdout), (0, ""), proc.stderr)
-
-
-class ManagedEndToEnd(RealRuntime):
-    def test_managed_deny_beats_project_disable_through_wrapper(self) -> None:
-        self.put(self.mpath, {"rules": {"no-pkill": dict(PKILL)}})
-        self.put(self.ppath, {"rules": {"no-pkill": {"enabled": False, "action": "warn", "retry": "same-command"}}})
-        payload = json.dumps({"session_id": "e", "cwd": str(self.proj), "tool_name": "Bash",
-                              "tool_input": {"command": "sudo pkill -f node"}})
-        for _ in range(2):
-            proc = self.run_guard(payload)
-            self.assertEqual(proc.returncode, 0)
-            out = json.loads(proc.stdout)["hookSpecificOutput"]
-            self.assertEqual(out["permissionDecision"], "deny")
-            self.assertIn("no-pkill (managed)", out["permissionDecisionReason"])
-
-    def test_unreadable_managed_file_never_crashes_the_wrapper(self) -> None:
-        self.put(self.mpath, "{nope")
-        payload = json.dumps({"session_id": "e", "tool_name": "Bash", "tool_input": {"command": "ls"}})
-        proc = self.run_guard(payload)
-        self.assertEqual(proc.returncode, 0)
-        self.assertIn("NOT enforced", json.loads(proc.stdout)["systemMessage"])

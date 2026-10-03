@@ -1,7 +1,7 @@
 ---
 name: setup
 description: Use when the user wants to set up guardrails, install recommended guardrails presets, or asks which guardrails suit the work done on this machine or in this repo, e.g. "set up guardrails", "install the process-safety preset", "I do reverse engineering in this repo, configure guardrails for that". Never use it to get past a guardrails denial.
-argument-hint: "[<preset> ...] [-s|--scope global|project|managed] [-P|--path <file>] [-y|--yes]"
+argument-hint: "[<preset> ...] [-s|--scope global|project|managed] [-y|--yes]"
 allowed-tools: Bash(guardrails status *) Bash(guardrails preset *) Bash(guardrails mode *) Bash(guardrails rule rm *) AskUserQuestion
 ---
 
@@ -27,10 +27,9 @@ rules cannot be enforced. The user never has to run an install command; a later 
 ## Arguments
 
 Parse the text above; every long flag has a short one: preset names (install directly, no interview),
-`-s` / `--scope global|project|managed` (default global), `-P` / `--path <file>` (managed-format file, needs
-`-s managed`), `-y` / `--yes` (skip the final summary question).
+`-s` / `--scope global|project|managed` (default global), `-y` / `--yes` (skip the final summary question).
 
-With preset names: run `guardrails preset install <name> --as-user --scope <s> [--path <file>] --reason "setup:
+With preset names: run `guardrails preset install <name> --as-user --scope <s> --reason "setup:
 <preset>"` for each, then go to step 6. The preset's own mode declarations are kept as they are; offer the step 4
 questions only when the user did not pass `-y`.
 
@@ -52,8 +51,8 @@ questions only when the user did not pass `-y`.
 5. Install and apply the answers:
 
    ```
-   guardrails preset install <name> --only <id,id> --as-user --scope <s> [--path <file>] --reason "setup: <summary of answers>"
-   guardrails mode declare <mode> --description "<the preset's description>" [--agent-may-enable] --as-user --scope <s> [--path <file>]
+   guardrails preset install <name> --only <id,id> --as-user --scope <s> --reason "setup: <summary of answers>"
+   guardrails mode declare <mode> --description "<the preset's description>" [--agent-may-enable] --as-user --scope <s>
    guardrails mode on <mode> --scope project --as-user   # only if they chose "always on in this project"
    ```
 

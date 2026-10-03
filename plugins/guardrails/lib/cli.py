@@ -29,8 +29,6 @@ SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "d
 SCOPES = ("global", "project", "managed")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
-PASTED = {("status", None), ("rule", "test")}
-
 Args = argparse.Namespace
 
 
@@ -82,57 +80,41 @@ def project_path() -> Path:
 
 
 def resolve_scope(args: Args) -> str:
-    scope = getattr(args, "scope", None) or "global"
-    check_path_scope(args, scope)
-    return scope
+    return getattr(args, "scope", None) or "global"
 
 
-def extra_path(args: Args) -> Path | None:
-    path = getattr(args, "path", None)
-    return Path(path).expanduser().absolute() if path else None
-
-
-def scope_path(scope: str, args: Args | None = None) -> Path:
+def scope_path(scope: str) -> Path:
     if scope == "managed":
-        return store.managed_write_path(extra_path(args) if args else None)
+        return store.MANAGED_PATH
     return project_path() if scope == "project" else store.global_state_path()
-
-
-def target_path(args: Args) -> Path:
-    return scope_path(resolve_scope(args), args)
-
-
-def check_path_scope(args: Args, scope: str) -> None:
-    if extra_path(args) and scope != "managed":
-        raise Invalid("--path names a managed-format file and needs --scope managed")
 
 
 def change_state(scope: str, path: Path, fn: Callable[[store.State], Any]) -> Any:
     if scope != "managed":
         return store.mutate(path, fn)
-    store.ensure_writable(path)
+    os.umask(0o022)
     try:
-        return store.mutate(path, fn, store.MANAGED_MODE)
+        return store.mutate(path, fn, public=True)
     except store.StateError as exc:
         raise store.StateError(f"{exc}; fix or remove the managed file by hand, the CLI never overwrites a corrupt "
                                "state file") from exc
 
 
-def managed_state(args: Args) -> store.State:
-    return store.load_managed(extra_path(args))[0]
+def managed_state() -> store.State:
+    return store.load_managed()[0]
 
 
-def states(args: Args) -> tuple[store.State, store.State, store.State]:
+def states() -> tuple[store.State, store.State, store.State]:
     """The managed, global and project state; an unreadable global or project file raises."""
-    return managed_state(args), store.load(store.global_state_path()), store.load(store.project_state_path())
+    return managed_state(), store.load(store.global_state_path()), store.load(store.project_state_path())
 
 
-def managed_rule_ids(args: Args) -> set[str]:
-    return set(policy.origins("rules", managed_state(args), {}, {}))
+def managed_rule_ids() -> set[str]:
+    return set(policy.origins("rules", managed_state(), {}, {}))
 
 
-def refuse_managed_rule(args: Args, scope: str, rid: str, path: Path) -> None:
-    if scope == "managed" or rid not in managed_rule_ids(args):
+def refuse_managed_rule(scope: str, rid: str, path: Path) -> None:
+    if scope == "managed" or rid not in managed_rule_ids():
         return
     try:
         own = rid in view(store.load(path), "rules")
@@ -184,8 +166,6 @@ def check_stdin(*pairs: tuple[str | None, str]) -> None:
 
 @dataclass
 class Snapshot:
-    extra: Path | None
-    sources: list[Path]
     mstate: store.State
     gstate: store.State
     pstate: store.State
@@ -206,8 +186,7 @@ class Snapshot:
 
 
 def snapshot(args: Args) -> Snapshot:
-    extra = extra_path(args)
-    mstate, problems = store.load_managed(extra)
+    mstate, problems = store.load_managed()
     layers: list[frozenset[str]] = [frozenset({"managed"})] * len(problems)
 
     def report(text: str, *where: str) -> None:
@@ -228,10 +207,8 @@ def snapshot(args: Args) -> Snapshot:
 
     gpath, ppath = store.global_state_path(), store.project_state_path()
     gstate, pstate = safe_load(gpath, "global"), safe_load(ppath, "project")
-    sources = store.managed_paths(extra)
-    for path in sources:
-        for text in store.trust_problems(path):
-            report(text, "managed")
+    for text in store.trust_problems(store.MANAGED_PATH):
+        report(text, "managed")
     for name, m in view(pstate, "modes").items():
         if name in view(mstate, "modes") and isinstance(m, dict) and m.get("active") is True:
             report(f"project state switches on mode '{name}', which the managed file declares (ignored)", "project")
@@ -269,7 +246,7 @@ def snapshot(args: Args) -> Snapshot:
             fails_open = f" MANAGED rules fail open too: {', '.join(managed_blind)}." if managed_blind else ""
             report(f"rules {', '.join(sorted(parsed))} use the ast-grep engine and are NOT enforced "
                    f"while the engine cannot run ({exc}).{fails_open}", *where)
-    return Snapshot(extra, sources, mstate, gstate, pstate, gpath, ppath, gstate.get("enabled", True) is not False,
+    return Snapshot(mstate, gstate, pstate, gpath, ppath, gstate.get("enabled", True) is not False,
                     rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers,
                     frozenset(blind))
 
@@ -287,27 +264,10 @@ def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, policy.Ac
     return "enabled"
 
 
-def presence_word(path: Path) -> str:
-    return store.presence(path).strip(" ()") or "present"
-
-
-def managed_line(snap: Snapshot) -> str:
-    default, *override = snap.sources
-    env = store.env_managed_path()
-    parts = [f"platform file {render.span(str(default))} {presence_word(default)}"]
-    for path in override:
-        label = "--path" if snap.extra and path == snap.extra and not (env and env.absolute() == path) else "override"
-        parts.append(f"{label} {render.span(str(path))} {presence_word(path)}")
-    in_use = [path for path in override if not store.presence(path)]
-    if store.presence(default) == " (absent)":
-        if in_use:
-            parts.append("managed rules come only from " + ", ".join(render.span(str(p)) for p in in_use))
-        else:
-            parts.append("no managed file is present, so there are no managed rules")
-    if snap.extra and not store.hook_enforces(snap.extra):
-        parts.append(f"the --path file is read for this status only; the hook enforces it only if "
-                     f"{store.MANAGED_ENV} points at it")
-    return "**Managed** " + " · ".join(parts)
+def managed_line() -> str:
+    where, state = render.span(str(store.MANAGED_PATH)), store.presence(store.MANAGED_PATH)
+    return f"**Managed** platform file {where} {state}" + (
+        " · no managed file is present, so there are no managed rules" if state == "absent" else "")
 
 
 def status_view(snap: Snapshot, scope: str | None) -> render.Status:
@@ -333,7 +293,7 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
         reason = f" ({snap.gstate['disabledReason']})" if snap.gstate.get("disabledReason") else ""
         kept = "; managed rules stay enforced" if view(snap.mstate, "rules") else ""
         notes.append(f"the global hook is disabled{reason}{kept}")
-    status = render.Status(managed_line(snap), snap.hook_on, snap.ppath is not None
+    status = render.Status(managed_line(), snap.hook_on, snap.ppath is not None
                            and snap.pstate.get("enabled", True) is False, rules, modes, snap.problems_in(scope),
                            notes=notes)
     if scope:
@@ -380,7 +340,7 @@ def cmd_rule_add(args: Args) -> int:
     unchecked = check_ast_rule(parsed)
     rule["setBy"] = stamp(args.reason)
     scope = resolve_scope(args)
-    path = scope_path(scope, args)
+    path = scope_path(scope)
 
     def change(state: store.State) -> bool:
         rules = table(state, "rules")
@@ -392,7 +352,7 @@ def cmd_rule_add(args: Args) -> int:
     print(f"{'replaced' if existed else 'added'} rule {args.id} in {path}")
     if unchecked:
         print(unchecked)
-    if scope != "managed" and args.id in managed_rule_ids(args):
+    if scope != "managed" and args.id in managed_rule_ids():
         print(f"note: {args.id} is also a managed rule; this entry can only tighten it, not reword it")
     note = always_enforced(scope, args.id, parsed)
     if note:
@@ -431,14 +391,14 @@ def ineffective(fields: dict[str, Any], base: policy.Rule) -> list[str]:
 def cmd_rule_set(args: Args) -> int:
     require_user(args, "rule set")
     scope = resolve_scope(args)
-    path = scope_path(scope, args)
+    path = scope_path(scope)
     fields = load_json(args.json, "--json")
     if not isinstance(fields, dict):
         raise Invalid("--json must be a JSON object of the fields to change")
     for key in fields:
         if key not in SETTABLE:
             raise Invalid(f"--json key {key!r} must be one of {', '.join(SETTABLE)}")
-    refuse_managed_rule(args, scope, args.id, path)
+    refuse_managed_rule(scope, args.id, path)
     base = policy.effective_rules({}, store.load(store.global_state_path()), {}).get(args.id) \
         if scope == "project" else None
 
@@ -475,8 +435,8 @@ def cmd_rule_set(args: Args) -> int:
 def cmd_rule_rm(args: Args) -> int:
     require_user(args, "rule rm")
     scope = resolve_scope(args)
-    path = scope_path(scope, args)
-    refuse_managed_rule(args, scope, args.id, path)
+    path = scope_path(scope)
+    refuse_managed_rule(scope, args.id, path)
 
     def change(state: store.State) -> None:
         rules = table(state, "rules")
@@ -581,8 +541,7 @@ def cmd_rule_test(args: Args) -> int:
     examples: list[Example] = [Example(c, render.Source(args.source), None) for c in args.commands]
     if args.examples is not None:
         examples += parse_examples(args.examples)
-    mstate, gstate, pstate = states(args)
-    file: Path | None = None
+    mstate, gstate, pstate = states()
     if args.json is not None:
         draft, carried = split_envelope(load_json(args.json, "--json"))
         if carried is not None:
@@ -592,8 +551,6 @@ def cmd_rule_test(args: Args) -> int:
         named = args.id_name or draft.get("id")
         rid = named if isinstance(named, str) and named else "new-rule"
         scope = args.scope or "global"
-        if scope == "managed" and store.managed_write_path(extra_path(args)) != store.default_managed_path():
-            file = store.managed_write_path(extra_path(args))
     else:
         found = policy.effective(mstate, gstate, pstate)
         rules = found.rules
@@ -610,8 +567,6 @@ def cmd_rule_test(args: Args) -> int:
     if not examples:
         raise Invalid("give at least one command or --examples")
     notes = effect_notes(args, rule, layers, mstate, gstate, pstate)
-    if file and not store.hook_enforces(file):
-        notes.append(f"the hook enforces {file} only if {store.MANAGED_ENV} points at it")
     wrappers = policy.effective_wrappers(mstate, gstate, pstate)
     evaluations = [matching.evaluate(cmd, {rid: rule}, wrappers) for cmd, _, _ in examples]
     broken = {rid_: why for ev in evaluations for rid_, why in ev.invalid.items()}
@@ -623,7 +578,7 @@ def cmd_rule_test(args: Args) -> int:
     results = [render.Result(cmd, source, outcome_of(ev, rid), expect)
                for (cmd, source, expect), ev in zip(examples, evaluations)]
     print(render.rule_card(rid, rule, policy.render(rule.message), scope,
-                           args.intent or "", results, notes, str(file or "")))
+                           args.intent or "", results, notes))
     return 0
 
 
@@ -670,7 +625,7 @@ def cmd_wrapper_add(args: Args) -> int:
     if args.name in wrapper_table.DEFAULTS:
         raise Invalid(f"wrapper '{args.name}' is already built in")
     scope = resolve_scope(args)
-    path = scope_path(scope, args)
+    path = scope_path(scope)
 
     def change(state: store.State) -> bool:
         wrappers = table(state, "wrappers")
@@ -686,7 +641,7 @@ def cmd_wrapper_add(args: Args) -> int:
 def cmd_wrapper_rm(args: Args) -> int:
     require_user(args, "wrapper rm")
     scope = resolve_scope(args)
-    path = scope_path(scope, args)
+    path = scope_path(scope)
 
     def change(state: store.State) -> None:
         wrappers = table(state, "wrappers")
@@ -701,7 +656,7 @@ def cmd_wrapper_rm(args: Args) -> int:
 
 
 def cmd_wrapper_list(args: Args) -> int:
-    mstate, gstate, pstate = states(args)
+    mstate, gstate, pstate = states()
     origins = policy.origins("wrappers", mstate, gstate, pstate)
     shown = False
     for name in sorted(policy.effective_wrappers(mstate, gstate, pstate)):
@@ -719,7 +674,7 @@ def cmd_mode_declare(args: Args) -> int:
     require_user(args, "mode declare")
     check_name("mode", args.name)
     scope = resolve_scope(args)
-    path = scope_path(scope, args)
+    path = scope_path(scope)
 
     def change(state: store.State) -> None:
         modes = table(state, "modes")
@@ -731,7 +686,7 @@ def cmd_mode_declare(args: Args) -> int:
 
     change_state(scope, path, change)
     print(f"declared mode {args.name} in {path} (agent may enable: {'yes' if args.agent_may_enable else 'no'})")
-    if scope != "managed" and args.name in view(managed_state(args), "modes"):
+    if scope != "managed" and args.name in view(managed_state(), "modes"):
         print(f"note: mode {args.name} is also declared in the managed file, which wins: this declaration can "
               "only tighten it")
     return 0
@@ -740,7 +695,7 @@ def cmd_mode_declare(args: Args) -> int:
 def cmd_mode_undeclare(args: Args) -> int:
     require_user(args, "mode undeclare")
     scope = resolve_scope(args)
-    path = scope_path(scope, args)
+    path = scope_path(scope)
 
     def change(state: store.State) -> None:
         modes = table(state, "modes")
@@ -755,9 +710,8 @@ def cmd_mode_undeclare(args: Args) -> int:
 
 def set_persistent(args: Args, active: bool) -> int:
     require_user(args, f"mode {'on' if active else 'off'} --scope {args.scope}")
-    check_path_scope(args, args.scope)
-    path = scope_path(args.scope, args)
-    managed, gstate = managed_state(args), store.load(store.global_state_path())
+    path = scope_path(args.scope)
+    managed, gstate = managed_state(), store.load(store.global_state_path())
     above = {"managed": ({}, {}), "global": (managed, {}), "project": (managed, gstate)}[args.scope]
     declared_elsewhere = args.name in policy.effective_modes(*above, {})
 
@@ -785,7 +739,7 @@ def cmd_mode_on(args: Args) -> int:
     if args.scope != "session":
         return set_persistent(args, True)
     sid = session_id(args)
-    modes = policy.effective_modes(*states(args))
+    modes = policy.effective_modes(*states())
     if args.name not in modes:
         raise Invalid(f"mode '{args.name}' is not declared (declared: {', '.join(sorted(modes)) or 'none'})")
     if is_agent():
@@ -819,7 +773,7 @@ def cmd_mode_off(args: Args) -> int:
 
 def set_enabled(args: Args, enabled: bool) -> int:
     forbid_agent("enable" if enabled else "disable")
-    path = target_path(args)
+    path = scope_path(resolve_scope(args))
 
     def change(state: store.State) -> None:
         state["enabled"] = enabled
@@ -870,7 +824,7 @@ def cmd_preset_install(args: Args) -> int:
     wanted = {m for r in chosen.values() for m in policy.json_modes(r)}
     modes = {name: m for name, m in view(preset, "modes").items() if name in wanted}
     scope = resolve_scope(args)
-    path = scope_path(scope, args)
+    path = scope_path(scope)
     by = stamp(args.reason or f"preset {args.name}")
     report: list[str] = []
 
@@ -906,17 +860,13 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--as-user", action="store_true", help="agents only: the user explicitly asked for this change")
     common.add_argument("--session-id", help="session to act on (default: $CLAUDE_CODE_SESSION_ID)")
     common.add_argument("--reason", help="recorded with the change")
-    pathed = argparse.ArgumentParser(add_help=False)
-    pathed.add_argument("--path", metavar="FILE", help="a managed-format file: with --scope managed writes go there, "
-                        "read verbs load it as an extra managed source; the hook enforces it only if "
-                        "GUARDRAILS_MANAGED_PATH points at it")
-    scoped = argparse.ArgumentParser(add_help=False, parents=[pathed])
+    scoped = argparse.ArgumentParser(add_help=False)
     scoped.add_argument("--scope", choices=SCOPES, help="which state file to change (default: global); "
                         "managed needs root: sudo guardrails --scope managed ...")
 
     parser = argparse.ArgumentParser(prog="guardrails", description="Manage guardrails rules, modes and presets.")
     verbs = parser.add_subparsers(dest="verb", required=True)
-    status = verbs.add_parser("status", parents=[common, pathed], help="show effective rules and modes")
+    status = verbs.add_parser("status", parents=[common], help="show effective rules and modes")
     status.add_argument("--scope", choices=SCOPES, help="list only rules and modes with an entry in this layer")
     status.add_argument("--problems", action="store_true", help="print only the problems")
     status.add_argument("--rule", metavar="ID", help="print only this rule's row")
@@ -930,7 +880,7 @@ def build_parser() -> argparse.ArgumentParser:
     set_.add_argument("--json", required=True, help="fields to change as a JSON object (null removes one), @<file> or - for stdin")
     rm = rule.add_parser("rm", parents=[common, scoped], help="remove a rule")
     rm.add_argument("id")
-    test = rule.add_parser("test", parents=[common, pathed], help="dry-run a rule against sample commands")
+    test = rule.add_parser("test", parents=[common], help="dry-run a rule against sample commands")
     source = test.add_mutually_exclusive_group(required=True)
     source.add_argument("--json", help="a draft rule as a JSON object, @<file> or - for stdin")
     source.add_argument("--id", help="an installed rule's id")
@@ -941,7 +891,7 @@ def build_parser() -> argparse.ArgumentParser:
     test.add_argument("--intent", help="the rule's intent line")
     test.add_argument("--id-name", help="with --json: the id shown in the title")
     test.add_argument("--scope", choices=SCOPES, help="with --json: the scope shown in the title (default: global)")
-    ast = rule.add_parser("ast", parents=[common, pathed], help="print the parse tree of a command, with the units "
+    ast = rule.add_parser("ast", parents=[common], help="print the parse tree of a command, with the units "
                           "its wrappers and shell strings expose")
     ast.add_argument("command", metavar="CMD")
 
@@ -951,7 +901,7 @@ def build_parser() -> argparse.ArgumentParser:
     wadd.add_argument("name")
     wrm = wrapper.add_parser("rm", parents=[common, scoped], help="remove a wrapper name from a scope")
     wrm.add_argument("name")
-    wlist = wrapper.add_parser("list", parents=[common, pathed], help="list the effective wrappers")
+    wlist = wrapper.add_parser("list", parents=[common], help="list the effective wrappers")
     wlist.add_argument("--scope", choices=SCOPES, help="list only wrappers with an entry in this layer")
 
     mode = verbs.add_parser("mode", help="declare modes and switch them on or off").add_subparsers(dest="op",
@@ -963,7 +913,7 @@ def build_parser() -> argparse.ArgumentParser:
     undeclare = mode.add_parser("undeclare", parents=[common, scoped], help="remove a mode declaration")
     undeclare.add_argument("name")
     for op in ("on", "off"):
-        toggle = mode.add_parser(op, parents=[common, pathed], help=f"switch a mode {op}")
+        toggle = mode.add_parser(op, parents=[common], help=f"switch a mode {op}")
         toggle.add_argument("name")
         toggle.add_argument("--scope", choices=("session", *SCOPES), default="session")
 
@@ -1013,34 +963,16 @@ HANDLERS: dict[tuple[str, str | None], Callable[[Args], int]] = {
 }
 
 
-def unenforced_note(args: Args) -> str:
-    path = extra_path(args)
-    if path and getattr(args, "scope", None) == "managed" and not store.hook_enforces(path):
-        return f"note: the hook enforces {path} only if {store.MANAGED_ENV} points at it"
-    return ""
-
-
-def sudo_hint(args: Args, argv: list[str]) -> str:
-    if getattr(args, "scope", None) != "managed" or extra_path(args):
-        return shlex.join(argv)
-    target = scope_path("managed", args)
-    extra = [] if target == store.default_managed_path() else ["--path", str(target)]
-    return shlex.join([*argv, *extra])
-
-
 def main(argv: list[str]) -> int:
     args = build_parser().parse_args(argv)
     try:
-        code = HANDLERS[(args.verb, getattr(args, "op", None))](args)
-        note = unenforced_note(args) if code == 0 else ""
-        if note:
-            print(note, file=sys.stderr if (args.verb, getattr(args, "op", None)) in PASTED else sys.stdout)
-        return code
+        return HANDLERS[(args.verb, getattr(args, "op", None))](args)
     except Refused as exc:
         print(f"refused: {exc}", file=sys.stderr)
         return 3
-    except store.NotWritable as exc:
-        print(f"error: {exc}. Re-run with sudo: sudo {store.CLI} {sudo_hint(args, argv)}", file=sys.stderr)
+    except PermissionError as exc:
+        hint = f" Re-run with sudo: sudo {store.CLI} {shlex.join(argv)}" if getattr(args, "scope", None) == "managed" else ""
+        print(f"error: {exc}.{hint}", file=sys.stderr)
         return 2
     except (Invalid, store.StateError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)

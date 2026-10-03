@@ -148,15 +148,13 @@ def plural(n: int, word: str) -> str:
 
 
 def rule_card(rid: str, rule: policy.Rule, message: str, scope: str, intent: str,
-              results: list[Result], notes: list[str], file: str = "") -> str:
+              results: list[Result], notes: list[str]) -> str:
     action = str(rule.action)
     head = [f"### {clean(rid)}", clean(action)]
     if rule.retry is policy.Retry.SAME_COMMAND:
         head.append("retry same-command")
     head.append(scope)
     lines = [" · ".join(head)]
-    if file:
-        lines.append(f"**File** {span(file)}")
     lines.append("")
     if intent:
         lines.append(f"**Intent** {prose(intent)}")

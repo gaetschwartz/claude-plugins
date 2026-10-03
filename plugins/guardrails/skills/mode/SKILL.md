@@ -1,7 +1,7 @@
 ---
 name: mode
 description: Use when the user says this session is a specific kind of work covered by a guardrails mode, e.g. "we're reverse-engineering this binary", "this is RE work, strings is fine here", "turn on reverse-engineering mode", or asks to switch such a mode on or off, or to declare or undeclare one. Never enable a mode on your own because a command was denied; the user has to say it.
-argument-hint: "[on|off|declare|undeclare] [<name>] [-s|--scope session|global|project|managed] [-P|--path <file>] [-e|--agent-may-enable]"
+argument-hint: "[on|off|declare|undeclare] [<name>] [-s|--scope session|global|project|managed] [-e|--agent-may-enable]"
 allowed-tools: Bash(guardrails status *) Bash(guardrails mode *) AskUserQuestion
 ---
 
@@ -20,15 +20,14 @@ Arguments: $ARGUMENTS
 ## Arguments
 
 Parse the text above; every long flag has a short one: `-s` / `--scope` (session is the default for `on` / `off`;
-global is the default for `declare` / `undeclare`), `-P` / `--path <file>` (managed-format file, needs `-s managed` for
-anything that writes), `-e` / `--agent-may-enable` (for `declare`: agents may switch the mode on for a session).
+global is the default for `declare` / `undeclare`), `-e` / `--agent-may-enable` (for `declare`: agents may switch the mode on for a session).
 
 No arguments: list the modes from the state above (name, on or off, agent may enable, origins) in the status row
 style, and ask what to do.
 
 ## on
 
-`guardrails mode on <name> --reason "<the user's own words>"` (add `--scope project|global|managed [--path <file>]
+`guardrails mode on <name> --reason "<the user's own words>"` (add `--scope project|global|managed
 --as-user` only when the user asked for a persistent mode).
 
 - Only when the user said, in this conversation, that the session is that kind of work. Quote them in `--reason`. Agents
@@ -47,8 +46,8 @@ style, and ask what to do.
 ## declare / undeclare
 
 Configuration changes; only when the user asks for them:
-`guardrails mode declare <name> --description "<what the work is>" [--agent-may-enable] [--scope …] [--path <file>]
---as-user --reason "<user's words>"` and `guardrails mode undeclare <name> [--scope …] [--path <file>] --as-user
+`guardrails mode declare <name> --description "<what the work is>" [--agent-may-enable] [--scope …]
+--as-user --reason "<user's words>"` and `guardrails mode undeclare <name> [--scope …] --as-user
 --reason "…"`. Ask (AskUserQuestion, `header` `Agents`, options `No (Recommended)` / `Yes`) whether agents may enable
 the mode when `-e` was not passed and the user did not say. A not-writable scope prints a message and a `sudo …`
 command: show both and stop.

@@ -4,7 +4,7 @@ import json
 import os
 import shlex
 import stat
-from pathlib import Path
+from unittest import mock
 
 import store
 from helpers import AstIsolated, caught
@@ -480,7 +480,7 @@ class ManagedScope(AstIsolated):
         self.mpath.parent.chmod(0)
         self.addCleanup(self.mpath.parent.chmod, 0o755)
         out = self.cli("status")[1]
-        self.assertIn(f"override `{self.mpath}` unreadable", out)
+        self.assertIn(f"`{self.mpath}` unreadable", out)
         self.assertIn("unreadable managed state", out)
 
     def test_status_warns_about_untrusted_managed_location(self) -> None:
@@ -501,22 +501,6 @@ class ManagedScope(AstIsolated):
         self.assertIn("global and project rules are not enforced, managed rules still are", out)
         self.assertNotIn("fails open", out)
 
-    def test_writes_go_to_the_override_when_set_else_the_default(self) -> None:
-        self.assertEqual(self.managed("rule", "add", "a", "--json", RULE)[0], 0)
-        self.assertTrue(self.mpath.is_file())
-        self.assertFalse(self.dpath.exists())
-        del os.environ["GUARDRAILS_MANAGED_PATH"]
-        self.assertEqual(self.managed("rule", "add", "b", "--json", RULE)[0], 0)
-        self.assertEqual(list(self.get(self.dpath)["rules"]), ["b"])
-        self.assertEqual(list(self.get(self.mpath)["rules"]), ["a"])
-
-    def test_override_and_default_are_both_effective(self) -> None:
-        self.put(self.dpath, {"rules": {"d": json.loads(RULE)}})
-        self.managed("rule", "add", "o", "--json", RULE)
-        out = self.cli("status")[1]
-        self.assertIn("`d` deny · managed", out)
-        self.assertIn("`o` deny · managed", out)
-
     def test_creating_the_managed_directory_ignores_umask(self) -> None:
         old = os.umask(0o077)
         self.addCleanup(os.umask, old)
@@ -526,32 +510,9 @@ class ManagedScope(AstIsolated):
 
 
 class ManagedNotWritable(AstIsolated):
-    def setUp(self) -> None:
-        super().setUp()
+    def test_an_unwritable_managed_target_exits_2_with_a_sudo_hint_and_writes_nothing(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root ignores permissions")
-
-    def lock_down(self, path: Path) -> None:
-        path.mkdir(parents=True, exist_ok=True)
-        path.chmod(0o555)
-        self.addCleanup(path.chmod, 0o755)
-
-    def assert_sudo_hint(self, err: str, *argv: str) -> None:
-        self.assertIn("error:", err)
-        self.assertIn("not writable", err)
-        self.assertIn(f"Re-run with sudo: sudo {store.CLI} ", err)
-        self.assertIn(shlex.join(argv), err)
-
-    def test_absent_file_in_read_only_directory(self) -> None:
-        self.lock_down(self.tmp / "ro")
-        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.tmp / "ro" / "sub" / "guardrails.json")
-        argv = ("rule", "add", "x", "--json", RULE, "--scope", "managed")
-        code, _, err = self.cli(*argv)
-        self.assertEqual(code, 2)
-        self.assert_sudo_hint(err, *argv)
-        self.assertFalse((self.tmp / "ro" / "sub").exists())
-
-    def test_existing_file_in_read_only_directory_is_untouched(self) -> None:
         self.put(self.mpath, {"rules": {}})
         self.mpath.parent.chmod(0o555)
         self.addCleanup(self.mpath.parent.chmod, 0o755)
@@ -559,232 +520,13 @@ class ManagedNotWritable(AstIsolated):
             with self.subTest(argv=argv):
                 code, _, err = self.cli(*argv, "--scope", "managed")
                 self.assertEqual(code, 2)
-                self.assert_sudo_hint(err, *argv, "--scope", "managed")
+                self.assertIn(f"Re-run with sudo: sudo {store.CLI} {shlex.join([*argv, '--scope', 'managed'])}", err)
         self.assertEqual(self.get(self.mpath), {"rules": {}})
-
-    def test_read_only_file(self) -> None:
-        self.put(self.mpath, {"rules": {}})
-        self.mpath.chmod(0o444)
-        self.addCleanup(self.mpath.chmod, 0o644)
-        code, _, err = self.cli("mode", "on", "m", "--scope", "managed")
-        self.assertEqual(code, 2)
-        self.assertIn("sudo", err)
-
-class PathOption(AstIsolated):
-    def setUp(self) -> None:
-        super().setUp()
-        self.fpath = self.tmp / "custom" / "rules.json"
-
-    def with_path(self, *argv: str, agent: bool = False) -> tuple[int, str, str]:
-        return self.cli(*argv, "--scope", "managed", "--path", str(self.fpath), agent=agent)
-
-    def test_every_write_verb_targets_the_path_file(self) -> None:
-        self.assertEqual(self.with_path("rule", "add", "no-pkill", "--json", MANAGED_RULE)[0], 0)
-        self.assertEqual(self.with_path("rule", "set", "no-pkill", "--json", '{"action": "warn"}')[0], 0)
-        self.assertEqual(self.with_path("mode", "declare", "incident")[0], 0)
-        self.assertEqual(self.with_path("mode", "on", "incident")[0], 0)
-        self.assertTrue(self.get(self.fpath)["modes"]["incident"]["active"])
-        self.assertEqual(self.with_path("mode", "off", "incident")[0], 0)
-        self.assertEqual(self.with_path("mode", "undeclare", "incident")[0], 0)
-        self.assertEqual(self.with_path("preset", "install", "process-safety")[0], 0)
-        self.assertEqual(sorted(self.get(self.fpath)["rules"]), ["kill-9", "no-pkill"])
-        self.assertEqual(self.with_path("rule", "rm", "no-pkill")[0], 0)
-        self.assertNotIn("no-pkill", self.get(self.fpath)["rules"])
-        self.assertFalse(self.mpath.exists())
-        self.assertFalse(self.dpath.exists())
-        self.assertFalse(self.gpath.exists())
-
-    def test_path_needs_managed_scope_on_write_verbs(self) -> None:
-        p = str(self.fpath)
-        for argv in (("rule", "add", "x", "--json", RULE, "--path", p),
-                     ("rule", "add", "x", "--json", RULE, "--path", p, "--scope", "global"),
-                     ("rule", "add", "x", "--json", RULE, "--path", p, "--scope", "project"),
-                     ("rule", "set", "x", "--json", '{"action": "warn"}', "--path", p),
-                     ("rule", "rm", "x", "--path", p),
-                     ("mode", "declare", "m", "--path", p),
-                     ("mode", "undeclare", "m", "--path", p),
-                     ("mode", "on", "m", "--scope", "global", "--path", p),
-                     ("mode", "off", "m", "--scope", "project", "--path", p),
-                     ("preset", "install", "docs-first", "--path", p)):
-            with self.subTest(argv=argv):
-                code, _, err = self.cli(*argv)
-                self.assertEqual(code, 2)
-                self.assertIn("--path names a managed-format file and needs --scope managed", err)
-        self.assertFalse(self.fpath.exists())
-        self.assertFalse(self.gpath.exists())
-
-    def test_note_only_when_the_hook_will_not_read_the_file(self) -> None:
-        _, out, _ = self.with_path("rule", "add", "x", "--json", RULE)
-        self.assertIn(f"note: the hook enforces {self.fpath} only if GUARDRAILS_MANAGED_PATH points at it", out)
-        for target in (self.mpath, self.dpath, self.fpath):
-            with self.subTest(target=target):
-                os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.fpath if target == self.fpath else self.mpath)
-                code, out, _ = self.cli("rule", "add", "y", "--json", RULE, "--scope", "managed", "--path", str(target))
-                self.assertEqual(code, 0)
-                self.assertNotIn("the hook enforces", out)
-
-    def test_read_verbs_accept_path_without_a_managed_scope(self) -> None:
-        target = str(self.tmp / "p.json")
-        self.assertEqual(self.cli("status", "--scope", "project", "--path", target)[0], 0)
-        self.assertEqual(self.cli("rule", "test", "--json", RULE, "strings x", "--path", target)[0], 0)
-
-    def test_status_loads_the_path_file_as_extra_source(self) -> None:
-        self.put(self.fpath, {"rules": {"no-pkill": {"match": {"program": "pkill"}, "message": "no"}}})
-        code, out, _ = self.cli("status", "--path", str(self.fpath))
-        self.assertEqual(code, 0)
-        self.assertIn(f"--path `{self.fpath}` present", out)
-        self.assertIn("`no-pkill` deny · managed · always enforced", out)
-        self.assertNotIn("no-pkill", self.cli("status")[1])
-
-    def test_rank_below_default_and_tightening_only(self) -> None:
-        strict = {"rules": {"r": {"match": {"program": "pkill"}, "message": "default", "action": "deny"}}}
-        loose = {"rules": {"r": {"match": {"program": "kill"}, "message": "other", "action": "warn"}}}
-        self.put(self.dpath, strict)
-        self.put(self.fpath, loose)
-        out = self.cli("status", "--path", str(self.fpath))[1]
-        self.assertIn("`r` deny · managed · always enforced", out)
-        out = self.cli("rule", "test", "--id", "r", "pkill x", "kill 1", "--path", str(self.fpath))[1]
-        self.assertEqual(caught(out), {"pkill x": True, "kill 1": False})
-        self.assertIn("**Message** default", out)
-
-    def test_path_reports_problems_like_the_override(self) -> None:
-        self.put(self.fpath, "{nope")
-        out = self.cli("status", "--path", str(self.fpath))[1]
-        self.assertIn("unreadable managed state, so its rules are NOT enforced until it is fixed", out)
-        self.put(self.fpath, {"rules": {"bad": {"match": {"builtin": "nope"}, "message": "x"}}})
-        out = self.cli("status", "--path", str(self.fpath))[1]
-        self.assertIn("managed rule bad is invalid and ignored", out)
-
-    def test_path_file_ownership_problems_are_reported(self) -> None:
-        if os.geteuid() == 0:
-            self.skipTest("root owns everything")
-        self.put(self.fpath, {"rules": {}})
-        out = self.cli("status", "--path", str(self.fpath))[1]
-        self.assertIn(f"managed file {self.fpath} is not owned by root", out)
-
-    def test_rule_test_by_id_uses_the_path_file(self) -> None:
-        self.put(self.fpath, {"rules": {"only-here": {"match": {"program": "pkill"}, "message": "no"}}})
-        self.assertEqual(self.cli("rule", "test", "--id", "only-here", "pkill x")[0], 2)
-        code, out, _ = self.cli("rule", "test", "--id", "only-here", "pkill x", "--path", str(self.fpath))
-        self.assertEqual(code, 0)
-        self.assertEqual(caught(out), {"pkill x": True})
-
-    def test_session_mode_on_reads_modes_from_the_path_file(self) -> None:
-        self.put(self.fpath, {"modes": {"incident": {"description": "fire", "agentMayEnable": True}}})
-        self.assertEqual(self.cli("mode", "on", "incident", "--session-id", "s1")[0], 2)
-        code, _, _ = self.cli("mode", "on", "incident", "--session-id", "s1", "--path", str(self.fpath))
-        self.assertEqual(code, 0)
-
-    def test_relative_path_and_home_are_resolved(self) -> None:
-        self.addCleanup(os.chdir, os.getcwd())
-        os.chdir(self.tmp)
-        self.assertEqual(self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", "rel.json")[0], 0)
-        self.assertTrue((self.tmp / "rel.json").is_file())
-
-    def test_agent_gating_still_applies(self) -> None:
-        code, _, err = self.with_path("rule", "add", "x", "--json", RULE, agent=True)
-        self.assertEqual(code, 3)
-        self.assertIn("refused:", err)
-        self.assertEqual(self.with_path("rule", "add", "x", "--json", RULE, "--as-user", agent=True)[0], 0)
-
-
-class PathNotWritable(AstIsolated):
-    def setUp(self) -> None:
-        super().setUp()
-        if os.geteuid() == 0:
-            self.skipTest("root ignores permissions")
-
-    def test_sudo_hint_keeps_the_path_argument(self) -> None:
-        ro = self.tmp / "ro"
-        ro.mkdir()
-        ro.chmod(0o555)
-        self.addCleanup(ro.chmod, 0o755)
-        target = str(ro / "sub" / "rules.json")
-        argv = ("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", target)
-        code, _, err = self.cli(*argv)
-        self.assertEqual(code, 2)
-        self.assertIn(f"Re-run with sudo: sudo {store.CLI} ", err)
-        self.assertIn(shlex.join(argv), err)
-        self.assertFalse((ro / "sub").exists())
-
-    def test_sudo_hint_adds_the_env_override_as_path(self) -> None:
-        ro = self.tmp / "ro"
-        ro.mkdir()
-        ro.chmod(0o555)
-        self.addCleanup(ro.chmod, 0o755)
-        target = str(ro / "sub" / "rules.json")
-        os.environ["GUARDRAILS_MANAGED_PATH"] = target
-        code, _, err = self.cli("rule", "rm", "x", "--scope", "managed")
-        self.assertEqual(code, 2)
-        self.assertIn(f"--scope managed --path {target}", err)
-
-
-class PathOptionEdges(AstIsolated):
-    def test_path_with_spaces_is_quoted_in_the_sudo_hint(self) -> None:
-        if os.geteuid() == 0:
-            self.skipTest("root ignores permissions")
-        ro = self.tmp / "ro dir"
-        ro.mkdir()
-        ro.chmod(0o555)
-        self.addCleanup(ro.chmod, 0o755)
-        target = str(ro / "x y.json")
-        code, _, err = self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", target)
-        self.assertEqual(code, 2)
-        self.assertIn(shlex.quote(target), err)
-
-    def test_path_with_spaces_is_written(self) -> None:
-        target = self.tmp / "a b" / "x y.json"
-        self.assertEqual(self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", str(target))[0], 0)
-        self.assertIn("x", self.get(target)["rules"])
-
-    def test_unwritable_existing_file_reports_file_and_sudo_with_path(self) -> None:
-        if os.geteuid() == 0:
-            self.skipTest("root ignores permissions")
-        target = self.tmp / "custom" / "ro.json"
-        self.put(target, {"rules": {}})
-        target.chmod(0o444)
-        self.addCleanup(target.chmod, 0o644)
-        code, _, err = self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", str(target))
-        self.assertEqual(code, 2)
-        self.assertIn("file is not writable", err)
-        self.assertIn(f"--path {target}", err)
-        self.assertEqual(self.get(target), {"rules": {}})
-
-    def test_tilde_is_expanded(self) -> None:
-        os.environ["HOME"] = str(self.tmp / "home")
-        code, _, _ = self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", "~/g.json")
-        self.assertEqual(code, 0)
-        self.assertTrue((self.tmp / "home" / "g.json").is_file())
-        self.assertFalse(Path("~").exists())
-
-    def test_path_equal_to_the_platform_default_is_not_an_extra_source(self) -> None:
-        self.put(self.dpath, {"rules": {"r": {"match": {"program": "pkill"}, "message": "m"}}})
-        out = self.cli("status", "--path", str(self.dpath))[1]
-        self.assertNotIn("--path `", out)
-        self.assertEqual(out.splitlines()[0].count(str(self.dpath)), 1)
-        self.assertNotIn("the hook enforces", out)
-
-    def test_lower_ranked_file_cannot_switch_on_a_higher_mode(self) -> None:
-        self.put(self.dpath, {"rules": {"r": {"match": {"program": "pkill"}, "message": "m", "modes": ["m"]}},
-                              "modes": {"m": {}}})
-        self.put(self.mpath, {"modes": {"m": {"active": True}}})
-        out = self.cli("status")[1]
-        self.assertIn("`m` off · agent may enable: no · managed", out)
-        self.assertNotIn("suspended", out)
-        extra = self.tmp / "extra.json"
-        self.put(extra, {"modes": {"m": {"active": True}}})
-        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.tmp / "none.json")
-        out = self.cli("status", "--path", str(extra))[1]
-        self.assertIn("`m` off · agent may enable: no · managed", out)
-        self.assertNotIn("suspended", out)
-
-    def test_hook_keeps_enforcing_when_the_override_declares_active(self) -> None:
-        self.put(self.dpath, {"rules": {"r": {"match": {"program": "pkill"}, "message": "no pkill", "modes": ["m"]}},
-                              "modes": {"m": {}}})
-        self.put(self.mpath, {"modes": {"m": {"active": True}}})
-        out = self.hook("pkill x")
-        assert out is not None
-        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.tmp.joinpath("ro").mkdir(mode=0o555)
+        self.addCleanup(self.tmp.joinpath("ro").chmod, 0o755)
+        with mock.patch.object(store, "MANAGED_PATH", self.tmp / "ro" / "sub" / "guardrails.json"):
+            self.assertEqual(self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed")[0], 2)
+        self.assertFalse((self.tmp / "ro" / "sub").exists())
 
 
 class RuleTestNotes(AstIsolated):

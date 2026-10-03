@@ -10,9 +10,7 @@
   themselves (for example `! sudo …` in the prompt). Do the same for every scope: try the write, and report a
   permission failure with the printed message and sudo command instead of assuming what the user may write.
 - `--scope global|project|managed` picks the file; global is the default. `--scope managed` writes the platform managed
-  file (or `GUARDRAILS_MANAGED_PATH`), and `--path <file>` (only with `--scope managed`) writes that managed-format
-  file instead. The hook enforces a `--path` file only if `GUARDRAILS_MANAGED_PATH` points at it; the CLI prints that
-  note and you repeat it to the user.
+  file.
 - A project entry for a global or managed rule can only tighten it (`rule add` writes it with a note saying so), and
   `rule set` / `rule rm` on a managed rule from another scope are refused (exit 3 pointing at `--scope managed`). See `${CLAUDE_PLUGIN_ROOT}/references/matching.md` for the layering.
 - `guardrails enable` / `guardrails disable` (hook on/off) are refused for agents. The user runs them in a terminal.

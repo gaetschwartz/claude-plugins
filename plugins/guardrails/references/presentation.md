@@ -105,11 +105,11 @@ unavailable.
 
 ## Status: `guardrails status`
 
-    guardrails status [--scope global|project|managed] [--problems] [--path <file>] [--rule <id>]
+    guardrails status [--scope global|project|managed] [--problems] [--rule <id>]
 
 Output:
 
-    **Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` absent · override `/tmp/g.json` present · managed rules come only from `/tmp/g.json`
+    **Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` present
 
     ### Guardrails · 4 rules · hook on
 
@@ -126,8 +126,7 @@ Output:
     **Problems**
     - text as reported
 
-- The first line always says which managed files exist: the platform file, each override (`GUARDRAILS_MANAGED_PATH`) and
-  `--path` file, present or absent, and, when the platform file is absent, where managed rules come from.
+- The first line says whether the platform managed file is present, absent (then there are no managed rules) or unreadable.
 - Rule state is one of `always enforced`, `suspended by <modes>` (only modes that are on now), `disabled`, `enabled`.
   Ids are padded to the longest id (capped at 40), modes to the longest mode name.
 - `--scope` keeps only rules, modes and problems that belong to that layer. `--problems` prints only the `**Problems**` group,

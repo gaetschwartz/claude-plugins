@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum
 from typing import Any, Self
@@ -371,42 +371,35 @@ def _shape_problems(path: str, state: object) -> list[str]:
     return problems
 
 
-def managed_layer(sources: Sequence[tuple[str, object]]) -> tuple[dict[str, Any], list[str]]:
-    """Combine managed files (highest ranked first; later ones can only tighten) and list what is wrong with them."""
-    problems: list[str] = []
+def managed_layer(state: object, path: str) -> tuple[dict[str, Any], list[str]]:
+    """The managed file as a layer, and what is wrong with it."""
+    problems = _shape_problems(path, state)
     rules: dict[str, Rule] = {}
-    modes: dict[str, Mode] = {}
-    extra: dict[str, dict[str, Any]] = {}
-    for path, state in sources:
-        problems += _shape_problems(path, state)
-        if isinstance(state, dict) and "wrappers" in state and not isinstance(state["wrappers"], dict):
-            problems.append(f"managed state {path}: 'wrappers' must be an object, so all its entries are ignored")
-        for name in view(state, "wrappers"):
-            try:
-                wrapper_table.check_name(name)
-            except ValueError as exc:
-                problems.append(f"managed state {path}: {exc}, so it is ignored")
-                continue
-            extra.setdefault(name, {})
-        for name, raw in _entries(state, "modes").items():
-            modes[name] = modes[name].tightened_by(raw, False) if name in modes else Mode.from_json(raw)
-        for rid, raw in _entries(state, "rules").items():
-            if rid in rules:
-                rules[rid] = merge_rule(rules[rid], raw, False)
-                continue
-            try:
-                rule = Rule.from_json(raw)
-            except Invalid as exc:
-                problems.append(f"managed rule {rid} is invalid and ignored: {exc}")
-                continue
-            problems += [f"managed rule {rid} lists mode '{m}', which the managed file does not declare, so it cannot "
-                         "suspend the rule" for m in rule.modes if m not in modes]
-            rules[rid] = replace(rule, modes=tuple(m for m in rule.modes if m in modes))
+    modes = {name: Mode.from_json(raw) for name, raw in _entries(state, "modes").items()}
+    wrappers: dict[str, dict[str, Any]] = {}
+    if isinstance(state, dict) and "wrappers" in state and not isinstance(state["wrappers"], dict):
+        problems.append(f"managed state {path}: 'wrappers' must be an object, so all its entries are ignored")
+    for name in view(state, "wrappers"):
+        try:
+            wrapper_table.check_name(name)
+        except ValueError as exc:
+            problems.append(f"managed state {path}: {exc}, so it is ignored")
+            continue
+        wrappers[name] = {}
+    for rid, raw in _entries(state, "rules").items():
+        try:
+            rule = Rule.from_json(raw)
+        except Invalid as exc:
+            problems.append(f"managed rule {rid} is invalid and ignored: {exc}")
+            continue
+        problems += [f"managed rule {rid} lists mode '{m}', which the managed file does not declare, so it cannot "
+                     "suspend the rule" for m in rule.modes if m not in modes]
+        rules[rid] = replace(rule, modes=tuple(m for m in rule.modes if m in modes))
     layer: dict[str, Any] = {"rules": {rid: rule.to_json() for rid, rule in rules.items()},
-                    "modes": {name: {"description": m.description, "agentMayEnable": m.agent_may_enable,
-                                     "active": m.active} for name, m in modes.items()}}
-    if extra:
-        layer["wrappers"] = extra
+                             "modes": {name: {"description": m.description, "agentMayEnable": m.agent_may_enable,
+                                              "active": m.active} for name, m in modes.items()}}
+    if wrappers:
+        layer["wrappers"] = wrappers
     return layer, problems
 
 

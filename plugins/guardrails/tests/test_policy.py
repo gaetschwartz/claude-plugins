@@ -217,59 +217,17 @@ class ManagedModes(unittest.TestCase):
 
 
 class ManagedLayer(unittest.TestCase):
-    R = rule()
-
-    def test_first_source_wins_and_later_ones_only_tighten_or_add(self) -> None:
-        first = {"rules": {"r": rule(action="warn", retry="same-command", modes=["m"]), "keep": rule()},
-                 "modes": {"m": {"agentMayEnable": False}}}
-        second = {"rules": {"r": {**rule(), "message": "second", "action": "deny", "retry": "none", "modes": [],
-                                  "enabled": False}, "new": rule()},
-                  "modes": {"m": {"agentMayEnable": True, "active": True}, "n": {}}}
-        layer, problems = policy.managed_layer([("a", first), ("b", second)])
-        self.assertEqual(problems, [])
-        r = layer["rules"]["r"]
-        self.assertEqual((r["action"], r["retry"], r["modes"], r["enabled"], r["message"]),
-                         ("deny", "none", [], True, "use docs"))
-        self.assertEqual(sorted(layer["rules"]), ["keep", "new", "r"])
-        self.assertEqual((layer["modes"]["m"]["agentMayEnable"], layer["modes"]["m"]["active"]), (False, False))
-        self.assertIn("n", layer["modes"])
-
-    def test_problems(self) -> None:
+    def test_modes_a_rule_lists_must_be_declared_in_the_file_and_problems_are_named(self) -> None:
         state = {"rules": {"bad": {"message": ""}, "ok": rule(modes=["ghost"]), "junk": 1}, "modes": ["x"]}
-        problems = policy.managed_layer([("/p", state)])[1]
+        layer, problems = policy.managed_layer(state, "/p")
         self.assertEqual(len(problems), 4, problems)
-        self.assertTrue(any("rules entry 'junk' is not an object" in p for p in problems))
-        self.assertTrue(any("'modes' must be an object" in p for p in problems))
-        self.assertTrue(any("managed rule bad is invalid and ignored" in p for p in problems))
-        self.assertTrue(any("rule ok lists mode 'ghost'" in p for p in problems))
+        for needle in ("rules entry 'junk' is not an object", "'modes' must be an object",
+                       "managed rule bad is invalid and ignored", "rule ok lists mode 'ghost'"):
+            self.assertTrue(any(needle in p for p in problems), needle)
+        self.assertEqual(policy.json_modes(layer["rules"]["ok"]), [])
+        layer = policy.managed_layer({"rules": {"fine": rule(modes=["m"])}, "modes": {"m": {"active": True}}}, "/p")[0]
+        self.assertEqual((policy.json_modes(layer["rules"]["fine"]), layer["modes"]["m"]["active"]), (["m"], True))
 
-    def test_later_source_cannot_switch_on_a_mode_an_earlier_one_declares(self) -> None:
-        first = {"rules": {"r": rule(modes=["m"])}, "modes": {"m": {}}}
-        second = {"modes": {"m": {"active": True}}}
-        layer, problems = policy.managed_layer([("a", first), ("b", second)])
-        self.assertEqual(problems, [])
-        self.assertFalse(layer["modes"]["m"]["active"])
-        rules = rules_of(layer, {}, {})
-        modes = policy.effective_modes(layer, {}, {})
-        self.assertEqual(policy.active_modes(modes, policy.Session()), {})
-        self.assertEqual(rules["r"].modes, ("m",))
-
-    def test_a_mode_first_declared_by_a_source_keeps_its_own_active(self) -> None:
-        layer, _ = policy.managed_layer([("a", {}), ("b", {"modes": {"m": {"active": True}}})])
-        self.assertTrue(layer["modes"]["m"]["active"])
-
-    def test_later_source_cannot_add_modes_to_an_earlier_rule(self) -> None:
-        first = {"rules": {"r": rule()}, "modes": {"m": {}}}
-        second = {"rules": {"r": rule(modes=["m"])}, "modes": {"m": {}}}
-        layer, _ = policy.managed_layer([("a", first), ("b", second)])
-        self.assertEqual(policy.json_modes(layer["rules"]["r"]), [])
-
-    def test_later_source_cannot_make_an_undeclared_mode_suspend_an_earlier_rule(self) -> None:
-        first = {"rules": {"r": rule(modes=["m"])}}
-        second = {"modes": {"m": {"active": True}}}
-        layer, problems = policy.managed_layer([("a", first), ("b", second)])
-        self.assertTrue(any("rule r lists mode 'm'" in p for p in problems))
-        self.assertEqual(policy.json_modes(layer["rules"]["r"]), [])
 
 class Modes(unittest.TestCase):
     def test_merge_ands_agent_permission_and_ors_active(self) -> None:

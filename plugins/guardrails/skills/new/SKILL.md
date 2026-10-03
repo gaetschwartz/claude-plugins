@@ -1,7 +1,7 @@
 ---
 name: new
 description: Use when the user explicitly asks to create a new guardrails rule, e.g. "block pkill for agents", "write a rule that warns on curl | sh", "add a guardrail for X". Interviews the user, tests the rule on examples and edge cases, shows it for confirmation, then writes it. Never use it to get past a guardrails denial.
-argument-hint: "[-B|--block <cmd>]... [-A|--allow <cmd>]... [-s|--scope global|project|managed] [-P|--path <file>] [-a|--action deny|warn] [-R|--retry] [-m|--modes a,b] [-i|--id <id>] [-y|--yes] [description]"
+argument-hint: "[-B|--block <cmd>]... [-A|--allow <cmd>]... [-s|--scope global|project|managed] [-a|--action deny|warn] [-R|--retry] [-m|--modes a,b] [-i|--id <id>] [-y|--yes] [description]"
 allowed-tools: Bash(guardrails status *) Bash(guardrails rule test *) Bash(guardrails rule ast *) Bash(guardrails preset list *) AskUserQuestion
 ---
 
@@ -20,8 +20,7 @@ Parse the text above; every long flag has a short one. Flags pre-answer the matc
 
 - `-B` / `--block <cmd>` (repeatable): a command that must be caught. `-A` / `--allow <cmd>` (repeatable): a command
   that must pass. Both count as the user's own examples (source `yours`).
-- `-s` / `--scope global|project|managed`, `-P` / `--path <file>` (managed-format file; needs `-s managed`),
-  `-a` / `--action deny|warn`, `-R` / `--retry` (retry `same-command`; only meaningful for deny, so with `-a warn` ignore it and say so), `-m` / `--modes a,b`,
+- `-s` / `--scope global|project|managed`, `-a` / `--action deny|warn`, `-R` / `--retry` (retry `same-command`; only meaningful for deny, so with `-a warn` ignore it and say so), `-m` / `--modes a,b`,
   `-i` / `--id <id>`.
 - `-y` / `--yes`: skip only the final confirmation (step 1.d). Edge-case questions are still asked.
 - Any remaining free text is the description of the rule; when present, skip step 1.a.
@@ -188,7 +187,7 @@ sure the final rule agrees with every decision. Record the command as an example
 - Action: `Deny (Recommended)` / `Warn`
 - Retry (deny only): `same-command (Recommended)` / `none`
 - Scope: `Global` / `Project` / `Managed`; each option's preview shows the file it writes (for managed the platform
-  path, or the `--path` file)
+  path)
 - Modes (multi-select, at most 4 options): `none (Recommended)` and up to two existing modes from `guardrails status`
   (more go through "Other", as does naming a new mode); a new mode leads to a follow-up question on whether agents
   may enable it
@@ -205,7 +204,7 @@ defaults, unless something is ambiguous. Ask for message wording in chat only wh
 2. Run the command below with the rule and the examples in one JSON document on stdin (a quoted heredoc, so nothing
    needs shell quoting):
 
-       guardrails rule test --json - --intent '<the user's description as one short plain line>' --id-name <id> --scope <s> [--path <file>] <<'EOF'
+       guardrails rule test --json - --intent '<the user's description as one short plain line>' --id-name <id> --scope <s> <<'EOF'
        {"rule": {…}, "examples": [{"cmd": "…", "source": "yours", "expect": "match"}, …]}
        EOF
 
@@ -231,7 +230,7 @@ permission prompt on them unless the user runs in a mode that skips prompts.
 ## Step 2: write and report
 
 ```
-guardrails rule add <id> --json - --scope <s> [--path <file>] --as-user --reason "<the user's own words>" <<'EOF'
+guardrails rule add <id> --json - --scope <s> --as-user --reason "<the user's own words>" <<'EOF'
 <the identical document that 1.c tested>
 EOF
 ```
@@ -240,10 +239,8 @@ Resend the very document the confirmed `rule test` used, unchanged, so the store
 confirmed. `rule add` and `mode declare` change configuration and are not pre-approved; the user approves each.
 
 A new mode declared for this rule is written first with `guardrails mode declare <name> [--agent-may-enable]
-[--scope <s>] [--path <file>] --as-user --reason "…"`.
+[--scope <s>] --as-user --reason "…"`.
 
 On a permission failure (exit 2, not writable): say so, show the printed message and the `sudo …` command, and stop;
-do not run it. After a successful write run `guardrails status --rule <id> --scope <s> [--path <file>]` and
-paste its one line VERBATIM. For a managed `--path` file that is neither the platform default nor the current
-`GUARDRAILS_MANAGED_PATH`, repeat the note `rule add` printed: the hook enforces it only if
-`GUARDRAILS_MANAGED_PATH` points there.
+do not run it. After a successful write run `guardrails status --rule <id> --scope <s>` and
+paste its one line VERBATIM.
