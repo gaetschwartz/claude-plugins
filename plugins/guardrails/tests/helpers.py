@@ -21,42 +21,19 @@ HOOKS = ROOT / "hooks"
 LIB = ROOT / "lib"
 sys.path.insert(0, str(LIB))
 
-import astbin
+import bootstrap
 import render  # noqa: F401
 import store
 
-DEV_DATA = Path.home() / ".cache" / "guardrails-engine-dev"
-SKIP_AST = ("ast-grep is not installed: run `just engine` (or allow network access so the tests can install the "
-            "pinned wheel)")
-_SHARED: list[str] = []
-REAL_WANTED = astbin.wanted
+DEV_DATA = Path.home() / ".cache" / "guardrails-runtime-dev"
+SKIP_RUNTIME = "the managed runtime could not be installed ({reason}); tests that run the real hook are skipped"
+_RUNTIME: list[bootstrap.Outcome] = []
 REAL_URLOPEN = urllib.request.urlopen
+SKIP_AST = ("ast-grep-py is not importable: run the suite with `just test` (uv provides the pinned library)")
 
 
 def no_network(*args: Any, **kwargs: Any) -> Any:
     raise AssertionError(f"a test reached the network: {args[:1]}")
-
-
-def shared_engine() -> str | None:
-    """The engine dir (`<data>/engine`) of a real pinned binary, from `just engine` or installed once per run."""
-    if not _SHARED:
-        _SHARED.append("")
-        try:
-            plat = astbin.detect()
-        except astbin.Missing:
-            return None
-        folder = tempfile.mkdtemp(prefix="guardrails-shared-engine-")
-        for data in (str(DEV_DATA), folder):
-            if astbin.wheel_probe(plat, data).path:
-                _SHARED[0] = astbin.engine_root(data)
-                break
-            if data == folder:
-                with contextlib.suppress(astbin.InstallError, OSError), \
-                        mock.patch.object(urllib.request, "urlopen", REAL_URLOPEN):
-                    astbin.install(data)
-                    if astbin.wheel_probe(plat, data).path:
-                        _SHARED[0] = astbin.engine_root(data)
-    return _SHARED[0] or None
 
 
 def caught(out: str) -> dict[str, bool]:
@@ -90,16 +67,9 @@ class Isolated(unittest.TestCase):
         patcher = mock.patch.dict(os.environ, env, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
-        self.plugin_root = self.tmp / "plugin-root"
-        self.plugin_root.mkdir()
-        patch_root = mock.patch.object(astbin, "PLUGIN_ROOT", str(self.plugin_root))
-        patch_root.start()
-        self.addCleanup(patch_root.stop)
-        astbin.take_rejected()
-        for guard in (mock.patch.object(astbin, "wanted", lambda state_dir: False),
-                      mock.patch.object(urllib.request, "urlopen", no_network)):
-            guard.start()
-            self.addCleanup(guard.stop)
+        guard = mock.patch.object(urllib.request, "urlopen", no_network)
+        guard.start()
+        self.addCleanup(guard.stop)
 
     @property
     def gpath(self) -> Path:
@@ -143,51 +113,49 @@ class Isolated(unittest.TestCase):
     def set_rule(self, rid: str, fields: Any, *extra: str, agent: bool = False) -> tuple[int, str, str]:
         return self.cli("rule", "set", rid, "--json", json.dumps(fields), *extra, agent=agent)
 
-    def stub_engine(self, body: str) -> None:
-        """Replace the engine with a shell script that has this body."""
-        path = self.tmp / "stub" / "ast-grep"
-        path.parent.mkdir(exist_ok=True)
-        path.write_text("#!/bin/sh\n" + body)
-        path.chmod(0o755)
-        found = astbin.Engine(str(path), "wheel", astbin.pin())
-        patch = mock.patch.object(astbin, "locate", lambda state_dir: found)
-        patch.start()
-        self.addCleanup(patch.stop)
-
-    def link_engine(self) -> None:
-        """Make the real binary findable by a subprocess, which cannot see this process's patches."""
-        engine_dir = getattr(self, "engine_dir", None)
-        if engine_dir and not (self.data / "engine").exists():
-            self.data.mkdir(parents=True, exist_ok=True)
-            os.symlink(engine_dir, self.data / "engine")
-
     def run_guard(self, payload: str) -> subprocess.CompletedProcess[str]:
-        self.link_engine()
-        return subprocess.run(["bash", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True,
-                              text=True, check=False, env=dict(os.environ))
+        return subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+                              check=False, env=dict(os.environ))
 
 
 class AstIsolated(Isolated):
-    """Isolated state plus the real pinned ast-grep binary behind the wheel path, or a skip."""
+    """Isolated state plus the in-process ast-grep library, or a skip."""
 
     def setUp(self) -> None:
         super().setUp()
-        root = shared_engine()
-        if root is None:
+        try:
+            import ast_grep_py  # noqa: F401
+        except ImportError:
             if os.environ.get("GUARDRAILS_REQUIRE_AST") == "1":
                 self.fail(SKIP_AST)
             self.skipTest(SKIP_AST)
-        self.engine_dir = root
-        self.use_engine(True)
 
-    def use_engine(self, present: bool) -> None:
-        """Point the wheel lookup at the real binary, or at an empty directory (engine missing)."""
-        empty = str(self.tmp / "no-engine")
-        patch = mock.patch.object(astbin, "engine_root", lambda state_dir: self.engine_dir if present else empty)
+    def break_engine(self, reason: str = "it misparsed a test command") -> None:
+        """Make the library's self-test fail, as a broken install would."""
+        import scanner
+
+        patch = mock.patch.object(scanner, "self_test", lambda: reason)
         patch.start()
         self.addCleanup(patch.stop)
 
-    def call(self, request: dict[str, Any]) -> dict[str, Any]:
-        import astrun
 
-        return astrun.call(request, str(self.data))
+def shared_runtime() -> bootstrap.Outcome:
+    """Install the real runtime once per run into a cache dir that survives between runs."""
+    if not _RUNTIME:
+        with mock.patch.object(urllib.request, "urlopen", REAL_URLOPEN):
+            _RUNTIME.append(bootstrap.ensure(DEV_DATA, retry_now=True))
+    return _RUNTIME[0]
+
+
+class RealRuntime(Isolated):
+    """Isolated state plus the real managed runtime (Python, ast-grep-py) behind the real sh wrapper, or a skip."""
+
+    def setUp(self) -> None:
+        super().setUp()
+        outcome = shared_runtime()
+        if outcome.state not in ("ready", "installed"):
+            if os.environ.get("GUARDRAILS_REQUIRE_AST") == "1":
+                self.fail(SKIP_RUNTIME.format(reason=outcome.reason or outcome.state))
+            self.skipTest(SKIP_RUNTIME.format(reason=outcome.reason or outcome.state))
+        self.data.mkdir(parents=True, exist_ok=True)
+        (self.data / "runtime").symlink_to(DEV_DATA / "runtime")

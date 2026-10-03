@@ -8,6 +8,7 @@ from collections.abc import Sequence
 from typing import Any
 
 import wrappers as wrapper_table
+from verdict import Kind
 
 Rule = dict[str, Any]
 Mode = dict[str, Any]
@@ -348,10 +349,10 @@ def needs_parse(rule: Rule) -> bool:
     return any(match.get(key) for key in ("program", "builtin", "ast"))
 
 
-def regex_kind(rule: Rule, command: str) -> str | None:
-    """"direct" when the rule's regex finds the command's raw text, else None."""
+def regex_kind(rule: Rule, command: str) -> Kind | None:
+    """DIRECT when the rule's regex finds the command's raw text, else None."""
     regex = view(rule, "match").get("regex")
-    return "direct" if regex and re.search(regex, command) is not None else None
+    return Kind.DIRECT if regex and re.search(regex, command) is not None else None
 
 
 def requirements_met(rule: Rule) -> bool:

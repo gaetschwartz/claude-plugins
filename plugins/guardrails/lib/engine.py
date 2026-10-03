@@ -12,6 +12,7 @@ import matching
 import policy
 import store
 import wrappers as wrapper_table
+from verdict import FAILED_PREFIX, Evaluation
 
 Session = dict[str, Any]
 Output = dict[str, Any]
@@ -39,7 +40,7 @@ REPEAT_AFTER = 600.0
 
 def due(session: Session, key: str) -> bool:
     """True when this warning should be shown now: once per session, except engine failures, which repeat."""
-    if not key.startswith(matching.FAILED_PREFIX):
+    if not key.startswith(FAILED_PREFIX):
         return remember(session, "reported", key)
     stamps = session.get("reportedAt")
     if not isinstance(stamps, dict):
@@ -125,7 +126,7 @@ def oversized_of(rules: dict[str, policy.Rule], tool: str = "Bash") -> list[str]
 def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, policy.Mode],
              session: Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
              warnings: tuple[str, ...] = (), wrappers: wrapper_table.Names | None = None,
-             state_dir: str | None = None, pre: matching.Evaluation | None = None,
+             pre: Evaluation | None = None,
              tool: str = "Bash") -> tuple[Output | None, bool]:
     active = policy.active_modes(modes, session)
     shown = session.get("shown")
@@ -147,20 +148,16 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
             notices.append(text)
     candidates = candidates_of(rules, tool)
     evaluation = pre if pre is not None and all(rid in pre.kinds for rid in candidates) \
-        else matching.evaluate(command, candidates, wrappers, state_dir)
+        else matching.evaluate(command, candidates, wrappers)
     agent_notes: list[str] = []
     for key, warning in evaluation.warnings(managed_ids):
         if due(session, key):
             changed = True
             notices.append(warning)
             agent_notes.append(warning)
-            if key == matching.ENGINE_MISSING_KEY:
-                import astrun
-
-                astrun.warm(state_dir)
-            if key.startswith(matching.FAILED_PREFIX):
+            if key.startswith(FAILED_PREFIX):
                 session["engineFailure"] = {"kind": evaluation.failure_kind(), "at": store.now(),
-                                            "reason": str(evaluation.outage)[:200]}
+                                            "reason": str(evaluation.failure)[:200]}
 
     def unsuspended(rule: policy.Rule) -> bool:
         return not any(name in active for name in policy.modes_of(rule))
@@ -169,7 +166,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
         candidates[rid].get("action") == "deny" and unsuspended(candidates[rid])
         for rid in evaluation.unevaluated if rid in candidates)
     if evaluation.refusal and not refused:
-        key = matching.FAILED_PREFIX + evaluation.refusal_kind
+        key = FAILED_PREFIX + evaluation.failure_kind()
         if due(session, key):
             changed = True
             text = (f"guardrails: {evaluation.refusal}; the command was allowed because only warn rules could not "
@@ -264,11 +261,10 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         warnings += tuple(f"guardrails: {problem}" for problem in policy.wrapper_problems(managed, gstate, pstate))
     if not layers(gstate)[0] and not warnings:
         return
-    state_dir = os.path.dirname(gpath)
 
     sid = str(payload.get("session_id") or "nosession")
     output: Output | None = None
-    pre = matching.evaluate(command, candidates_of(layers(gstate)[0], tool), wrapper_layers(gstate), state_dir)
+    pre = matching.evaluate(command, candidates_of(layers(gstate)[0], tool), wrapper_layers(gstate))
     stateless = not gstate_ok
     if gstate_ok:
         try:
@@ -280,7 +276,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
                 session = session_raw if isinstance(session_raw, dict) else {}
                 rules, modes = layers(gstate)
                 output, changed = evaluate(command, rules, modes, session, sid, managed_ids, warnings,
-                                           wrapper_layers(gstate), state_dir, pre, tool)
+                                           wrapper_layers(gstate), pre, tool)
                 if changed:
                     session["seenAt"] = store.now()
                     sessions[sid] = session
@@ -290,29 +286,9 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
             stateless = True
     if stateless:
         rules, modes = layers(gstate)
-        output, _ = evaluate(command, rules, modes, {}, sid, managed_ids, warnings, wrapper_layers(gstate), state_dir,
-                             pre, tool)
+        output, _ = evaluate(command, rules, modes, {}, sid, managed_ids, warnings, wrapper_layers(gstate), pre, tool)
     if output:
         json.dump(output, stdout)
-
-
-def run_warm(stdin: IO[str]) -> None:
-    """SessionStart: fetch the ast-grep binary in the background, but only when some enabled rule needs it."""
-    try:
-        payload = json.load(stdin)
-    except ValueError:
-        payload = {}
-    cwd = payload.get("cwd") if isinstance(payload, dict) else None
-    try:
-        managed, _ = store.load_managed()
-        pstate = store.load(store.project_state_path(cwd if isinstance(cwd, str) else None))
-        rules = policy.effective_rules(managed, store.load(store.global_state_path()), pstate)
-    except store.StateError:
-        return
-    if any(policy.needs_parse(rule) and rule.get("enabled") is True for rule in rules.values()):
-        import astrun
-
-        astrun.warm(os.path.dirname(store.global_state_path()))
 
 
 def run_safe(text: str, stdout: IO[str], failure: BaseException) -> None:
@@ -336,8 +312,7 @@ def run_safe(text: str, stdout: IO[str], failure: BaseException) -> None:
     killed = gstate.get("enabled", True) is False
     rules = policy.effective_rules(managed, {} if killed else gstate, {} if killed else pstate)
     candidates = candidates_of(rules, tool)
-    reason = ("the guardrails hook exceeded its time budget" if isinstance(failure, TimeoutError)
-              else f"the guardrails hook failed internally ({type(failure).__name__})")
+    reason = f"the guardrails hook failed internally ({type(failure).__name__})"
     hits = {rid: rule for rid, rule in candidates.items() if policy.regex_kind(rule, command)}
     notice = (f"guardrails: {reason}; only rules with regex were applied, without session state. Rules using program, "
               "args, builtin or match.ast were not checked.")

@@ -9,8 +9,8 @@ import json
 import os
 import re
 import sys
-from collections.abc import Iterator
-from typing import Any, Callable, TypeVar
+from collections.abc import Callable, Iterator
+from typing import Any, TypeVar
 
 import policy
 
@@ -38,7 +38,7 @@ class NotWritable(StateError):
 
 
 def now() -> str:
-    return datetime.datetime.now(datetime.timezone.utc).isoformat(timespec="seconds")
+    return datetime.datetime.now(datetime.UTC).isoformat(timespec="seconds")
 
 
 def plugin_id(here: str = HERE) -> str:
@@ -172,7 +172,7 @@ def load(path: str | None) -> State:
 def prune(sessions: object) -> dict[str, Any]:
     if not isinstance(sessions, dict):
         return {}
-    cutoff = datetime.datetime.now(datetime.timezone.utc) - datetime.timedelta(days=SESSION_TTL_DAYS)
+    cutoff = datetime.datetime.now(datetime.UTC) - datetime.timedelta(days=SESSION_TTL_DAYS)
     kept: dict[str, Any] = {}
     for sid, record in sessions.items():
         if not isinstance(record, dict):
@@ -182,7 +182,7 @@ def prune(sessions: object) -> dict[str, Any]:
         except ValueError:
             continue
         if seen.tzinfo is None:
-            seen = seen.replace(tzinfo=datetime.timezone.utc)
+            seen = seen.replace(tzinfo=datetime.UTC)
         if seen >= cutoff:
             kept[str(sid)] = record
     if len(kept) > MAX_SESSIONS:
@@ -253,7 +253,7 @@ def locked(path: str, dir_mode: int | None = None) -> Iterator[None]:
         os.close(fd)
 
 
-def mutate(path: str, fn: Callable[[State], T], mode: int | None = None) -> T:
+def mutate[T](path: str, fn: Callable[[State], T], mode: int | None = None) -> T:
     """Load, apply fn, write back, all under the file lock; nothing is written if fn raises."""
     with locked(path, None if mode is None else MANAGED_DIR_MODE):
         state = load(path)

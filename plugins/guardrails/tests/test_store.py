@@ -12,7 +12,7 @@ from helpers import Isolated
 
 import store
 
-UTC = datetime.timezone.utc
+UTC = datetime.UTC
 _real_default = store.default_managed_path
 
 

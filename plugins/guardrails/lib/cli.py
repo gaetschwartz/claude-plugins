@@ -8,17 +8,18 @@ import os
 import re
 import shlex
 import sys
+from collections.abc import Callable
 from dataclasses import dataclass
-from typing import Any, Callable, Optional
+from typing import Any
 
-import astbin
-import astrun
+import bootstrap
 import matching
 import policy
 import render
 import store
 import wrappers as wrapper_table
 from policy import Invalid, view
+from verdict import Evaluation, limit_reason
 
 PRESETS_DIR = os.path.join(os.path.dirname(store.HERE), "presets")
 SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description",
@@ -260,14 +261,14 @@ def snapshot(args: Args) -> Snapshot:
     if parsed:
         where = sorted({layer for rid in parsed for layer in rule_origins.get(rid, [])})
         try:
-            for rid, why in matching.check(parsed, policy.effective_wrappers(mstate, gstate, pstate), state_dir()).items():
+            for rid, why in matching.check(parsed).items():
                 report(f"rule {rid}: does not compile ({why}) (skipped by the hook)", *rule_origins.get(rid, []))
-        except astrun.Unavailable as exc:
+        except matching.EngineError as exc:
             blind = set(parsed)
             managed_blind = sorted(rid for rid in parsed if "managed" in rule_origins.get(rid, []))
             fails_open = f" MANAGED rules fail open too: {', '.join(managed_blind)}." if managed_blind else ""
             report(f"rules {', '.join(sorted(parsed))} use program, args, builtin or match.ast and are NOT enforced "
-                   f"while the engine cannot run ({exc}); regex rules still are.{fails_open}{engine_fix(exc)}", *where)
+                   f"while the engine cannot run ({exc}); regex rules still are.{fails_open}", *where)
     return Snapshot(extra, sources, mstate, gstate, pstate, gpath, ppath, gstate.get("enabled", True) is not False,
                     rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers,
                     frozenset(blind))
@@ -360,25 +361,15 @@ def cmd_status(args: Args) -> int:
     return 0
 
 
-def engine_fix(exc: Exception) -> str:
-    """How to get the engine, when that is what is missing."""
-    if not isinstance(exc, astrun.Missing):
-        return ""
-    if exc.unsupported:
-        return ". ast-grep cannot run on this platform, so there is nothing to install; use regex rules here"
-    fixes = f"`{astbin.FIX_INSTALL}` or `{astbin.npm_fix()}`" if exc.wheel else f"`{astbin.npm_fix()}`"
-    return f". Fix: run {fixes}; `guardrails engine status` shows the state"
-
-
-def check_ast_rule(rule: policy.Rule, wrappers: wrapper_table.Names) -> str:
+def check_ast_rule(rule: policy.Rule) -> str:
     """Raise Invalid when the rule does not compile; a note when it could not be checked."""
     if not policy.needs_parse(rule):
         return ""
     try:
-        errors = matching.check({"rule": rule}, wrappers, state_dir())
-    except astrun.Unavailable as exc:
+        errors = matching.check({"rule": rule})
+    except matching.EngineError as exc:
         return (f"note: the rule was not compile-checked ({exc}); the hook skips a rule that does not compile and "
-                f"warns once per session{engine_fix(exc)}")
+                "warns once per session")
     if errors:
         raise Invalid(f"the rule does not compile: {errors['rule']}")
     return ""
@@ -389,7 +380,7 @@ def cmd_rule_add(args: Args) -> int:
     check_name("rule", args.id)
     rule, _ = split_envelope(load_json(args.json, "--json"))
     policy.validate_rule(rule)
-    unchecked = check_ast_rule(rule, current_wrappers(args))
+    unchecked = check_ast_rule(rule)
     rule["setBy"] = stamp(args.reason)
     scope = resolve_scope(args)
     path = scope_path(scope, args)
@@ -465,7 +456,7 @@ def cmd_rule_set(args: Args) -> int:
         rule = rules[args.id]
         apply_fields(rule, fields)
         policy.validate_rule(policy.merge_rule(base, rule) if base is not None else rule)
-        unchecked.append(check_ast_rule(rule, current_wrappers(args)))
+        unchecked.append(check_ast_rule(rule))
         rule["setBy"] = stamp(args.reason)
         return rule
 
@@ -522,7 +513,7 @@ def effect_notes(args: Args, rule: policy.Rule, layers: list[str], mstate: store
     return notes
 
 
-Example = tuple[str, str, Optional[str]]
+Example = tuple[str, str, str | None]
 
 
 def split_envelope(document: Any) -> tuple[Any, Any]:
@@ -557,33 +548,12 @@ def example_list(data: Any) -> list[Example]:
     return out
 
 
-def state_dir() -> str:
-    return os.path.dirname(store.global_state_path())
-
-
-def current_wrappers(args: Args | None = None) -> wrapper_table.Names:
-    """The effective wrapper names; an unreadable state file contributes none (status reports it)."""
-
-    def load(path: str | None) -> store.State:
-        try:
-            return store.load(path)
-        except store.StateError:
-            return {}
-
-    return policy.effective_wrappers(store.load_managed(extra_path(args) if args else None)[0],
-                                     load(store.global_state_path()), load(store.project_state_path()))
-
-
-def cannot_evaluate_note(ev: matching.Evaluation) -> str:
+def cannot_evaluate_note(ev: Evaluation) -> str:
     """Why this rule's program/args/builtin/ast part could not be judged, when it could not."""
     if ev.refusal:
         return f"cannot evaluate the parsing part of this rule: {ev.refusal}; the hook denies such a command"
-    if isinstance(ev.outage, astrun.Missing):
-        return (f"cannot evaluate the parsing part of this rule (program, args, builtin, match.ast): the engine is "
-                f"missing ({ev.outage}); the hook allows the command without it and warns the session"
-                f"{engine_fix(ev.outage)}")
     return (f"cannot evaluate the parsing part of this rule (program, args, builtin, match.ast): the engine failed "
-            f"({ev.failure_kind()}: {ev.outage}); the hook allows the command and warns the session")
+            f"({ev.failure}); the hook allows the command and warns the session")
 
 
 def cmd_rule_test(args: Args) -> int:
@@ -628,7 +598,7 @@ def cmd_rule_test(args: Args) -> int:
     if file and not store.hook_enforces(file):
         notes.append(f"the hook enforces {file} only if {store.MANAGED_ENV} points at it")
     wrappers = policy.effective_wrappers(mstate, gstate, pstate)
-    evaluations = [matching.evaluate(cmd, {rid: rule}, wrappers, state_dir()) for cmd, _, _ in examples]
+    evaluations = [matching.evaluate(cmd, {rid: rule}, wrappers) for cmd, _, _ in examples]
     broken = {rid_: why for ev in evaluations for rid_, why in ev.invalid.items()}
     if broken:
         raise Invalid(f"the rule does not compile: {broken[rid]}")
@@ -645,78 +615,51 @@ def cmd_rule_test(args: Args) -> int:
 def cmd_rule_ast(args: Args) -> int:
     if not args.command.strip():
         raise Invalid("the command must not be blank")
-    mstate, gstate, pstate = states(args)
     try:
-        response = matching.tree(args.command, policy.effective_wrappers(mstate, gstate, pstate), state_dir())
-    except astrun.Unavailable as exc:
-        raise Invalid(f"the AST engine is unavailable: {exc}{engine_fix(exc)}") from exc
-    units = response["units"]
+        units, limit = matching.tree(args.command)
+    except matching.EngineError as exc:
+        raise Invalid(f"the AST engine is unavailable: {exc}") from exc
     print(render.clean(f"command: {args.command}"))
     print(f"units: {len(units)} (1 as written, {len(units) - 1} from shell strings)")
-    if response.get("limit"):
-        print(f"note: the command {matching.LIMIT_REASONS[response['limit']]}; the hook denies it and deeper units "
-              "are not shown")
+    if limit:
+        print(f"note: the command {limit_reason(limit)}; the hook denies it and deeper units are not shown")
     for unit in units:
         print()
-        if unit["label"]:
-            print(render.clean(f"tree: {unit['label']}, source: {unit['src']}"))
+        if unit.label:
+            print(render.clean(f"tree: {unit.label}, source: {unit.src}"))
         else:
             print("tree: command as written")
-        for depth, kind, text in unit["nodes"]:
+        for depth, kind, text in unit.rows:
             leaf = f" \u00ab{render.clean(text)}\u00bb" if text is not None else ""
             print(f"{'  ' * (depth + 1)}{render.clean(kind)}{leaf}")
-        if unit["broken"]:
+        if unit.broken:
             print("note: the parser reported errors here (ERROR or MISSING nodes), so rules see a partial tree")
     return 0
 
 
-def cmd_engine_install(args: Args) -> int:
-    try:
-        print(astbin.install(state_dir(), lambda line: print(line, flush=True)))
-    except (astbin.InstallError, astbin.Missing) as exc:
-        raise Invalid(f"engine install failed: {exc}") from exc
-    return 0
+def cmd_engine_ensure(args: Args) -> int:
+    return bootstrap.cli_ensure(["--retry-now"] if args.retry_now else [])
 
 
 def cmd_engine_status(args: Args) -> int:
-    info = astbin.status(state_dir())
-    print(f"ast-grep pin: {info['pin']}")
-    if "unsupported" in info:
-        print(f"platform: {render.clean(info['unsupported'])}")
-    else:
-        print(f"platform: {info['platform']}")
-        for name in ("npm", "wheel"):
-            part = info[name]
-            state = "usable" if part["usable"] else (f"REJECTED: {part['why']}" if part["present"] else
-                                                     (f"unavailable: {part['why']}" if part["why"] else "not installed"))
-            print(f"{name}: {state} ({render.clean(str(part['path']))})")
-        if "marker" in info:
-            mark = info["marker"]
-            print(f"wheel marker: pin {mark['pin']}, binary sha256 {str(mark['binarySha256'])[:16]}…, installed "
-                  f"{render.clean(str(mark['installedAt']))}")
-        if "failure" in info:
-            fail = info["failure"]
-            print(f"last download failure: {render.clean(fail['reason'])} (retry after "
-                  f"{astbin.retry_clock(state_dir())}; `guardrails engine install` ignores the wait)")
-    print(f"active: {info['active'] or 'none'}" + (f" ({info['binary']})" if info["binary"] else ""))
-    if not info["binary"] and "unsupported" in info:
-        print("ast-grep cannot run on this platform, so rules using program, args, builtin or match.ast are NOT enforced "
-              "(their commands are allowed); regex rules still are. There is no fix here: use regex rules or a "
-              "supported system")
-    elif not info["binary"]:
-        print("the syntax-tree engine is missing, so rules using program, args, builtin or match.ast are NOT enforced "
-              "(their commands are allowed); regex rules still are. To fix, run one of:")
-        if not info["wheel"]["why"]:
-            print(f"  {astbin.FIX_INSTALL}")
-        print(f"  {astbin.npm_fix()}")
+    info = bootstrap.inspect(bootstrap.data_dir())
+    pins = info.pins
+    print(f"runtime: {'ready' if info.problem is None else 'NOT ready (' + info.problem + ')'}")
+    print(f"pins: uv {pins.uv}, Python {pins.python}, ast-grep-py {pins.ast_grep_py}, bootstrap {pins.bootstrap}")
+    print(f"platform: {render.clean(info.platform)}")
+    print(f"path: {render.clean(str(info.path))}")
+    if info.marker:
+        print(f"installed: Python {info.marker.get('python')} at {render.clean(str(info.marker.get('installedAt')))}")
+    if info.installing:
+        print("an install is running now")
+    if info.failure:
+        print(f"last install failure: {render.clean(info.failure.reason)} (next automatic attempt at "
+              f"{bootstrap.clock(info.failure.at + bootstrap.BACKOFF_SECONDS)}; `guardrails engine ensure "
+              "--retry-now` ignores the wait)")
+    if info.problem is not None:
+        print("rules that use program, args, builtin or match.ast are NOT enforced until the runtime is ready "
+              "(regex rules still are)")
     return 0
-
-
-def cmd_engine_verify(args: Args) -> int:
-    results = astbin.verify(state_dir())
-    for ok, line in results:
-        print(f"{'ok' if ok else 'FAIL'}: {render.clean(line)}")
-    return 0 if all(ok for ok, _ in results) else 2
 
 
 def cmd_wrapper_add(args: Args) -> int:
@@ -1036,11 +979,13 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("name")
     install.add_argument("--only", help="comma-separated rule ids to install")
 
-    engine = verbs.add_parser("engine", help="the ast-grep binary behind program, args, builtin and match.ast (not a configuration change, so "
-                              "--as-user does not apply)").add_subparsers(dest="op", required=True)
-    engine.add_parser("install", help="download the pinned, hash-checked ast-grep wheel binary into the plugin data dir")
-    engine.add_parser("status", help="which ast-grep the hook uses, where it came from, and how to fix a missing one")
-    engine.add_parser("verify", help="re-hash the active ast-grep binary against the committed manifest")
+    engine = verbs.add_parser("engine", help="the managed runtime (uv, Python, ast-grep-py) behind program, args, builtin "
+                              "and match.ast; installed automatically, so this is for diagnosis (not a "
+                              "configuration change, so --as-user does not apply)").add_subparsers(dest="op",
+                                                                                                     required=True)
+    engine.add_parser("status", help="the runtime's pins, platform, paths, state and last install failure")
+    ensure = engine.add_parser("ensure", help="install the runtime now if it is missing (normally automatic)")
+    ensure.add_argument("--retry-now", action="store_true", help="ignore the wait after a failed install")
 
     for name, state in (("enable", "on"), ("disable", "off")):
         toggle = verbs.add_parser(name, parents=[common], help=f"turn the hook (with --scope project: project rules) {state}")
@@ -1065,9 +1010,8 @@ HANDLERS: dict[tuple[str, str | None], Callable[[Args], int]] = {
     ("preset", "list"): cmd_preset_list,
     ("preset", "show"): cmd_preset_show,
     ("preset", "install"): cmd_preset_install,
-    ("engine", "install"): cmd_engine_install,
+    ("engine", "ensure"): cmd_engine_ensure,
     ("engine", "status"): cmd_engine_status,
-    ("engine", "verify"): cmd_engine_verify,
     ("enable", None): lambda args: set_enabled(args, True),
     ("disable", None): lambda args: set_enabled(args, False),
 }

@@ -72,7 +72,7 @@ class ExamplesRun(AstIsolated):
             if "tree" not in e:
                 continue
             with self.subTest(example=e["id"], file=path.name):
-                shown = {kind for unit in matching.tree(e["catch"][0])["units"] for _, kind, _ in unit["nodes"]}
+                shown = {kind for unit in matching.tree(e["catch"][0])[0] for _, kind, _ in unit.rows}
                 self.assertEqual(set(re.findall(r"[a-z_]+", e["tree"])) - shown, set())
 
     def test_negated_relations_are_documented_as_working(self) -> None:

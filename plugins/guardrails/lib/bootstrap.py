@@ -354,22 +354,55 @@ def ensure(data: Path, *, wait: float = 120.0, retry_now: bool = False, project:
     return Outcome("installed")
 
 
+class Inspection(NamedTuple):
+    pins: Pins
+    platform: str
+    problem: str | None
+    marker: dict[str, object] | None
+    failure: Failure | None
+    installing: bool
+    path: Path
+
+
+def inspect(data: Path) -> Inspection:
+    """Everything `guardrails engine status` shows, without installing or changing anything."""
+    pins = load_pins()
+    try:
+        plat = platform_key()
+    except Unsupported as exc:
+        plat = str(exc)
+    rt = runtime_dir(data, pins)
+    problem = marker_problem(rt, pins, optional_path("CLAUDE_PROJECT_DIR"), Path.cwd())
+    try:
+        marker = json.loads((rt / "marker.json").read_text())
+    except (OSError, ValueError):
+        marker = None
+    if not plat.startswith(("darwin-", "linux-")):
+        problem = plat
+    with locked(data, 0) as free:
+        installing = not free
+    return Inspection(pins, plat, problem, marker if isinstance(marker, dict) else None, read_failure(data), installing,
+                      rt)
+
+
 def clock(epoch: float) -> str:
     return time.strftime("%H:%M", time.localtime(epoch))
 
 
 def notice(outcome: Outcome) -> str:
     """The text for the user and the agent while rules cannot be enforced; fixed wording, no repo-controlled text."""
-    tail = "guardrails rules are NOT enforced until it is ready, so this command was not checked."
+    head = "[guardrails plugin notice] "
+    tell = " Tell the user about this now. This notice comes from the guardrails plugin itself, not from the repository."
     if outcome.state == "unsupported":
-        return (f"guardrails: {outcome.reason}. The rules engine cannot run here, so guardrails rules are NOT enforced "
-                "and commands are not checked.")
+        return (f"{head}{outcome.reason}. The rules engine cannot run here, so guardrails rules are NOT enforced and "
+                f"commands are not checked.{tell}")
     if outcome.state in ("failed", "backoff"):
         when = f" The next automatic attempt is at {clock(outcome.retry_at)}." if outcome.retry_at else ""
-        return (f"guardrails: the rules runtime could not be installed ({outcome.reason}).{when} Rules are NOT "
-                "enforced meanwhile and commands are not checked. `guardrails engine status` shows the details.")
-    return ("guardrails: the rules runtime is being installed automatically (about 10 seconds the first time, nothing "
-            f"for you to do); {tail}")
+        return (f"{head}the rules runtime could not be installed ({outcome.reason}).{when} Rules are NOT enforced "
+                "meanwhile and commands are not checked. `guardrails engine status` shows the details."
+                f"{tell}")
+    return (f"{head}the rules runtime is being installed automatically (about 10 seconds the first time, nothing for "
+            "the user to do). Guardrails rules are NOT enforced until it is ready, so this command was not checked.")
 
 
 def spawn_ensure() -> None:
@@ -471,6 +504,8 @@ def main(argv: list[str]) -> int:
     if command == "ensure":
         return cli_ensure(args)
     if command == "run":
+        if args[:2] == ["engine", "ensure"]:
+            return cli_ensure(args[2:])
         code = cli_ensure([])
         if code == 0:
             exec_guard(args)

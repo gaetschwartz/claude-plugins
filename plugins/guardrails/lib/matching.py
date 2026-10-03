@@ -1,138 +1,147 @@
-"""The one place a command is matched against rules: the hook and every CLI path call evaluate()."""
+"""The one place a command is matched against rules: the hook and every CLI path call evaluate().
+
+Anything that needs the parser is matched in a forked child with a hard deadline, because a call into ast-grep cannot
+be interrupted and a hook that runs out of time lets the command through.
+"""
 
 from __future__ import annotations
 
-import re
-from collections.abc import Collection
-from typing import Any
+import json
+from typing import TypedDict
 
+import bounded
 import policy
 import wrappers as wrapper_table
+from verdict import Evaluation, Kind, Limit, Refusal, UnitTree, limit_reason
 
-ENGINE_MISSING_KEY = "engine-missing"
-FAILED_PREFIX = "engine-failed:"
 MAX_COMMAND = 256 << 10
-COMPLEX_BYTES = 8 << 10
-LIMIT_REASONS = {"depth": "nests shell strings too deeply", "units": "unpacks into too many shell strings",
-                 "size": "unpacks into too much shell text"}
+INLINE_BYTES = 4 << 10
+DEADLINE_SECONDS = 5.0
 
 
-class Evaluation:
-    """How each rule's matcher selects one command, and what kept a rule from being judged."""
-
-    def __init__(self) -> None:
-        self.kinds: dict[str, str | None] = {}
-        self.unevaluated: set[str] = set()
-        self.invalid: dict[str, str] = {}
-        self.outage: Exception | None = None
-        self.refusal: str | None = None
-        self.refusal_kind = ""
-        self.rejected: list[str] = []
-
-    def failure_kind(self) -> str:
-        return self.refusal_kind or str(getattr(self.outage, "kind", ""))
-
-    def warnings(self, managed: Collection[str] = ()) -> list[tuple[str, str]]:
-        """(stable key, text) per problem. Keys under FAILED_PREFIX are per failure class, not per message."""
-        import astbin
-        import astrun
-
-        out = [(text, text) for text in self.rejected]
-        out += [(f"rule-invalid:{rid}", f"guardrails: rule {rid} does not compile ({why}) and is skipped")
-                for rid, why in sorted(self.invalid.items())]
-        affected = sorted(self.unevaluated)
-        if isinstance(self.outage, astrun.Missing):
-            fail_open = sum(1 for rid in affected if rid in managed)
-            out.append((ENGINE_MISSING_KEY, astbin.notice(str(self.outage), self.outage.unsupported,
-                                                          self.outage.wheel, affected, fail_open)))
-        elif self.outage is not None:
-            reason = astbin.sanitised(str(self.outage), 200)
-            out.append((FAILED_PREFIX + self.failure_kind(), astbin.failure_notice(reason, affected)))
-        return out
+class EngineError(Exception):
+    """The ast-grep library is not usable here."""
 
 
-def best(a: str | None, b: str | None) -> str | None:
-    return "direct" if "direct" in (a, b) else (a or b)
+class Wire(TypedDict):
+    kinds: dict[str, str | None]
+    invalid: dict[str, str]
+    limit: str | None
+    failure: str | None
 
 
-def clean_error(text: str) -> str:
-    return re.sub(r"^\d+:\s*", "", text)
+def parseable(command: str) -> str:
+    """The text the parser gets: lone surrogates replaced and NULs blanked, which it cannot take."""
+    return command.encode("utf-8", "replace").decode().replace("\x00", " ")
 
 
-def give_up(ev: Evaluation, failure: Exception, size: int) -> None:
-    """Record an engine failure: a timeout on a command too big for that to be a hiccup refuses it, the rest is a
-    loud allow."""
-    if getattr(failure, "kind", "") == "timeout" and size > COMPLEX_BYTES:
-        ev.refusal = ("command too complex to check (the parser timed out on it); split it up or write it to a "
-                      "script file and run that")
-        ev.refusal_kind = "timeout"
-    else:
-        ev.outage = failure
+def best(a: Kind | None, b: Kind | None) -> Kind | None:
+    return Kind.DIRECT if Kind.DIRECT in (a, b) else (a or b)
 
 
-def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_table.Names | None = None,
-             state_dir: str | None = None) -> Evaluation:
+def compute(command: str, rules: dict[str, policy.Rule], names: wrapper_table.Names, parse: bool) -> Wire:
+    """Every rule's verdict on one command. Regex rules read the raw text; the rest need the parser."""
+    kinds: dict[str, str | None] = {rid: policy.regex_kind(rule, command) for rid, rule in rules.items()}
+    wire: Wire = {"kinds": kinds, "invalid": {}, "limit": None, "failure": None}
+    parsed = {rid: rule for rid, rule in rules.items() if policy.needs_parse(rule)}
+    if not parsed or not parse:
+        return wire
+    try:
+        import rulebuilder
+        import scanner
+    except ImportError as exc:
+        wire["failure"] = f"the ast-grep-py library cannot be imported ({type(exc).__name__})"
+        return wire
+    broken = scanner.self_test()
+    if broken is not None:
+        wire["failure"] = f"the ast-grep-py self-test failed: {broken}"
+        return wire
+    try:
+        result = scanner.Scanner({rid: rulebuilder.configs_of(rule) for rid, rule in parsed.items()}, names).run(
+            parseable(command))
+    except Exception as exc:  # noqa: BLE001
+        wire["failure"] = f"unexpected error: {type(exc).__name__}"
+        return wire
+    for rid, kind in result.kinds(list(parsed)).items():
+        kinds[rid] = best(Kind(kinds[rid]) if kinds[rid] else None, kind)
+    wire["invalid"] = result.invalid
+    wire["limit"] = str(result.limit) if result.limit else None
+    return wire
+
+
+def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_table.Names | None = None) -> Evaluation:
     """How each rule's matcher selects the command: "direct", "wrapped" or None.
 
-    Regex rules read the raw text. Rules using program, builtin or match.ast need ast-grep; what it could not judge
-    (`unevaluated`) and why (`outage` or `refusal`) is kept for the caller to report. Hits already found always
-    stand. Never raises.
+    What could not be judged (`unevaluated`) and why (`failure`, `refusal`) is kept for the caller to report. Hits
+    already found always stand. Never raises.
     """
     ev = Evaluation()
-    for rid, rule in rules.items():
-        ev.kinds[rid] = policy.regex_kind(rule, command)
-    parsed = {rid: rule for rid, rule in rules.items() if policy.needs_parse(rule)}
-    if not parsed:
-        return ev
-    size = len(command.encode("utf-8", "replace"))
-    if size > MAX_COMMAND:
-        ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND // 1024} KiB)"
-        ev.refusal_kind = "oversize"
-        ev.unevaluated = {rid for rid in parsed if ev.kinds[rid] is None}
-        return ev
-    import astrun
-
     names = wrappers if wrappers is not None else wrapper_table.DEFAULTS
-    failure: Exception | None = None
-    try:
-        response = astrun.call({"op": "eval", "command": command, "rules": parsed, "wrappers": list(names)}, state_dir)
-    except Exception as exc:  # noqa: BLE001
-        failure = exc if isinstance(exc, astrun.Unavailable) else astrun.Unavailable(
-            f"unexpected error: {type(exc).__name__}", "unexpected")
+    parsed = {rid for rid, rule in rules.items() if policy.needs_parse(rule)}
+    size = len(command.encode("utf-8", "replace"))
+    oversize = size > MAX_COMMAND and bool(parsed)
+    wire: Wire | None
+    if not parsed and size <= INLINE_BYTES:
+        wire = compute(command, rules, names, True)
     else:
-        for rid, kind in response["verdicts"].items():
-            if rid in ev.kinds and kind in ("direct", "wrapped"):
-                ev.kinds[rid] = best(ev.kinds[rid], kind)
-        ev.invalid = {rid: clean_error(str(why)) for rid, why in response["errors"].items()}
-        if response.get("failure"):
-            failure = astrun.Unavailable(response["failure"]["reason"], response["failure"]["kind"])
-        elif response.get("limit"):
-            ev.refusal = f"command too complex to check (it {LIMIT_REASONS[response['limit']]})"
-            ev.refusal_kind = "complex"
-    if failure is not None:
-        give_up(ev, failure, size)
-    if failure is not None or ev.refusal:
-        ev.unevaluated = {rid for rid in parsed if ev.kinds[rid] is None}
+        result = bounded.call(lambda: json.dumps(compute(command, rules, names, not oversize)), DEADLINE_SECONDS)
+        match result.outcome:
+            case bounded.Outcome.DONE:
+                wire = json.loads(result.payload)
+            case bounded.Outcome.TIMEOUT:
+                wire = None
+                ev.refusal = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "
+                              "split it up or write it to a script file and run that")
+                ev.refusal_kind = Refusal.TIMEOUT
+            case bounded.Outcome.CRASHED:
+                wire = None
+                ev.refusal = "command too complex to check (the checker failed on it)"
+                ev.refusal_kind = Refusal.COMPLEX
+    if wire is not None:
+        ev.kinds = {rid: Kind(kind) if kind else None for rid, kind in wire["kinds"].items()}
+        ev.invalid = dict(wire["invalid"])
+        ev.failure = wire["failure"]
+        if wire["limit"]:
+            ev.refusal = f"command too complex to check (it {limit_reason(Limit(wire['limit']))})"
+            ev.refusal_kind = Refusal.COMPLEX
+    else:
+        ev.kinds = {rid: policy.regex_kind(rule, command) for rid, rule in rules.items()}
+    if oversize:
+        ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND // 1024} KiB)"
+        ev.refusal_kind = Refusal.OVERSIZE
+    if ev.failure is not None or ev.refusal:
+        ev.unevaluated = {rid for rid in parsed if ev.kinds.get(rid) is None}
     ev.unevaluated |= {rid for rid in ev.invalid if ev.kinds.get(rid) is None}
-    ev.rejected = astrun.take_rejected()
     return ev
 
 
-def check(rules: dict[str, policy.Rule], wrappers: wrapper_table.Names | None = None,
-          state_dir: str | None = None) -> dict[str, str]:
-    """Compile errors per rule id; raises astrun.Unavailable when ast-grep cannot run."""
+def ensure_engine() -> None:
+    """Raise EngineError unless the library imports and passes its self-test."""
+    try:
+        import scanner
+    except ImportError as exc:
+        raise EngineError(f"the ast-grep-py library cannot be imported ({type(exc).__name__})") from exc
+    broken = scanner.self_test()
+    if broken is not None:
+        raise EngineError(f"the ast-grep-py self-test failed: {broken}")
+
+
+def check(rules: dict[str, policy.Rule]) -> dict[str, str]:
+    """Compile errors per rule id; raises EngineError when the library cannot run."""
     parsed = {rid: rule for rid, rule in rules.items() if policy.needs_parse(rule)}
     if not parsed:
         return {}
-    import astrun
+    ensure_engine()
+    import rulebuilder
+    import scanner
 
-    names = wrappers if wrappers is not None else wrapper_table.DEFAULTS
-    response = astrun.call({"op": "check", "rules": parsed, "wrappers": list(names)}, state_dir)
-    return {rid: clean_error(str(why)) for rid, why in response["errors"].items()}
+    return scanner.compile_errors({rid: rulebuilder.configs_of(rule) for rid, rule in parsed.items()})
 
 
-def tree(command: str, wrappers: wrapper_table.Names | None = None, state_dir: str | None = None) -> dict[str, Any]:
-    import astrun
+def tree(command: str) -> tuple[list[UnitTree], Limit | None]:
+    """The parse tree of the command and of each shell-string script it hands to a shell."""
+    ensure_engine()
+    import scanner
 
-    names = wrappers if wrappers is not None else wrapper_table.DEFAULTS
-    return astrun.call({"op": "tree", "command": command, "wrappers": list(names)}, state_dir)
+    units, limit = scanner.units_of(parseable(command))
+    return [scanner.tree_of(unit) for unit in units], limit

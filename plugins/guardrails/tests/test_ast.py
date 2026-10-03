@@ -1,25 +1,16 @@
 from __future__ import annotations  # noqa: I001
 
 import contextlib
-import io
 import json
-import os
 import re
-import time
 from collections.abc import Iterator
 from typing import Any, ClassVar
 from unittest import mock
 
-from helpers import REAL_WANTED, AstIsolated, caught, render
+from helpers import AstIsolated, caught, render
 
-import astbin
-import astcli
-import astrun
-import astworker
-import engine
 import matching
 import policy
-import wrappers
 
 PG = "pg" + "rep"
 KILL = "ki" + "ll"
@@ -119,7 +110,7 @@ class Kinds(AstIsolated):
 
     def test_a_broken_tree_is_reported_not_hidden(self) -> None:
         def broken(command: str) -> bool:
-            return self.call({"op": "tree", "command": command})["units"][0]["broken"]
+            return matching.tree(command)[0][0].broken
 
         for command in ('echo "unterminated', "a |", "echo $(", "if a; then b"):
             self.assertTrue(broken(command), command)
@@ -129,116 +120,6 @@ class Kinds(AstIsolated):
     def test_a_broken_tree_still_yields_the_commands_it_could_read(self) -> None:
         got = self.kinds(BY_NAME, ['pkill x "unterminated', "a; pkill x; if b; then", "pkill x\necho 'unterminated"])
         self.assertTrue(all(got.values()), got)
-
-
-class Worker(AstIsolated):
-    """The CLI-backed worker: batching, offsets, sanitising and its bounds."""
-
-    def verdict(self, command: str, ast: dict[str, Any] | None = None, **request: Any) -> Any:
-        rules = {"r": rule_of(ast or {"pattern": f"{KILL} $$$"})}
-        return self.call({"op": "eval", "command": command, "rules": rules, "wrappers": list(wrappers.DEFAULTS),
-                          **request})["verdicts"]["r"]
-
-    def test_one_unit_alone_and_the_same_unit_in_a_batch_give_the_same_hits(self) -> None:
-        from astcli import Cli, Src
-
-        engine_ = astbin.locate(str(self.data))
-        cli = Cli(engine_.binary, time.monotonic() + 30, engine_.version)
-        rules = {"r": {"rule": {"pattern": "echo $$$"}}}
-        texts = ["echo a", "ls", "echo 'é' && echo \U0001F600 b", "sudo echo x | cat"]
-        alone = [cli.scan(rules, [Src(t)])[0] for t in texts]
-        self.assertEqual(alone, cli.scan(rules, [Src(t) for t in texts]))
-        self.assertTrue(any(alone))
-
-    def test_ignore_files_around_the_temp_directory_cannot_hide_a_unit(self) -> None:
-        import tempfile
-
-        scratch = self.tmp / "scratch"
-        scratch.mkdir()
-        (scratch / ".gitignore").write_text("*\n")
-        (scratch / ".ignore").write_text("*\n")
-        with mock.patch.object(tempfile, "tempdir", str(scratch)):
-            self.assertEqual(self.verdict(f"bash -c '{KILL} x'"), "wrapped")
-        self.assertEqual([p.name for p in scratch.iterdir() if p.name.startswith("guardrails-")], [])
-
-    def test_offsets_survive_multibyte_text_before_the_region(self) -> None:
-        for prefix in ("echo 'é é é'", "echo 日本語 \U0001F600", "x=é"):
-            self.assertEqual(self.verdict(f"{prefix} && echo $({KILL} x)"), "wrapped", prefix)
-            self.assertEqual(self.verdict(f"{prefix}; {KILL} x"), "direct", prefix)
-            self.assertEqual(self.verdict(f"{prefix}; bash -c '{KILL} x'"), "wrapped", prefix)
-
-    def test_rules_with_unusual_characters_reach_the_engine_intact(self) -> None:
-        for text in ("echo \u00e9\U0001F600", "echo a\u2028b", "echo a\u0085b", "echo \"q\" 'r' \\s"):
-            self.assertEqual(self.verdict(text, {"pattern": text}), "direct", text)
-        self.assertEqual(self.verdict("echo a\u2028b", {"kind": "word", "regex": "a\u2028b"}), "direct")
-
-    def test_nul_and_lone_surrogates_do_not_break_the_engine(self) -> None:
-        self.assertEqual(self.verdict(f"echo a\x00b; {KILL} x"), "direct")
-        self.assertEqual(self.verdict(f"echo \ud800; {KILL} x"), "direct")
-
-    def limit(self, command: str) -> str | None:
-        rules = {"r": rule_of({"pattern": f"{KILL} $$$"})}
-        return self.call({"op": "eval", "command": command, "rules": rules, "wrappers": []})["limit"]
-
-    def test_limits_name_their_real_cause(self) -> None:
-        self.assertEqual(self.limit("eval " * 40 + KILL + " x"), "depth")
-        self.assertEqual(self.limit("; ".join(f"bash -c 'echo {n}'" for n in range(80))), "units")
-        self.assertEqual(self.limit("bash -c 'true'; " * 600), None)
-
-    def test_the_same_input_gives_the_same_answer_however_slow_the_machine_is(self) -> None:
-        from astcli import Cli
-
-        commands = ["eval " * 40 + KILL + " x", "; ".join(f"bash -c 'echo {n}'" for n in range(80)), f"bash -c '{KILL} x'"]
-        request = {"op": "eval", "rules": {"r": rule_of(BY_NAME)}, "wrappers": []}
-        fast = [self.call({**request, "command": c}) for c in commands]
-        real_scan = Cli.scan
-
-        def slow(self_: Cli, *args: Any, **kwargs: Any) -> Any:
-            time.sleep(0.1)
-            return real_scan(self_, *args, **kwargs)
-
-        with mock.patch.object(Cli, "scan", slow), mock.patch.object(astrun, "DEADLINE", 60.0):
-            laggy = [self.call({**request, "command": c}) for c in commands]
-        self.assertEqual(fast, laggy)
-
-    def test_expansion_is_proportional_to_the_distinct_input(self) -> None:
-        self.put(self.gpath, {"rules": {"by-name": {"match": {"ast": BY_NAME}, "message": "No."},
-                                        "prog": {"match": {"program": PK}, "message": "No."}}})
-        shapes = {"500 deep": "$(" * 500 + PK + " x" + ")" * 500, "wide list": "a;" * 3000 + PK + " x",
-                  "wide substitutions": "echo $(ls); " * 1200 + PK + " x",
-                  "wide wrappers": "sudo true; " * 1400 + PK + " x", "same shell string": "bash -c 'ls'; " * 2000 + PK + " x"}
-        for n, (name, command) in enumerate(shapes.items()):
-            started = time.monotonic()
-            out = self.hook(command, session=f"s{n}")
-            self.assertLess(time.monotonic() - started, 2.5, name)
-            assert out is not None
-            self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny", name)
-
-    def test_a_repeated_script_is_scanned_once(self) -> None:
-        scans: list[int] = []
-        real_scan = astcli.Cli.scan
-
-        def spy(cli: astcli.Cli, rules: Any, sources: list[Any]) -> Any:
-            scans.append(len(sources))
-            return real_scan(cli, rules, sources)
-
-        with mock.patch.object(astcli.Cli, "scan", spy):
-            response = self.call({"op": "eval", "command": "; ".join([f"bash -c 'echo {KILL}'"] * 5000),
-                                  "rules": {"r": rule_of(BY_NAME)}, "wrappers": []})
-        self.assertEqual(response["verdicts"], {"r": None})
-        self.assertEqual(scans, [1, 1])
-
-    def test_tree_nodes_keep_the_leaf_rules(self) -> None:
-        nodes = self.call({"op": "tree", "command": "echo \"\" 'a b' x"})["units"][0]["nodes"]
-        shown = {(kind, text) for _, kind, text in nodes}
-        self.assertIn(("string", None), shown)
-        self.assertIn(("raw_string", "'a b'"), shown)
-        self.assertIn(("command_name", "echo"), shown)
-
-    def test_unquote_one_shell_word(self) -> None:
-        for word, text in (("'a b'", "a b"), ('"a \\"b\\" \\$x \\\\"', 'a "b" $x \\'), ("pkill", "pkill"), ("''", ""),
-                           ("'bash -c '\"'\"'x'\"'\"''", "bash -c 'x'"), ("a\\ b", "a b"), ('"x"\'y\'z', "xyz")):
-            self.assertEqual(astworker.unquote(word), text, word)
 
 
 class RuleSize(AstIsolated):
@@ -271,34 +152,11 @@ class RuleSize(AstIsolated):
         self.put(self.ppath, {"rules": {"huge": {"match": {"ast": self.HUGE}, "message": "m"}}})
         self.assertIn("rule huge: 'match.ast' is", self.cli("status", "--problems")[1])
 
-    def test_many_rules_are_capped_in_order_and_never_put_on_the_command_line(self) -> None:
-        rules = {f"r{i:04d}": rule_of({"pattern": f"tool{i} --flag-{'y' * 100} $$$"}) for i in range(2500)}
-        rules["r9999"] = rule_of({"kind": "command_substitution"})
-        seen: list[list[str]] = []
-        real = astcli.subprocess.run
-
-        def spy(cmd: list[str], **kwargs: Any) -> Any:
-            seen.append(cmd)
-            return real(cmd, **kwargs)
-
-        with mock.patch.object(astcli.subprocess, "run", spy):
-            response = self.call({"op": "eval", "command": "tool1 --flag-" + "y" * 100 + " a", "rules": rules})
-        self.assertEqual(response["verdicts"]["r0001"], "direct")
-        skipped = sorted(response["errors"])
-        self.assertTrue(skipped and skipped[-1] == "r9999")
-        self.assertEqual(skipped, sorted(set(skipped)))
-        self.assertIn("together exceed 256 KiB", response["errors"]["r9999"])
-        self.assertTrue(seen)
-        self.assertTrue(all(sum(len(part) for part in cmd) < 2048 for cmd in seen))
-        again = self.call({"op": "eval", "command": "tool1 --flag-" + "y" * 100 + " a", "rules": rules})
-        self.assertEqual(sorted(again["errors"]), skipped)
-
     def test_a_rule_that_does_not_compile_is_skipped_by_name_beside_good_ones(self) -> None:
-        response = self.call({"op": "eval", "command": "echo $(ls)",
-                              "rules": {"bad": rule_of({"kind": "no_such_kind"}),
-                                        "good": rule_of({"kind": "command_substitution"})}})
-        self.assertEqual(response["verdicts"], {"good": "direct"})
-        self.assertEqual(list(response["errors"]), ["bad"])
+        ev = matching.evaluate("echo $(ls)", {"bad": rule_of({"kind": "no_such_kind"}),
+                                             "good": rule_of({"kind": "command_substitution"})})
+        self.assertEqual(ev.kinds, {"bad": None, "good": "direct"})
+        self.assertEqual(list(ev.invalid), ["bad"])
 
 
 
@@ -457,8 +315,7 @@ class Hook(AstIsolated):
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
 
     def test_matching_runs_once_and_outside_the_state_lock(self) -> None:
-        from unittest import mock
-
+        
         import store
 
         inside_lock: list[bool] = []
@@ -514,60 +371,3 @@ class WorkedExample(AstIsolated):
             code, out, err = self.cli("rule", "test", "--json", json.dumps(rule), *commands)
             self.assertEqual(code, 0, err)
             self.assertEqual({cmd for cmd, hit in caught(out).items() if hit}, {render.clean(c) for c in want})
-
-
-class SessionStart(AstIsolated):
-    def setUp(self) -> None:
-        super().setUp()
-        self.use_engine(False)
-        self.popen = mock.patch.object(astrun.subprocess, "Popen").start()
-        mock.patch.object(astbin, "wanted", REAL_WANTED).start()
-        self.addCleanup(mock.patch.stopall)
-
-    def warm_up(self) -> None:
-        engine.run_warm(io.StringIO(json.dumps({"cwd": str(self.proj)})))
-
-    def test_warms_only_when_an_enabled_rule_needs_the_parser(self) -> None:
-        for rules in ({"s": {"match": {"regex": "strings"}, "message": "m"}},
-                      {"a": {"match": {"ast": BY_NAME}, "message": "m", "enabled": False}}):
-            self.put(self.gpath, {"rules": rules})
-            self.warm_up()
-        self.popen.assert_not_called()
-        self.put(self.ppath, {"rules": {"b": {"match": {"ast": BY_NAME}, "message": "m"}}})
-        self.warm_up()
-        self.popen.assert_called_once()
-
-    def test_the_detached_install_gets_a_scrubbed_environment_and_respects_the_backoff(self) -> None:
-        self.put(self.gpath, {"rules": {"b": {"match": {"ast": BY_NAME}, "message": "m"}}})
-        hostile = {"UV_FIND_LINKS": "/evil", "PIP_INDEX_URL": "http://evil", "PYTHONPATH": "/evil",
-                   "NODE_OPTIONS": "--require /evil", "HTTPS_PROXY": "http://proxy:1", "PATH": "/repo/bin"}
-        with mock.patch.dict(os.environ, hostile):
-            self.warm_up()
-        args, kwargs = self.popen.call_args
-        self.assertEqual(args[0][-2:], ["warm-install", str(self.data)])
-        self.assertEqual(kwargs["env"]["HTTPS_PROXY"], "http://proxy:1")
-        self.assertEqual(kwargs["env"]["PATH"], "/usr/bin:/bin")
-        for name in ("UV_FIND_LINKS", "PIP_INDEX_URL", "PYTHONPATH", "NODE_OPTIONS", "CLAUDE_PROJECT_DIR"):
-            self.assertNotIn(name, kwargs["env"])
-        self.assertTrue(kwargs["start_new_session"])
-        astbin.record_failure(str(self.data), "offline")
-        self.popen.reset_mock()
-        self.warm_up()
-        self.popen.assert_not_called()
-
-    def test_a_usable_engine_or_an_unsupported_platform_never_warms(self) -> None:
-        self.put(self.gpath, {"rules": {"b": {"match": {"ast": BY_NAME}, "message": "m"}}})
-        with mock.patch.object(astbin, "detect", side_effect=astbin.Missing("unsupported platform")):
-            self.warm_up()
-        self.popen.assert_not_called()
-
-    def test_hooks_json_registers_warm_up_and_a_roomy_timeout(self) -> None:
-        from helpers import HOOKS
-
-        hooks = json.loads((HOOKS / "hooks.json").read_text())["hooks"]
-        pre = hooks["PreToolUse"][0]["hooks"][0]
-        self.assertGreater(pre["timeout"], astrun.DEADLINE * 2)
-        start = hooks["SessionStart"][0]["hooks"][0]
-        self.assertTrue(start["command"].endswith("guardrails.sh\" warm"))
-        self.assertEqual(hooks["PreToolUse"][0]["matcher"], "Bash|Monitor")
-        self.assertLessEqual(start["timeout"], 10)

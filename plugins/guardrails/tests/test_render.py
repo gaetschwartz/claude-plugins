@@ -622,7 +622,7 @@ class WrappedForms(AstIsolated):
 
 class NotEvaluated(AstIsolated):
     def test_a_rule_the_engine_cannot_judge_is_never_shown_as_allowed(self) -> None:
-        self.use_engine(False)
+        self.break_engine()
         examples = json.dumps([{"cmd": "pkill a", "expect": "match"}, {"cmd": "ls", "expect": "pass"}])
         code, out, _ = self.cli("rule", "test", "--json", json.dumps(PKILL), "--examples", examples)
         self.assertEqual(code, 0)
@@ -634,7 +634,7 @@ class NotEvaluated(AstIsolated):
         self.assertIn("cannot evaluate the parsing part of this rule", out)
 
     def test_a_regex_rule_is_judged_without_the_engine(self) -> None:
-        self.use_engine(False)
+        self.break_engine()
         code, out, _ = self.cli("rule", "test", "--json", json.dumps({"match": {"regex": "^pkill"}, "message": "m"}),
                                 "pkill a", "ls")
         self.assertEqual(code, 0)

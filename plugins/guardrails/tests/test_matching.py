@@ -127,7 +127,7 @@ class Matching(AstIsolated):
         named = {"kind": "command", "has": {"field": "name", "regex": f"^{K}$"}}
         self.kinds(rule_of(ast=named), {f"{K} x": "direct", f"sudo {K} x": "wrapped"})
         by_text = {"kind": "command", "regex": f"^{K}"}
-        self.kinds(rule_of(ast=by_text), {f"{K} x": "direct", f"sudo {K} x": None})
+        self.kinds(rule_of(ast=by_text), {f"{K} x": "direct", f"sudo {K} x": "wrapped"})
 
 
 class ShellStrings(AstIsolated):

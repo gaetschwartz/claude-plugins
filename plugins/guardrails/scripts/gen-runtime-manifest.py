@@ -7,6 +7,7 @@ import hashlib
 import json
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 BOOTSTRAP_VERSION = 1
 PYTHON = "3.13"
@@ -23,21 +24,21 @@ AST_GREP_WHEELS = ("macosx_10_12_x86_64", "macosx_11_0_arm64", "manylinux_2_28_a
 LIB = Path(__file__).resolve().parent.parent / "lib"
 
 
-def release(package: str, version: str) -> dict[str, dict[str, str]]:
+def release(package: str, version: str) -> dict[str, dict[str, Any]]:
     url = f"https://pypi.org/pypi/{package}/{version}/json"
     with urllib.request.urlopen(url, timeout=30) as response:
         files = json.load(response)["urls"]
     return {item["filename"]: item for item in files if item["packagetype"] == "bdist_wheel"}
 
 
-def requirements(wheels: dict[str, dict[str, str]]) -> str:
+def requirements(wheels: dict[str, dict[str, Any]]) -> str:
     cp = PYTHON.replace(".", "")
     names = [f"ast_grep_py-{AST_GREP_PY}-cp{cp}-cp{cp}-{tag}.whl" for tag in AST_GREP_WHEELS]
     hashes = [f"    --hash=sha256:{wheels[name]['digests']['sha256']}" for name in names]
     return f"ast-grep-py=={AST_GREP_PY} \\\n" + " \\\n".join(hashes) + "\n"
 
 
-def manifest(wheels: dict[str, dict[str, str]]) -> dict[str, object]:
+def manifest(wheels: dict[str, dict[str, Any]]) -> dict[str, object]:
     platforms = {}
     for key, tag in UV_WHEELS.items():
         name = f"uv-{UV}-py3-none-{tag}.whl"

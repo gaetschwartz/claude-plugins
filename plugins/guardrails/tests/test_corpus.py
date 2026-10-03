@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 
-from helpers import AstIsolated
+from helpers import RealRuntime
 
 DENY = [
     "find . -name '*.py'",
@@ -104,7 +104,7 @@ OVERBROAD = ["command -v find", "command -V find", "sudo grep find file"]
 UNSEEN = ["watch -n 5 'find .'", "su -c 'find .'", "echo 'find . -name x", "$'fi\\x6ed' . -name x"]
 
 
-class Corpus(AstIsolated):
+class Corpus(RealRuntime):
     def setUp(self) -> None:
         super().setUp()
         bin_dir = self.tmp / "bin"

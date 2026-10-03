@@ -1,28 +1,26 @@
-# Install the pinned ast-grep binary (the wheel path) into the dev cache the tests use; skipped quietly when offline
-engine:
-    -CLAUDE_PLUGIN_DATA="$HOME/.cache/guardrails-engine-dev" python3 lib/guard.py engine install
+pin := `python3 -c "import json; print(json.load(open('lib/runtime-manifest.json'))['astGrepPy'])"`
+run := "uv run --no-project --python 3.13 --with ast-grep-py==" + pin
 
-# Run the test suite (the tests that need ast-grep skip with a message when it cannot be installed)
-test: engine
-    python3 -m unittest discover -s tests -v
+# Run the suite on the pinned library; tests that run the real hook install the runtime into a cache once and skip when offline
+test:
+    {{run}} python -m unittest discover -s tests
 
-# Run the suite under macOS's /usr/bin/python3 (3.9), the oldest supported interpreter
-test-39: engine
-    /usr/bin/python3 -m unittest discover -s tests
+# The bootstrap is the one module that must run on the host's own Python: run its tests on macOS's 3.9
+test-39:
+    /usr/bin/python3 -m unittest discover -s tests -p test_bootstrap.py
 
-# CI: install the engine (a failure fails the job) and make a missing engine a test failure instead of skips
+# CI: a runtime that cannot be installed fails the tests instead of skipping them
 ci:
-    CLAUDE_PLUGIN_DATA="$HOME/.cache/guardrails-engine-dev" python3 lib/guard.py engine install
-    GUARDRAILS_REQUIRE_AST=1 python3 -m unittest discover -s tests
+    GUARDRAILS_REQUIRE_AST=1 {{run}} python -m unittest discover -s tests
 
-# Rewrite lib/engine-manifest.json after bumping the pin in package.json and regenerating package-lock.json
+# Rewrite lib/runtime-manifest.json, runtime-requirements.txt and runtime-id after bumping the pins in the script
 manifest:
-    python3 scripts/gen-engine-manifest.py
+    python3 scripts/gen-runtime-manifest.py
 
-# Lint + type-check (ty needs the lib dir on its search path)
+# Lint + type-check
 check:
     uvx ruff check .
-    uvx ty check --extra-search-path lib .
+    uv run --no-project --python 3.13 --with ast-grep-py=={{pin}} --with ty sh -c 'ty check --extra-search-path lib --extra-search-path "$(python -c "import ast_grep_py, pathlib; print(pathlib.Path(ast_grep_py.__file__).parent.parent)")" .'
 
 # Validate the plugin manifest and skill frontmatter with Claude Code
 validate:

@@ -18,8 +18,8 @@
         "hooks": [
           {
             "type": "command",
-            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/guardrails.sh\" warm",
-            "timeout": 5
+            "command": "sh \"${CLAUDE_PLUGIN_ROOT}/hooks/guardrails.sh\" session-start",
+            "timeout": 120
           }
         ]
       }
