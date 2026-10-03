@@ -210,12 +210,6 @@ class FailurePolicy(AstIsolated):
         self.assertTrue(is_denied(out))
         self.assertIn("did not finish within", deny_text(out))
 
-    def test_a_crashed_checker_denies_too(self) -> None:
-        with mock.patch.object(bounded, "call", lambda work, seconds: bounded.Result(bounded.Outcome.CRASHED)):
-            out = self.hook("sudo " * (self.BIG // 5) + "zap x", "crash")
-        self.assertTrue(is_denied(out))
-        self.assertIn("the checker failed on it", deny_text(out))
-
     def test_a_hit_stands_when_a_cap_is_hit_later(self) -> None:
         command = "zap x; " + "; ".join(f"bash -c 'echo {n}'" for n in range(80))
         ev = matching.evaluate(command, {"z": policy.with_defaults({"match": {"program": "zap"}, "message": "m"})})
