@@ -10,6 +10,8 @@ target-version = "py313"
 
 [tool.ruff.per-file-target-version]
 "lib/bootstrap.py" = "py39"
+"lib/installer.py" = "py39"
+"lib/hostcli.py" = "py39"
 "tests/test_bootstrap.py" = "py39"
 
 [tool.ty.environment]

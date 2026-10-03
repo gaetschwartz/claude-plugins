@@ -10,6 +10,7 @@ import unittest
 from pathlib import Path
 from typing import TYPE_CHECKING, ClassVar
 
+import installer
 from helpers import DEV_DATA, HOOKS, LIB, ROOT, Isolated, RealRuntime
 
 SCRIPT = (HOOKS / "guardrails.sh").read_text()
@@ -208,7 +209,7 @@ class RealWrapperNotReady(Isolated):
     def setUp(self) -> None:
         super().setUp()
         (self.data / "runtime").mkdir(parents=True)
-        (self.data / "runtime" / "install.log").write_text("1 connect uv download\nraw detail\n")
+        (self.data / "runtime" / "install.log").write_text("1 " + installer.CONNECT + "\nraw detail\n")
 
     def run_script(self, *args: str, session: str = "s1") -> subprocess.CompletedProcess[str]:
         payload = json.dumps({"session_id": session, "tool_name": "Bash", "tool_input": {"command": "ls"}})

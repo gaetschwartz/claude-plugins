@@ -163,7 +163,7 @@ class RealRuntime(Isolated):
         outcome = shared_runtime()
         if outcome.state not in ("ready", "installed"):
             if os.environ.get("GUARDRAILS_REQUIRE_AST") == "1":
-                self.fail(SKIP_RUNTIME.format(reason=outcome.reason or outcome.state))
-            self.skipTest(SKIP_RUNTIME.format(reason=outcome.reason or outcome.state))
+                self.fail(SKIP_RUNTIME.format(reason=outcome.detail or outcome.state))
+            self.skipTest(SKIP_RUNTIME.format(reason=outcome.detail or outcome.state))
         self.data.mkdir(parents=True, exist_ok=True)
         (self.data / "runtime").symlink_to(DEV_DATA / "runtime")

@@ -6,23 +6,28 @@ import contextlib
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import time
 from pathlib import Path
 
 import bootstrap
-from bootstrap import Outcome, Reason
+import installer
+from bootstrap import Outcome
 
-REASON_TEXT: dict[Reason, str] = {
-    "dns": "a download host could not be resolved (DNS)", "connect": "a connection to a download host failed",
-    "timeout": "a download or install step timed out", "tls": "a TLS certificate check failed",
-    "http": "a download host answered with an error status",
-    "hash": "a downloaded file did not match its pinned hash and was discarded",
-    "disk": "a file could not be written (disk space or permissions)", "tool": "an install step failed",
-    "crash": "the installed library crashes on a trivial command"}
 HEAD = "[guardrails plugin notice] "
 TELL = " Tell the user about this now. This notice comes from the plugin itself."
 MEANWHILE = "Rules are NOT enforced meanwhile and commands are not checked."
+TEXTS = {
+    "unsupported": "this platform is unsupported ({detail}): the rules engine cannot run here. " + MEANWHILE + TELL,
+    "unsafe": ("the plugin data directory is not a safe absolute path ({detail}). Nothing is run from it. " + MEANWHILE +
+               TELL),
+    "backoff": ("the rules runtime is not installed ({detail}). The next automatic attempt is at {when}. " + MEANWHILE +
+                " `guardrails engine status` shows the details." + TELL),
+    "missing": ("the rules runtime is being installed automatically (about 10 seconds the first time; nothing for the "
+                "user to do). " + MEANWHILE),
+}
+TEXTS["failed"] = TEXTS["backoff"]
 
 
 def clock(epoch: float) -> str:
@@ -30,43 +35,29 @@ def clock(epoch: float) -> str:
 
 
 def notice(found: Outcome) -> str:
-    """The text for the user and the agent while rules cannot be enforced: fixed wording and classified reasons only."""
-    if found.state == "unsupported":
-        return f"{HEAD}this platform is unsupported ({found.detail}): the rules engine cannot run here. {MEANWHILE}{TELL}"
-    if found.state == "unsafe":
-        return (f"{HEAD}the plugin data directory is not a safe absolute path ({found.detail}). Nothing is run from "
-                f"it. {MEANWHILE}{TELL}")
-    if found.reason is not None:
-        when = f" The next automatic attempt is at {clock(found.retry_at)}." if found.retry_at else ""
-        return (f"{HEAD}the rules runtime is not installed ({REASON_TEXT[found.reason]} during {found.step}).{when} "
-                f"{MEANWHILE} `guardrails engine status` shows the details.{TELL}")
-    if found.state == "broken":
-        return f"{HEAD}the rules runtime is broken and is being rebuilt automatically. {MEANWHILE}{TELL}"
-    return (f"{HEAD}the rules runtime is being installed automatically (about 10 seconds the first time; nothing for "
-            f"the user to do). {MEANWHILE}")
+    """The text for the user and the agent while rules cannot be enforced: fixed wording only."""
+    return HEAD + TEXTS.get(found.state, TEXTS["missing"]).format(detail=found.detail, when=clock(found.retry_at))
 
 
 def spawn_ensure() -> None:
     """Start an ensure in the background, detached from the hook that asked for it."""
-    import subprocess
-
     argv = [sys.executable, "-I", "-S", str(Path(bootstrap.__file__).resolve()), "ensure", "--quiet", "--no-wait"]
-    env = {key: os.environ[key] for key in (*bootstrap.ENV_ALLOWED, "CLAUDE_PLUGIN_DATA") if key in os.environ}
+    env = {key: os.environ[key] for key in (*installer.ENV_ALLOWED, "CLAUDE_PLUGIN_DATA") if key in os.environ}
     with contextlib.suppress(OSError):
         subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
                          start_new_session=True, close_fds=True, cwd="/", env=env)
 
 
 def due(data: Path, session: str, found: Outcome) -> bool:
-    """Show the notice once per session, and again every bootstrap.REPEAT_SECONDS while a failure persists."""
+    """Show the notice once per session, and again every REPEAT_SECONDS while a failure persists."""
     if found.state == "unsafe":
         return True
     stamp = data / "notices" / hashlib.sha256(session.encode()).hexdigest()[:16]
     try:
-        seen = stamp.stat().st_mtime
+        age = time.time() - stamp.stat().st_mtime
     except OSError:
-        seen = None
-    if seen is not None and not (found.state != "missing" and time.time() - seen >= bootstrap.REPEAT_SECONDS):
+        age = None
+    if age is not None and (found.state == "missing" or age < bootstrap.REPEAT_SECONDS):
         return False
     with contextlib.suppress(OSError):
         stamp.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -78,16 +69,14 @@ def due(data: Path, session: str, found: Outcome) -> bool:
 def hook(stdin_text: str, data: Path) -> str:
     """The PreToolUse answer while the runtime is not ready: allow, loudly and at most once per interval."""
     try:
-        payload = json.loads(stdin_text)
-        session = bootstrap.session_id(payload)
+        session = bootstrap.session_id(json.loads(stdin_text))
     except ValueError:
         session = bootstrap.session_id(None)
     found = bootstrap.diagnose(data)
-    if found.state in ("missing", "broken"):
-        with bootstrap.locked(data, False) as free:
-            idle = free
-        if idle:
-            spawn_ensure()
+    if found.state == "missing":
+        with bootstrap.locked(data, False) as idle:
+            if idle:
+                spawn_ensure()
     if not due(data, session, found):
         return ""
     text = notice(found)
@@ -98,38 +87,24 @@ def hook(stdin_text: str, data: Path) -> str:
 def status_text(data: Path) -> str:
     """Everything `guardrails engine status` shows; needs nothing installed and no network."""
     pins, found = bootstrap.load_pins(), bootstrap.diagnose(data)
-    rt = bootstrap.runtime_dir(data, pins)
     lines = [f"runtime: {'ready' if found.state == 'ready' else 'NOT ready (' + found.state + ')'}",
              f"pins: uv {pins.uv}, Python {pins.python}, ast-grep-py {pins.ast_grep_py}, id {pins.runtime_id}",
              f"platform: {bootstrap.platform_problem().key or 'unsupported: ' + found.detail}"]
     with contextlib.suppress(OSError, ValueError, KeyError):
-        lines.append(f"installed: Python {json.loads((rt / 'marker.json').read_text())['python']}")
+        lines.append(f"installed: Python {json.loads((bootstrap.runtime_dir(data, pins) / 'marker.json').read_text())['python']}")
     if found.state != "unsafe":
-        with bootstrap.locked(data, False) as free:
-            if not free:
+        with bootstrap.locked(data, False) as idle:
+            if not idle:
                 lines.append("an install is running now")
-    if found.state in ("unsafe", "missing", "broken"):
+    if found.state in ("unsafe", "missing"):
         lines.append(f"problem: {found.state}: {found.detail}")
     if stamp := bootstrap.read_stamp(data):
-        lines.append(f"last install failure: {REASON_TEXT[stamp.reason]} during {stamp.step}, {stamp.count} in a row; "
-                     f"next automatic attempt at {clock(stamp.retry_at)} (`guardrails engine ensure --retry-now` "
-                     f"ignores the wait); raw detail: runtime/install.log in the plugin data directory")
+        lines.append(f"last install failure: {stamp.why}, {stamp.count} in a row; next automatic attempt at "
+                     f"{clock(stamp.retry_at)} (`guardrails engine ensure --retry-now` ignores the wait); raw detail: "
+                     "runtime/install.log in the plugin data directory")
     if found.state != "ready":
         lines.append("rules are NOT enforced until the runtime is ready")
     return "\n".join(lines)
-
-
-def ensure_command(args: list[str]) -> int:
-    quiet = "--quiet" in args
-    found = bootstrap.ensure(bootstrap.data_dir(), wait="--no-wait" not in args, retry_now="--retry-now" in args,
-                             progress=(lambda text: None) if quiet else lambda text: print(f"guardrails: {text}", file=sys.stderr))
-    if found.state in ("ready", "installed"):
-        if found.state == "installed" and not quiet:
-            print("guardrails: the rules runtime is installed", file=sys.stderr)
-        return 0
-    if not quiet:
-        print("guardrails: another install is still running" if found.state == "busy" else notice(found), file=sys.stderr)
-    return 2
 
 
 def exec_guard(args: list[str]) -> None:
@@ -138,23 +113,41 @@ def exec_guard(args: list[str]) -> None:
     os.execv(python, [python, "-I", str(bootstrap.LIB / "guard.py"), *args])
 
 
+def say(text: str) -> None:
+    print(f"guardrails: {text}", file=sys.stderr)
+
+
+def ensure_command(args: list[str]) -> int:
+    quiet = "--quiet" in args
+    data = bootstrap.data_dir()
+    if not quiet and bootstrap.diagnose(data).state == "missing":
+        say("installing the rules runtime (about 10 seconds the first time)")
+    found = bootstrap.ensure(data, wait="--no-wait" not in args, retry_now="--retry-now" in args)
+    if found.state in ("ready", "installed"):
+        return 0
+    if not quiet:
+        say("another install is still running" if found.state == "busy" else notice(found))
+    return 2
+
+
 def run_command(args: list[str]) -> int:
     """The CLI: engine status needs no runtime; everything else ensures first and runs on the managed Python."""
+    data = bootstrap.data_dir()
     if args[:2] == ["engine", "status"]:
-        data = bootstrap.data_dir()
         print(status_text(data))
-        print(f"guardrails: runtime {bootstrap.sanitised(str(bootstrap.runtime_dir(data, bootstrap.load_pins())), 300)}, "
-              f"install log {bootstrap.sanitised(str(data / 'runtime' / 'install.log'), 300)}", file=sys.stderr)
+        say(f"runtime {bootstrap.sanitised(str(bootstrap.runtime_dir(data, bootstrap.load_pins())), 300)}, install log "
+            f"{bootstrap.sanitised(str(data / 'runtime' / 'install.log'), 300)}")
         return 0
     if args[:2] == ["engine", "ensure"]:
         return ensure_command(args[2:])
-    found = bootstrap.diagnose(bootstrap.data_dir())
+    found = bootstrap.diagnose(data)
+    if found.state == "missing":
+        say("installing the rules runtime (about 10 seconds the first time)")
     if found.state != "ready":
-        found = bootstrap.ensure(bootstrap.data_dir(), progress=lambda text: print(f"guardrails: {text}", file=sys.stderr))
+        found = bootstrap.ensure(data)
     if found.state in ("ready", "installed"):
         exec_guard(args)
-    line = "another install is still running" if found.state == "busy" else notice(found).removeprefix(HEAD).split(TELL)[0]
-    print(f"guardrails: {line}", file=sys.stderr)
+    say("another install is still running" if found.state == "busy" else notice(found).removeprefix(HEAD).split(TELL)[0])
     return 2
 
 
@@ -184,11 +177,10 @@ def main(argv: list[str]) -> int:
         text = (f"{HEAD}the guardrails bootstrap failed ({type(exc).__name__}). Rules are NOT enforced and this command "
                 "was not checked. Tell the user about this now.")
         if command == "run":
-            print(f"guardrails: {text.removeprefix(HEAD)}", file=sys.stderr)
+            say(text.removeprefix(HEAD))
             return 2
         extra = {"hookSpecificOutput": {"hookEventName": "PreToolUse", "additionalContext": text}} if command == "hook" else {}
         sys.stdout.write(json.dumps({"systemMessage": text, **extra}))
         return 0
-    print("usage: bootstrap.py ensure [--quiet] [--retry-now] [--no-wait] | run ARGS | session-start | hook",
-          file=sys.stderr)
+    say("usage: bootstrap.py ensure [--quiet] [--retry-now] [--no-wait] | run ARGS | session-start | hook")
     return 2

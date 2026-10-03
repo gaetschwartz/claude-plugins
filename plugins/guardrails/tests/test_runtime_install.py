@@ -21,8 +21,8 @@ class RealInstall(Isolated):
             outcome = bootstrap.ensure(self.data)
         if outcome.state != "installed":
             if os.environ.get("GUARDRAILS_REQUIRE_AST") == "1":
-                self.fail(OFFLINE.format(reason=outcome.reason or outcome.state))
-            self.skipTest(OFFLINE.format(reason=outcome.reason or outcome.state))
+                self.fail(OFFLINE.format(reason=outcome.detail or outcome.state))
+            self.skipTest(OFFLINE.format(reason=outcome.detail or outcome.state))
         pins = bootstrap.load_pins()
         rt = bootstrap.runtime_dir(self.data, pins)
         self.assertIsNone(bootstrap.marker_problem(rt, pins))
