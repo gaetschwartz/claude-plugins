@@ -7,9 +7,7 @@ import datetime
 import fcntl
 import json
 import os
-import subprocess
 import sys
-import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
 from typing import Any, NamedTuple
@@ -98,6 +96,8 @@ def project_root(cwd: Path | None = None) -> Path | None:
     env = os.environ.get("CLAUDE_PROJECT_DIR")
     if env:
         return Path(env).resolve()
+    import subprocess
+
     try:
         proc = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd or Path.cwd(), capture_output=True,
                               text=True, timeout=3, stdin=subprocess.DEVNULL, check=False)
@@ -147,6 +147,8 @@ def write(path: Path, state: State, public: bool = False) -> None:
     state["updatedAt"] = now()
     if "sessions" in state:
         state["sessions"] = prune(state["sessions"])
+    import tempfile
+
     path.parent.mkdir(parents=True, exist_ok=True)
     with tempfile.NamedTemporaryFile("w", dir=path.parent, suffix=".tmp", delete=False) as tmp:
         try:
