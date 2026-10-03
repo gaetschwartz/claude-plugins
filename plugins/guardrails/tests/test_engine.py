@@ -57,7 +57,7 @@ class Hook(AstIsolated):
                 self.assertIn("reinstall the preset", warning)
                 again = self.hook("strings y", session=f"u-{rid}")
                 self.assertNotIn("is invalid", (again or {}).get("systemMessage", ""))
-                code, status, _ = self.cli("status", "--problems")
+                status = self.cli("status", "--problems")[1]
                 self.assertIn(f"rule {rid}", status)
                 self.assertIn("unknown field", status)
 
