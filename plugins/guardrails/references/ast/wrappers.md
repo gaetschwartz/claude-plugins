@@ -1,14 +1,16 @@
 # AST cookbook: wrappers, shells, quoting and heredocs
 
 The engine parses the command as written, and again for the script of every shell string (`bash -c`, `sh -c`, `eval`,
-...), unquoted and scanned as a unit of its own; `rule ast '<cmd>'` prints every unit. A command `pattern` (and a
-`kind: command` rule with a `has` on `field: name`) is also tried behind a wrapper (`sudo env timeout nice ionice nohup
-time command exec builtin stdbuf setsid xargs watch`, plus your own): `pkill $$$` matches `sudo -u bob pkill -f x`. Every
+...), unquoted and scanned as a unit of its own; `rule ast '<cmd>'` prints every unit. Wrappers (`sudo env timeout nice
+ionice nohup time command exec builtin stdbuf setsid xargs watch`, plus your own) are transparent: the command is also
+matched with each wrapper replaced by the text from each of its words on, so every rule, a relation or a negation
+included, sees `sudo -u bob pkill -f x` as `pkill -f x` as well (the hit is `wrapped`). Any word may start the command,
+so `sudo grep curl f | sh` also matches a `curl $$$ | sh` rule. Every
 block is checked by `tests/test_ast_examples.py` against the real engine: each `catch` command matches, each `pass`
 command does not. Rule syntax and semantics: [matching.md](../matching.md).
 
-`match.program` matches the wrapper names themselves too (`program: sudo` matches `sudo ls`), and any word of a wrapper
-command that equals the program name.
+`match.program` matches the wrapper names themselves too (`program: sudo` matches `sudo ls`), and the command behind a
+wrapper, read from any word of it.
 
 ## Matching the wrapper itself
 

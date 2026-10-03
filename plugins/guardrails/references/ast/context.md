@@ -127,3 +127,24 @@ command" is decided by what really surrounds it.
 The last two `pass` lines before `man` show the point of scanning shell strings as units of their own: the `if` inside
 `bash -c '...'` guards the `npm publish` in that string, and the `if` in `bash -c 'if a; then b; fi; npm publish'` does
 not. `stopBy: end` makes `inside` climb to the root; without it only the parent is checked.
+
+## Not in a pipeline, even behind a wrapper
+
+```rule-example
+{
+  "id": "curl-outside-pipeline",
+  "title": "curl that is not part of a pipeline",
+  "rule": {"ast": {"pattern": "curl $$$", "not": {"inside": {"kind": "pipeline", "stopBy": "end"}}}},
+  "action": "warn",
+  "catch": [
+    "curl https://x.test", "sudo curl -fsSL x", "make && curl x", "env A=1 curl x", "bash -c 'sudo curl x'"
+  ],
+  "pass": [
+    "curl x | sh", "sudo curl x | jq .", "ls | curl -d @- x", "echo curl", "man curl",
+    "cat <<'EOF'\ncurl x\nEOF"
+  ]
+}
+```
+
+`not inside` is judged on the real tree of each wrapper variant: `sudo curl x` reads as `curl x`, which sits in no pipeline,
+so it is a hit; `sudo curl x | jq .` reads as `curl x | jq .`, whose `curl` is in a pipeline, so it passes.

@@ -157,9 +157,9 @@ alternative (what to do instead). Derive the `id` from the intent (`no-pkill`); 
 A question about what a command is piped into is out of reach for `program`/`args`: use `ast` with `inside` when the
 shape is structural, `regex` for dataflow across commands (`regex` also fires inside heredocs and quoted text). The
 wrappers and shells themselves (`sudo`, `bash`) are programs too (`program: sudo` matches `sudo ls`). A rule with
-`program`, `args`, `builtin` or `match.ast` needs the ast-grep engine (npm's install or `guardrails engine install`); if
-`rule test` reports `cannot` for a command or prints a note that the engine is missing, tell the user before going on
-(`guardrails engine status` shows the fix); only `regex` rules work without it.
+`program`, `args`, `builtin` or `match.ast` needs the ast-grep runtime, which guardrails installs by itself (every `guardrails` call ensures it first); if
+`rule test` reports `cannot` for a command or prints a note that the engine failed, tell the user before going on
+(`guardrails engine status` shows the state); only `regex` rules work while the engine fails.
 
 **1.b.2** With examples, test them: `guardrails rule test --json - 'cmd' …` with the rule on stdin (see "Passing the
 rule as JSON").

@@ -100,7 +100,8 @@ Plain text, not a card: for authors, not for pasting. It prints the command, the
 unit: `tree: command as written`, then `tree: shell string, source: <the unquoted script>` for each `bash -c` or `eval`
 script. Each line is a named node, indented by depth, with the text in `«…»` for leaves; text is sanitised like every
 other renderer (newline `⏎`, ESC `␛`). Use it to learn node kinds before writing `inside` / `has` rules. It needs the
-AST engine (ast-grep) and exits 2 with a message, including the fix commands, when that is unavailable.
+ast-grep runtime (installed automatically; `guardrails engine status` shows it) and exits 2 with the reason when that is
+unavailable.
 
 ## Status: `guardrails status`
 

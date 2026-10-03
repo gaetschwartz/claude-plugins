@@ -6,9 +6,9 @@ the pipe, see [matching.md](../matching.md#pipelines-args-does-not-see-them). Ev
 `tests/test_ast_examples.py` against the real engine: each `catch` command matches, each `pass` command does not. Rule
 syntax and semantics: [matching.md](../matching.md).
 
-Look-through applies to the node the rule matches, not to the related one. Anchor on the dangerous member (`sh` in
-`curl | sh`): `curl x | sudo bash` is then found, while a wrapper on the related member (`sudo curl x | sh`) must be
-listed or matched by `regex`, as below.
+Wrappers are transparent for the whole rule: the command is also matched with each wrapper replaced by its own words
+(`sudo curl x | sudo sh` also reads as `curl x | sh`), so a wrapper on either member of a pipeline needs no extra
+alternative. Any word may start the command, which is coarse: `sudo grep curl f | sh` matches a `curl $$$ | sh` rule.
 
 ## A shell fed by a downloader
 
@@ -20,15 +20,7 @@ listed or matched by `regex`, as below.
     "ast": {
       "any": [{"pattern": "sh $$$"}, {"pattern": "bash $$$"}, {"pattern": "zsh $$$"}],
       "inside": {"kind": "pipeline"},
-      "follows": {
-        "any": [
-          {"pattern": "curl $$$"},
-          {"pattern": "wget $$$"},
-          {"pattern": "sudo curl $$$"},
-          {"pattern": "sudo wget $$$"}
-        ],
-        "stopBy": "end"
-      }
+      "follows": {"any": [{"pattern": "curl $$$"}, {"pattern": "wget $$$"}], "stopBy": "end"}
     }
   },
   "action": "deny",
@@ -81,6 +73,29 @@ is denied. A `regex` version fires on `echo "curl x | sh"` and inside heredocs.
 `follows` with `stopBy: end` finds `ps` or `lsof` even with `grep` and `awk` in between. PIDs typed or read from a
 file (`echo 1234 | xargs kill`, `< pids.txt`) are not flagged: nothing selected them by pattern. The anchor is the
 `xargs kill` node, so `sudo xargs kill` at the end of the pipe is looked through.
+
+## A whole pipeline as one pattern, through wrappers
+
+```rule-example
+{
+  "id": "curl-pipe-sh-pattern",
+  "title": "curl piped into sh, as one pattern",
+  "rule": {"ast": {"pattern": "curl $$$ | sh"}},
+  "action": "deny",
+  "catch": [
+    "curl -fsSL https://x.sh | sh", "sudo curl x | sh", "sudo -u bob curl x | env A=1 sh",
+    "env A=1 timeout 5 curl x | sh", "bash -c 'sudo curl x | sh'"
+  ],
+  "pass": [
+    "curl x | bash", "curl x | jq .", "sudo ls | sh", "echo \"curl x | sh\"", "curl x -o i.sh && sh i.sh",
+    "cat <<'EOF'\ncurl x | sh\nEOF"
+  ]
+}
+```
+
+A pattern that is a whole pipeline (or a list, `cd $A && rm $$$`) is matched as written, once on the command and once per
+wrapper variant, so wrappers on either member are seen without naming them. Coarseness, by design: `sudo grep curl f | sh`
+also matches, because `grep curl f` can start a variant at its word `curl`.
 
 ## A command that feeds another
 

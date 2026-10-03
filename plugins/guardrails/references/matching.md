@@ -1,12 +1,13 @@
 # How guardrails matches a command
 
 Everything here is what `lib/matching.py` (the one evaluation path the hook and every CLI command share),
-`lib/astrules.py` (the rules handed to ast-grep), `lib/astworker.py` (the scan loop) and `lib/policy.py` do. Check a
-claim with `guardrails rule test` before stating it, but know what it checks.
+`lib/rulebuilder.py` (the typed ast-grep rules built from a guardrails rule), `lib/scanner.py` (parse units, wrapper
+variants, shell strings), `lib/bounded.py` (the hard deadline) and `lib/policy.py` do. Check a claim with `guardrails rule
+test` before stating it, but know what it checks.
 
-The ast-grep binary does all the lexing and parsing: guardrails writes no shell parser. `program`, `args`, `builtin` and
-`match.ast` are all compiled to ast-grep rules and run in one scan over the tree-sitter Bash parse of the command as
-written; `regex` reads the raw text in Python and needs no engine.
+ast-grep does all the lexing and parsing, in process through the `ast-grep-py` library: guardrails writes no shell parser.
+`program`, `args`, `builtin` and `match.ast` become typed ast-grep rules and are matched on the tree-sitter Bash parse of the
+command as written, of its wrapper variants and of each shell string; `regex` reads the raw text in Python.
 
 Matcher ladder, narrowest first: `program`, then `program` + `args`, then `builtin`, then an `ast` rule (a `pattern`,
 plus `inside` / `has` when context matters), then `regex`. Before writing an `ast` rule with relations, run
@@ -34,18 +35,29 @@ program names, written however the shell allows a plain name: `pkill`, `/usr/bin
 `FOO=1` assignments, in a list, loop, `if`, subshell or group, in a pipeline, in `$(...)` or backticks (also inside
 double quotes), in `<(...)`.
 
-Looked through, the wrapper branch: the command's name is a wrapper (`sudo doas env timeout nice nohup time command exec
-builtin stdbuf setsid ionice xargs watch`, plus your own) and one of the wrapper command's own words equals the program.
-`sudo -u bob pkill x`, `env A=1 pkill x`, `timeout 5 pkill x`, `xargs -I{} pkill {}`, `nice -n 5 pkill`. There is no table
-of which flags take a value: any word of the wrapper command that is the program name counts, so `sudo grep pkill file`
-and `command -v pkill` also match `pkill` (known false positives, see below).
+Looked through, the wrapper variants: a command that contains a wrapper command (`sudo doas env timeout nice nohup time
+command exec builtin stdbuf setsid ionice xargs watch`, plus your own) is also matched as text variants of the whole
+command in which that wrapper command is replaced by the text from each of its own words onward: `sudo -u bob pkill x`
+also reads as `-u bob pkill x`, `bob pkill x`, `pkill x` and `x` (a wrapper's words are read from the parse, never split
+by guardrails; leading assignments such as `A=1 sudo x` are dropped with it). Nested wrappers need no recursion, because a
+later word starts the inner command directly. A command with several wrappers also gets every combination of them replaced
+together while there are at most 64 (else each k-th word of all of them), so `sudo curl x | sudo sh` reads as `curl x | sh`.
+Every rule is matched on each variant, and a hit found in one is wrapped. Variants are not unwrapped again, are
+de-duplicated and are bounded: 256 variants and 256 KiB of variant text per command, past which the command is denied
+unparsed ("command too complex to check") at any size. There is no table of which flags take a value: any word counts as a
+start, so `sudo grep pkill file` and `command -v pkill` also match `pkill` (known false positives, see below). The same
+coarseness applies to relation rules, which judge the real tree of each variant: `sudo grep curl f | sh` matches a
+`curl $$$ | sh` rule, and `sudo curl x | sh` makes a `curl $$$` rule with `not inside pipeline` not match (the curl is
+still in a pipeline).
 
-Shell strings, the script branch: the script of `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'` (also behind a
-wrapper, and in a cluster such as `-lc`), the arguments of `eval`, and a heredoc or here-string fed to a shell
-(`bash <<EOF`, `sh -s <<< 'cmd'`) are unquoted (one shell word) and scanned as a unit of
-their own, recursively; every hit in a unit counts as wrapped. The body of an unquoted heredoc that contains `$(` or a
-backtick is scanned too, but only what lies inside those substitutions counts (the rest is data). Units are de-duplicated and bounded: depth 8, 64 distinct units, 256 KiB of
-script text. A command that goes past a bound is denied unparsed with "command too complex to check".
+Shell strings, the script units: the script of `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'` (also behind a
+wrapper, through its variant, and in a cluster such as `-lc`), the arguments of `eval`, and a heredoc or here-string fed to
+a shell (`bash <<EOF`, `sh -s <<< 'cmd'`) are unquoted (one shell word: single quotes as is, double quotes with the
+`\"` `\\` `\$` and backtick escapes, no ANSI-C decoding) and scanned as a unit of their own, recursively; every hit in a
+unit counts as wrapped. The body of an unquoted heredoc that contains `$(` or a backtick is scanned too, but only what
+lies inside those substitutions counts (the rest is data). Units are de-duplicated and bounded: depth 8, 64 distinct units,
+256 KiB of script text, with a budget of their own apart from the variants. A command that goes past a bound is denied
+unparsed with "command too complex to check".
 
 Not commands, so never matched by `program`: heredoc bodies, redirect targets (`> pkill`), the arguments of other
 commands (`echo pkill`, `man pkill`), quoted data.
@@ -65,7 +77,8 @@ positives.
 - `match.program`: one name or a list (no spaces or `/`); case-sensitive, `egrep` is not `grep`. Wrapper names are
   programs too: `program: sudo` matches `sudo ls`.
 - `match.args`: a Rust regex (ast-grep's `regex`, so no look-around or back-references) over the matched command's whole
-  text, name and wrapper words included, so anchor with `(^|\s)`. It narrows `program` or `builtin` (AND); on its own,
+  text, name included (for a hit behind a wrapper: the command as the variant reads it, without the wrapper's words), so
+  anchor with `(^|\s)`. It narrows `program` or `builtin` (AND); on its own,
   or next to `regex` only, it has no effect and a rule whose `match` has none of `program`, `builtin`, `regex`, `ast`
   is rejected.
 - `match.builtin`: `grep-recursive`: a command named grep, egrep or fgrep (behind a wrapper too) with a recursive flag
@@ -103,22 +116,20 @@ compile (exit 2); the hook skips it and warns once per session.
 
 **Single-command patterns are spelling-tolerant.** A `pattern` that is exactly one simple command with arguments
 (`pkill -9 $$$`, `git push -f $$$`; no pipe, list, redirect, loop or substitution in it) also matches the command when its
-name is quoted or has a directory (`/usr/bin/pkill`, `'pkill'`), after up to three `VAR=x` assignments, and behind a
-wrapper: `sudo -u bob /usr/bin/pkill -9 x`, `FOO=1 sudo pkill -9 x`. Behind a wrapper the match is by the name and the
-literal words (in any order, as `program` + `args` would), not by position. Every other pattern (`curl $$$ | sh`,
-`zap x > f`, `for ...; done`, `echo $(x)`) goes to ast-grep exactly as written. A `kind: command` rule whose `has` names
-the command with `field: name` also gets the wrapper form; its name regex is otherwise taken as written. A pattern
-that ends in ` $$$` also selects the command with no arguments (in tree-sitter-bash a trailing `$$$` hole alone never
-matches zero arguments, so the engine widens it). A hole INSIDE a substitution, such as `kill $($$$)`, never matches
-anything: express that with `inside` / `has`.
+name is quoted or has a directory (`/usr/bin/pkill`, `'pkill'`) and after up to three `VAR=x` assignments. Every other
+pattern (`curl $$$ | sh`, `zap x > f`, `for ...; done`, `echo $(x)`) goes to ast-grep exactly as written. A pattern that ends
+in ` $$$` also selects the command with no arguments (in tree-sitter-bash a trailing `$$$` hole alone never matches zero
+arguments, so guardrails widens it). A hole INSIDE a substitution, such as `kill $($$$)`, never matches anything: express
+that with `inside` / `has`.
 
-**Behind a wrapper.** Relations, `not`, `regex` and other `kind` members are never shifted; they keep judging the real
-tree.
+**Behind a wrapper.** Every pattern, relation, `not`, `regex` and `kind` is matched on the whole command with the wrapper
+replaced, so pipeline and list patterns (`curl $$$ | sh`, `cd $A && rm $$$`) and negations (`not inside`, `not follows`)
+work through `sudo`, `env`, `xargs` and the rest; see the variants above.
 
-**Units and `wrapped`.** A hit counts as wrapped when it was reached through the wrapper branch, inside a shell string,
+**Units and `wrapped`.** A hit counts as wrapped when it was found in a wrapper variant, inside a shell string,
 or when the matched node sits inside a pipeline or a substitution (`$(...)`, backticks, `<(...)`). A command in a list
 (`;` `&&` `||`), a loop, an `if`, a subshell or a `{ ...; }` group is not wrapped. A direct hit beats a wrapped one on the
-same rule.
+same rule (a variant hit never downgrades a direct one).
 
 ### Tree-sitter Bash node kinds that matter
 
@@ -168,8 +179,8 @@ quoted-delimiter heredoc body, single-quoted text, the arguments of other comman
 
 Dataflow across commands (`ps | xargs kill` where the PIDs come from the other command, `curl x | sh`) is text spanning
 nodes. A relation often expresses it (`xargs kill` inside a `pipeline`); a regex expresses the rest. A regex also fires
-on text that only mentions the command, including heredocs, and it is the only matcher that still runs when the engine
-is unavailable.
+on text that only mentions the command, including heredocs, and it is the only matcher that still runs when the library fails
+(not while the runtime is still installing).
 
 ### Idioms
 
@@ -179,56 +190,78 @@ is unavailable.
 - Not at top level: `inside` with `stopBy: end` and the container kinds you care about.
 - Unless guarded: `{"pattern": "npm publish $$$", "not": {"inside": {"kind": "if_statement", "stopBy": "end"}}}`.
 
-### Requirements
+### The runtime
 
-The matcher runs the standalone `ast-grep` binary (pinned, Bash grammar built in) as a child of the hook, which is plain
-stdlib Python 3.9 or newer; there is no venv, uv or pip. The binary comes from two places, tried in order: the npm platform
-package that Claude Code's automatic `npm ci --ignore-scripts` puts in the plugin's `node_modules`, then a hash-checked
-wheel that `guardrails engine install` (or the detached SessionStart warm-up, only when neither source works and an enabled
-rule needs the parser) unpacks into `${CLAUDE_PLUGIN_DATA}/engine/<pin>/`. The PreToolUse hook only looks; it never downloads
-or installs. A plugin loaded in place from a local-directory marketplace never gets the automatic npm install, so it uses
-the wheel fallback or a manual `cd <plugin root> && npm ci --ignore-scripts`. A call whose rules are all `regex` never
-touches the engine.
+`ast-grep-py` ships one wheel per CPython version, so guardrails brings its own Python instead of using the host's:
+`${CLAUDE_PLUGIN_DATA}/runtime/<id>/` holds a portable `uv` binary (`bin/`), a managed CPython 3.13 (`python/`), a venv with
+the hash-pinned library (`venv/`) and a `marker.json` written last (about 140 MB; about 46 MB downloaded; the uv cache is
+deleted after the install). `<id>` is `lib/runtime-id`, a digest of `lib/runtime-manifest.json` and
+`lib/runtime-requirements.txt`, so a pin change installs a new runtime and removes the old one.
 
-Platforms: macOS arm64 and x86_64, Linux glibc x86_64 and aarch64 (the wheel needs glibc 2.28). Linux musl and Windows are
-unsupported and get the notice below with the reason.
+Automatic install, no user command: (1) SessionStart runs `ensure` synchronously (timeout 120 s; first ever install about
+3 to 10 s, later sessions about 0.1 s); (2) the PreToolUse hook, when the marker is missing, allows the command with a loud
+notice (once per session, repeated every 10 minutes while a failure persists) and starts a detached `ensure`; (3) every
+`guardrails` CLI call ensures first, in the foreground, with progress on stderr; (4) the `setup` skill's first step runs
+`guardrails engine ensure`. A failed attempt (offline, timeout, bad hash) is stamped and the next one is 10 minutes later;
+`guardrails engine ensure --retry-now` ignores the wait.
 
-Trust model: the binary must be a regular file inside the plugin root (npm) or the plugin data dir (wheel), executable, owned
-by you or root, not writable by group or others, in directories not writable by others (its location comes from the plugin's
-own place and data dir, never from PATH, the project or the cwd); an npm binary's package version must equal the pin and a
-wheel binary must match its marker (pin, hashes, size, mtime, inode). It runs with `PATH=/usr/bin:/bin` as its only
-environment variable, from `/`, with an explicit empty config so a repository's `sgconfig.yml` is never read. No
-environment variable selects the binary, the URL or the root. The README has the details.
+**What is enforced while the runtime is not ready: nothing.** `regex` rules included, because every rule runs on the managed
+Python. The window is the first seconds of the first session, or until an install works after a failure. Managed rules fail
+open in it too. The notice says so.
 
-Troubleshooting: `guardrails engine status` says which source is active, why another was rejected, the last download failure
-and its retry time, and prints the fix commands (`guardrails engine install`, or `cd <plugin root> && npm ci
---ignore-scripts`); `guardrails engine verify` re-hashes the active binary against the committed manifest.
+Only `lib/bootstrap.py` runs on the host's Python (3.9 or newer, standard library only). It downloads the pinned `uv` wheel
+from the one `files.pythonhosted.org` URL in the manifest (60 s limit, sha256 checked before the file is read, exactly one
+member unpacked), then runs that uv with a scrubbed environment (HOME, LANG, TMPDIR, proxy and `SSL_CERT_*` variables;
+`PATH=/usr/bin:/bin`; `UV_*` pointing inside the runtime dir; `--no-config`; the runtime dir as cwd): `uv python install
+3.13`, `uv venv`, `uv pip install --require-hashes --only-binary :all: --no-deps`. A repository's `uv.toml`, `UV_*`, `PATH`,
+`PYTHONPATH` or `pip.conf` never influence what runs. A self-test must import the library and match a pipeline before the
+marker is written. Installs run under a `flock` (released by the OS if the installer dies); an interrupted install has no
+marker and is wiped by the next.
+
+How uv verifies the Python: `uv python install` fetches a python-build-standalone distribution (primarily from
+`releases.astral.sh`, falling back to the GitHub releases of `astral-sh/python-build-standalone`, served from
+`release-assets.githubusercontent.com`) and compares its sha256 with the one compiled into the uv binary; a mismatch aborts
+(`Hash mismatch for cpython-...`, verified with a tampered archive on a local mirror). So the manifest's sha256 pins uv, uv
+pins Python, and `--require-hashes` pins the library. Network hosts: `pypi.org`, `files.pythonhosted.org`,
+`releases.astral.sh`, and `github.com` plus `release-assets.githubusercontent.com` as the fallback (all observed through a
+logging proxy; `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and `SSL_CERT_FILE/DIR` are passed through, mirror and index variables
+are not).
+
+Platforms: macOS arm64 and x86_64, Linux glibc 2.28+ x86_64 and aarch64. Linux musl, older glibc, other architectures and
+Windows get a precise "unsupported platform" notice and no install attempt.
+
+Trust model: the wrapper runs the runtime's Python only when `marker.json` exists, the interpreter is owned by you, and the
+runtime dir is not inside the project or the cwd (a cwd of `/` or the home dir is ignored for that test). Each `ensure`
+(every session start) also checks that the interpreter and the extension module are owned by you, not writable by group
+or others, unchanged in size and mtime since the install, and inside the runtime dir; any failure reinstalls. The hook runs
+with `python -I`.
+
+Troubleshooting: `guardrails engine status` says whether the runtime is ready (or why not), the pins, the platform, the path,
+the installed Python, whether an install is running, and the last failure with the time of the next automatic attempt.
 
 ### When the engine is unavailable or fails
 
-There is no degraded parsing. Rules that need the parser (`program`, `args`, `builtin`, `match.ast`) cannot be
-evaluated, so the hook allows the command and says so loudly; `regex` rules are still enforced and keep running.
+There is no degraded parsing. If the runtime is not ready (above) or the library cannot be imported or fails its self-test,
+rules that need the parser (`program`, `args`, `builtin`, `match.ast`) cannot be evaluated, so the hook allows the command
+and says so loudly; with the runtime ready but the library failing, `regex` rules still run.
 
-- **Engine missing** (unsupported platform, not installed, or a binary that failed its checks): the first Bash or
-  Monitor call of every session carries the `GUARDRAILS ENGINE MISSING` notice in both the user-facing `systemMessage`
-  and the agent-facing `additionalContext`: which rules are not enforced, that `regex` rules still are, the reason, the
-  fixes that can work on this system, and an instruction to tell the user first.
-- **Managed rules fail open too**: a managed `program`/`args`/`builtin`/`ast` deny rule is not enforced while the engine
-  is missing or failing, only `regex` rules are. The notice and `status --problems` name the managed rules affected; after
-  the first notice the rest of the session runs with them unenforced.
-- **Engine failure during a call** (crash, unreadable or invalid output, missing canary match, timeout on a command under
-  8 KiB): that call is allowed with a warning that names the failure class, in both channels; the same class is warned
-  again at most every 10 minutes while it lasts, and `status` / `rule test` show the last failure.
-- **A timeout on a command over 8 KiB is a denial** ("command too complex to check"): dense nesting (`$(` x thousands,
-  `sudo ` chains) makes ast-grep quadratic, so the content is the cause and failing open would be a bypass. A hit found
-  at a completed level (the plain top level before a slow `bash -c` string) stands.
+- **Engine failure** (import error, failed self-test, an unexpected error in the checker): that call is allowed with a
+  warning that names the reason, in both channels; the same class is warned again at most every 10 minutes while it lasts,
+  and `status` / `rule test` show the last failure. Managed deny rules fail open too; the warning and `status --problems`
+  name them.
+- **A command the parser does not finish in 5 s, or whose checker crashed, is a denial** ("command too complex to check"):
+  anything that needs the parser runs in a forked child killed at that deadline, because a native call into ast-grep holds
+  the GIL (no signal or thread can interrupt it) and a hook that outlives its timeout lets the command through. Dense nesting
+  (`$(` x tens of thousands) is quadratic, so the content is the cause and failing open would be a bypass. A hit already
+  found stands.
 - **A rule that does not compile** is skipped and named once per session; the others run.
-- **A command over 256 KiB, or one that nests shell strings more than 8 deep, unpacks into more than 64 distinct
-  strings or more than 256 KiB of script text, is denied unparsed** ("command too large to check", "command too complex to
-  check"): padding must never be a way past a rule. Only a deny rule that could not be judged causes the denial (warn-only
-  parse rules: allowed with a warning); a rule set with only `regex` rules never starts the engine.
-- The whole hook runs under a 7 s watchdog (hook timeout 10 s); on expiry or any other exception it applies the `regex`
-  rules, allows the rest with a visible warning, and never exits silently.
+- **A command over 256 KiB, or one that nests shell strings more than 8 deep, unpacks into more than 64 distinct strings
+  or 256 KiB of script text, or unwraps into more than 256 variants or 256 KiB of variant text, is denied unparsed**
+  ("command too large to check", "command too complex to check"): padding must never be a way past a rule. Only a deny rule
+  that could not be judged causes the denial (warn-only parse rules: allowed with a warning); a rule set with only `regex`
+  rules never starts the parser.
+- If the hook itself raises, it applies the `regex` rules, allows the rest with a visible warning, and never exits
+  silently.
 
 `rule test` and `status` say the same: a rule that needs the engine is reported as `cannot` evaluate, and
 `status --problems` lists the rules that are not enforced and why.
@@ -296,8 +329,9 @@ Check these in order when a command the matcher selects still runs:
 8. The rule is invalid (bad regex, unknown builtin, an `ast` rule that does not compile): a global or project rule is
    skipped and only `status` reports it (a non-compiling rule also warns once per session); an invalid managed
    rule is skipped with a warning.
-9. The rule uses `program`, `args`, `builtin` or `match.ast` and the engine is missing or failed on this call: the
-   command was allowed and the session got a notice.
+9. The runtime was not installed yet (the first seconds of the first session, or after a failed install), or the rule uses
+   `program`, `args`, `builtin` or `match.ast` and the engine failed on this call: the command was allowed and the session
+   got a notice.
 10. The command is one of the documented limits: an obfuscated or dynamic name, a wrapper the list does not know, a script
     file, a heredoc substitution the parser leaves as text.
 11. The rule's `tool` is not `Bash`.

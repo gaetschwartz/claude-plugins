@@ -2,7 +2,7 @@
 name: setup
 description: Use when the user wants to set up guardrails, install recommended guardrails presets, or asks which guardrails suit the work done on this machine or in this repo, e.g. "set up guardrails", "install the process-safety preset", "I do reverse engineering in this repo, configure guardrails for that". Never use it to get past a guardrails denial.
 argument-hint: "[<preset> ...] [-s|--scope global|project|managed] [-P|--path <file>] [-y|--yes]"
-allowed-tools: Bash(guardrails status *) Bash(guardrails preset *) Bash(guardrails mode *) Bash(guardrails rule rm *) AskUserQuestion
+allowed-tools: Bash(guardrails engine ensure) Bash(guardrails status *) Bash(guardrails preset *) Bash(guardrails mode *) Bash(guardrails rule rm *) AskUserQuestion
 ---
 
 # Setting up guardrails
@@ -11,6 +11,13 @@ Nothing is enforced until rules are installed. Every command below changes confi
 one carries `--as-user`. Before anything else read `${CLAUDE_PLUGIN_ROOT}/references/changing-config.md`.
 
 Arguments: $ARGUMENTS
+
+## First step: the runtime
+
+Before the interview, run `guardrails engine ensure` (it installs the matcher's runtime if it is missing; normally it
+already is, and the command takes a moment). Report its result in one line. If it fails, state the precise reason it
+printed and stop: do not install presets or ask the interview questions while rules cannot be enforced. The user never
+has to run an install command; a later session retries by itself.
 
 ## Current state
 

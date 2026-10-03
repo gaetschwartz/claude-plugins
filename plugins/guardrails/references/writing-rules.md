@@ -45,7 +45,8 @@ For any `ast` rule with a relation, before writing it:
 
     guardrails rule ast 'sudo kill -9 $(pidof vite)'
 
-prints one tree per unit: the command as written, then one per wrapper or shell string looked through. Excerpt:
+prints one tree per unit: the command as written, then one per shell string it hands to a shell (the wrapper variants
+the matcher also tries are not trees of their own). Excerpt:
 
 ```text
 tree: command as written
@@ -78,7 +79,7 @@ worse, never matches.
 ## 5. Write the rule
 
 1. Start with a `pattern` for the dangerous command (`docker rm $$$`). Anchor the rule on it, not on the wrapper or the
-   context: look-through is applied to the node the rule matches.
+   context: wrappers are transparent (the command is also matched with the wrapper replaced), so `sudo X` needs no rule.
 2. Add one relation per fact about the surroundings (`inside` a substitution, `follows` a downloader). Give relations
    `stopBy: end` unless you mean the nearest level.
 3. Flags and values: `has` with a `regex` on one word; `all` to require several, `any` for alternatives, `not` + `has`
@@ -159,7 +160,7 @@ Known limits, where the rule cannot see the command (say so in the description r
 - a wrapper the table does not know (declare it with `guardrails wrapper add`)
 - an obfuscated name (`p''kill`, `$'p\x6bill'`, `p\kill`) or a script given as an ANSI-C literal (`bash -c $'X'`): it cannot be analysed statically
 - `watch 'X'`, `su -c 'X'`, `echo X | sh`, `source <(echo X)`: only `bash -c`, `script -c`, `eval` and shell-fed heredocs and here-strings are scanned
-- a wrapper on the related command of a relation (`sudo curl x | sh` seen from `sh`): list it, or anchor the other way
+- the coarseness of wrapper variants: any word of a wrapper can start a command, so `sudo grep curl f | sh` matches a `curl $$$ | sh` rule
 
 ## The six pitfalls
 
@@ -169,7 +170,7 @@ Each one makes a rule look right and be wrong. The short list in the `new` skill
 
 End a pattern with `$$$` (zero or more words), never `$A` (exactly one, so `cat $A` misses bare `cat`). A pattern is
 anchored at the start only: trailing words always match (`git push` matches `git push -f`), and literal flags are
-order-sensitive (`rm -rf` is not `rm -fr`), so match flag spellings with `has` + `regex`. The engine widens a trailing
+order-sensitive (`rm -rf` is not `rm -fr`), so match flag spellings with `has` + `regex`. guardrails widens a trailing
 ` $$$` so that it also matches zero arguments.
 
 ### hole-in-substitution
@@ -191,8 +192,8 @@ relation or a `regex`. See [ast/pipelines.md](ast/pipelines.md).
 
 ### program-and-wrapper-words
 
-`program` matches a command by name, `program: sudo` (or `bash`, `env`, `xargs`) included, and also any wrapper command
-one of whose own words is the name: `program: pkill` matches `sudo -u bob pkill x` and, as a known false positive,
+`program` matches a command by name, `program: sudo` (or `bash`, `env`, `xargs`) included, and also the command behind a
+wrapper, read from any of the wrapper's own words: `program: pkill` matches `sudo -u bob pkill x` and, as a known false positive,
 `sudo grep pkill file` and `command -v pkill`. Test the look-alikes. See [ast/wrappers.md](ast/wrappers.md).
 
 ### regex-in-heredocs
@@ -203,8 +204,7 @@ wrapped. Use it only when no tree relation says it, and then test the mentions.
 ## Anti-patterns
 
 - A raw-text `regex` for a structural question ("only inside `$( )`", "as the last pipeline member").
-- Matching the wrapper instead of the wrapped command (`sudo` rather than what runs under it), or a rule anchored on a
-  node that only gets looked through on the other side.
+- Matching the wrapper instead of the wrapped command (`sudo` rather than what runs under it).
 - One rule for several behaviors under a vague message.
 - Relying on holes inside `$( )`.
 - Loosening the pattern to fix a false negative instead of adding an alternative.

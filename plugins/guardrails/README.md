@@ -2,11 +2,12 @@
 
 A PreToolUse hook for the Bash and Monitor tools whose rules are data (a rule for `Bash` also applies to a `Monitor`
 command; a Monitor call with only a `ws` URL has no command and is ignored; monitors a plugin declares in
-`monitors/monitors.json` start without any tool call, so this hook cannot cover them). Each command is parsed by the
-standalone `ast-grep` binary (its tree-sitter Bash grammar does all the lexing and parsing; guardrails has no shell
-parser of its own). `program`, `args`, `builtin` and `match.ast` rules are compiled to ast-grep rules and run in one
-scan: wrappers like `sudo`/`xargs`/`timeout` are looked through, the scripts of `bash -c` and `eval` are scanned as units
-of their own, heredoc bodies and redirect targets are data. `regex` rules read the raw text and need no engine.
+`monitors/monitors.json` start without any tool call, so this hook cannot cover them). Each command is parsed in
+process by the `ast-grep-py` library (its tree-sitter Bash grammar does all the lexing and parsing; guardrails has no
+shell parser of its own). `program`, `args`, `builtin` and `match.ast` rules become typed ast-grep rules: wrappers like
+`sudo`/`xargs`/`timeout` are transparent (the command is also matched as if the wrapper were not there), the scripts of
+`bash -c` and `eval` are scanned as units of their own, heredoc bodies and redirect targets are data. `regex` rules read
+the raw text. The library lives in a runtime that guardrails installs by itself (below); nobody runs an install command.
 
 **Nothing is active after install.** Run the `guardrails:setup` skill to pick presets.
 
@@ -36,130 +37,107 @@ including the shell-string units. `references/writing-rules.md` is the full how-
 edge-case checklist, the pitfalls), and `references/ast/` is a cookbook of tested rules by shape (context, pipelines,
 flags, lists, wrappers); a test runs every example in it against the real engine.
 
-**Wrappers and shell strings.** `program` matches a command by name and also a wrapper command (`sudo doas env timeout
-nice ionice nohup time command exec builtin stdbuf setsid xargs watch`, plus your own) one of whose own words is the
-name: `sudo -u bob pkill x`, `timeout 5 pkill x`. There is no table of flags that take a value, so `sudo grep pkill file`
-also matches `pkill` (a known false positive). A command `pattern` in `match.ast` is tried behind a wrapper the same way.
-The script of `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'`, the arguments of `eval`, heredocs and here-strings fed to
-a shell, and the substitutions in unquoted heredoc bodies are unquoted and scanned as units of their own (depth 8, 64 distinct units, 256 KiB). Add wrapper names with `guardrails wrapper add <name>`
+**Wrappers and shell strings.** A command that contains a wrapper command (`sudo doas env timeout nice ionice nohup time
+command exec builtin stdbuf setsid xargs watch`, plus your own) is matched as text variants too: the whole command with that
+wrapper replaced by the text from each of its own words onward (`sudo -u bob pkill x` also reads as `-u bob pkill x`,
+`bob pkill x`, `pkill x`, `x`), several wrappers replaced together while the combinations stay few. Every rule is matched
+on the real tree of each variant, so a `program`, a command `pattern`, a pipeline or list pattern (`curl $$$ | sh`,
+`cd $A && rm $$$`) and a `not inside` all see through wrappers, and a hit found in a variant is `wrapped`. There is no table
+of flags that take a value, so any word can start a command: `sudo grep pkill file` also matches `pkill`, and
+`sudo grep curl f | sh` matches a `curl $$$ | sh` rule (known coarseness). At most 256 variants and 256 KiB of variant
+text per command; past that the command is denied ("command too complex to check") whatever its size. The script of
+`bash|sh|zsh|dash|ksh|script [flags] -c '<script>'`, the arguments of `eval`, heredocs and here-strings fed to a shell, and
+the substitutions in unquoted heredoc bodies are unquoted (one shell word, nothing else) and scanned as units of their own
+(depth 8, 64 distinct units, 256 KiB). Add wrapper names with `guardrails wrapper add <name>`
 (`--scope global|project|managed`, `--path`, `--as-user` for agents, like `rule`); `wrapper rm` and `wrapper list` do the
 rest. Look-through only ever grows: a layer adds names and never removes or changes a higher layer's.
 Obfuscated or dynamic command names (`$'p\x6bill'`, `p''kill`, variables, aliases, functions) cannot be analysed
 statically and are not matched; `references/matching.md` lists the known limits.
 
-**Requirements.** `program`, `args`, `builtin` and `match.ast` run the standalone Rust `ast-grep` binary (pinned to 0.45.3, which bundles the
-Bash grammar) as a child process of the hook. The hook itself is plain stdlib Python, any Python 3.9 or newer, so macOS
-`/usr/bin/python3` works: there is no venv, no uv and no pip. The binary reaches the machine by two mechanisms, tried in
-this order:
+**The runtime.** `ast-grep-py` has one wheel per CPython version, so guardrails does not depend on the host's Python: it
+installs its own, once, under `${CLAUDE_PLUGIN_DATA}/runtime/<id>/` (about 140 MB on disk: a portable `uv` 34 MB, a managed
+CPython 3.13 67 MB, a venv with ast-grep-py 42 MB; about 46 MB downloaded). The user never runs an install command; setup
+happens at every opportunity:
 
-1. **npm.** The plugin ships `package.json` and `package-lock.json` (an exact pin, sha512 integrity for all four platform
-   packages, no second lockfile: with several Claude Code would pick bun first and not fall back to npm). When Claude Code
-   copies a marketplace plugin into its cache it runs `npm ci --ignore-scripts` there (60 s limit; a failure never blocks
-   the plugin), which installs `node_modules/@ast-grep/cli-<platform>/ast-grep`. The hook runs that real binary by
-   absolute path; the `@ast-grep/cli` launcher script, `node_modules/.bin` and `PATH` are never involved.
-   **A plugin loaded in place from a local-directory marketplace never gets this install** (Claude Code skips it), so it
-   uses the wheel fallback, or you run `cd <plugin root> && npm ci --ignore-scripts` once.
-2. **Wheel fallback.** PyPI's `ast-grep-cli` ships the same binary in a `py3-none-<platform>` wheel. `guardrails engine
-   install` (foreground, with progress and exit codes) or the detached SessionStart warm-up downloads it with urllib from
-   the one https://files.pythonhosted.org URL recorded in `lib/engine-manifest.json` (connect and total time limits, 60 s),
-   checks the wheel's sha256 **before** reading it, unpacks exactly one named member (no other entry, no symlink, no
-   absolute or `..` path is ever read), and places `${CLAUDE_PLUGIN_DATA}/engine/<pin>/ast-grep` (temp file, `chmod 0755`,
-   atomic rename) and then a marker (pin, wheel hash, binary hash, size, mtime, inode). Installs run under a lock, never
-   replace an install that still passes its checks, and any failure (timeouts included) is remembered for ten minutes: the
-   warm-up obeys that backoff, an explicit `engine install` does not. Temp files older than ten minutes are removed.
-   Only the SessionStart hook (detached, silent, and only when neither mechanism works and an enabled rule needs
-   the parser) and the CLI ever download; the PreToolUse hook only looks.
-3. **Neither.** The rules that need the parser are not enforced and their commands are allowed, with a loud notice
-   (below); `regex` rules keep running.
+1. **SessionStart** runs `ensure` synchronously (timeout 120 s). The first ever session takes about 3 to 10 s (Claude's
+   first answer waits for it); later sessions find a valid marker and take about 0.1 s. A dead network does not stall
+   every session: a failed install is remembered for 10 minutes.
+2. **The PreToolUse hook** runs on the runtime's Python when the marker exists. When it does not, it allows the command with a
+   loud notice (once per session, repeated every 10 minutes while a failure persists) and starts a detached `ensure`, so
+   the next call is covered.
+3. **Every `guardrails` CLI call** (`bin/guardrails`) ensures first, in the foreground, with progress on stderr, and stops
+   with the precise reason when that fails.
+4. **The `setup` skill's first step** runs `guardrails engine ensure`.
 
-`lib/engine-manifest.json` (wheel filenames, URLs, sha256, expected member and binary hashes per platform, and the binary
-hash of each npm platform package) is generated by `scripts/gen-engine-manifest.py` from PyPI and npm for the version in
-`package.json`; a test checks that `package.json`, `package-lock.json` and the manifest pin the same version.
+**While the runtime is not ready, no rule is enforced**, `regex` rules included, because running anything needs the
+managed Python. That window is the first seconds of the first session; after a failed install (offline, a blocked host) it
+lasts until an attempt works, attempts being 10 minutes apart. The notice (user-facing `systemMessage` and agent-facing
+`additionalContext`) says the runtime is being installed automatically and how long that takes, or the failure reason and
+the time of the next attempt, and that rules are NOT enforced meanwhile. Its text is fixed by the plugin and never echoes
+repository text as an instruction. With no usable `python3` (3.9 or newer) the wrapper prints a fixed notice on every call.
 
-| platform | npm package | wheel |
+`lib/bootstrap.py` is the only code that runs on the host's own Python (3.9 or newer, standard library only; everything else
+needs 3.13). `hooks/guardrails.sh` is a tiny POSIX `sh` script that never changes `PATH` (hooks inherit Claude Code's
+environment and a macOS lookup must not touch the `/home` automount). It starts the bootstrap with the first of
+`/opt/homebrew/bin/python3`, `/usr/local/bin/python3`, `/usr/bin/python3`, `/home/linuxbrew/.linuxbrew/bin/python3` on Linux
+only (after a `uname` check), then `python3` from the inherited `PATH`, skipping any inside the project or the cwd and any
+that is world-writable, always with `-I -S`. The bootstrap downloads the pinned `uv` wheel from the one
+files.pythonhosted.org URL in `lib/runtime-manifest.json` (60 s limit; the sha256 is checked **before** the file is read;
+exactly one named member is unpacked), then runs that uv with a scrubbed environment (HOME, LANG, TMPDIR, proxy variables
+and `SSL_CERT_*` only, `PATH=/usr/bin:/bin`, every `UV_*` set to a place inside the runtime dir, `--no-config`, the runtime
+dir as cwd, so a repository's `uv.toml`, `UV_*`, `PATH`, `PYTHONPATH` or `pip.conf` never decide what runs):
+`uv python install 3.13`, `uv venv`, `uv pip install --require-hashes --only-binary :all: --no-deps` from
+`lib/runtime-requirements.txt` (ast-grep-py 0.45.3, one hash per platform wheel). A self-test imports the library and matches
+a pipeline; the marker is written last (pins, installed versions, requirements hash, and the size and mtime of the
+interpreter and the extension module), the uv cache is deleted and the runtime of earlier pins is removed. Installs run under
+a lock the OS releases if the installer dies; an interrupted install has no marker and the next one wipes it. The manifest,
+requirements and runtime id come from `scripts/gen-runtime-manifest.py`; a test ties them to the pins.
+
+| platform | uv wheel | ast-grep-py wheel |
 |---|---|---|
-| macOS arm64 | `@ast-grep/cli-darwin-arm64` | `macosx_10_12_universal2` |
-| macOS x86_64 | `@ast-grep/cli-darwin-x64` | `macosx_10_12_universal2` |
-| Linux glibc x86_64 | `@ast-grep/cli-linux-x64-gnu` | `manylinux_2_28_x86_64` (glibc 2.28+) |
-| Linux glibc aarch64 | `@ast-grep/cli-linux-arm64-gnu` | `manylinux_2_28_aarch64` (glibc 2.28+) |
+| macOS arm64 | `macosx_11_0_arm64` | `cp313 macosx_11_0_arm64` |
+| macOS x86_64 | `macosx_10_12_x86_64` | `cp313 macosx_10_12_x86_64` |
+| Linux glibc x86_64 | `manylinux_2_17_x86_64` | `cp313 manylinux_2_28_x86_64` (glibc 2.28+) |
+| Linux glibc aarch64 | `manylinux_2_17_aarch64` | `cp313 manylinux_2_28_aarch64` (glibc 2.28+) |
 
-Linux musl (Alpine) and Windows are not supported: there is no build, and the notice says so and offers no install command,
-only to use `regex` rules or a supported system.
+Linux musl (Alpine), older glibc, other architectures and Windows get a precise "unsupported platform" notice and no
+install attempt.
 
-**Trust model.** Before each run the hook checks the binary cheaply. npm binary: a regular file (no symlink) that resolves
-inside the plugin root, executable, owned by you or root, not writable by group or others, every directory up to the plugin
-root owned by you or root and not world-writable, and its platform
-package's `package.json` version equals the pin. Wheel binary: the same, plus size, mtime and inode must match the marker
-and the marker's pin and hashes must match the manifest. The one relaxation is that a group-writable directory owned by you
-or root is fine, because a `0002` umask (and some Homebrew layouts) creates them that way. A full re-hash happens only at
-install time and in `guardrails engine verify` (the active binary against the manifest's `binarySha256`; for npm also npm's
-own install record against `package-lock.json`). The child runs with the environment `PATH=/usr/bin:/bin` and nothing else
-(no `UV_*`, `PYTHON*`, `NODE_*`, `LD_*`), from `/`, with `-c lib/engine-sgconfig.yml`: without an explicit config ast-grep
-reads an `sgconfig.yml` from the working directory or a parent, which can name a dynamic library to load. No environment
-variable selects the binary, the URL or the plugin root (the root is the parent of `lib/`, which is where Claude Code runs
-`npm ci`); tests use module attributes. Install and verify change no configuration, so `--as-user` does not apply to them.
+**Trust model.** The Python comes from `uv python install`, which downloads a python-build-standalone distribution and checks
+it against the sha256 compiled into the pinned uv (a tampered archive served from a local mirror stopped with `Hash
+mismatch`): our manifest pins uv, uv pins Python, `--require-hashes` pins the library. Hosts needed: `files.pythonhosted.org`
+and `pypi.org` (uv wheel, ast-grep-py wheel and index metadata), `releases.astral.sh` for the Python (uv falls back to
+`github.com/astral-sh/python-build-standalone` releases, served from `release-assets.githubusercontent.com`, when it cannot
+reach it; both observed through a logging proxy). `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and `SSL_CERT_FILE/DIR` are passed on;
+no mirror or index variable is, so a repository cannot redirect a download, and a corporate mirror is not supported. At run
+time the wrapper executes the runtime's Python only when the marker exists, the interpreter is owned by you and the runtime
+dir is not inside the project or the cwd; every session start (and each `ensure`) re-checks that the interpreter and the
+extension module are owned by you, not writable by group or others, unchanged in size and mtime since the install and still
+inside the runtime dir, and reinstalls when they are not. The hook runs `python -I`, so `PYTHON*` and the cwd never reach it.
 
-**Troubleshooting.** `guardrails engine status` shows which mechanism is active (npm or wheel), the pin, the platform,
-both paths with their state (usable, or why it was rejected), the last download failure with its retry time, and the exact
-fix commands: `guardrails engine install` and `cd "<plugin root>" && npm ci --ignore-scripts`. `guardrails engine verify`
-re-hashes the active binary. `guardrails status --problems` and `rule test` repeat the fix when the engine is missing.
+**Troubleshooting.** `guardrails engine status` shows whether the runtime is ready (or why not), the pins, the platform, the
+path, the installed Python, whether an install is running, and the last install failure with the time of the next
+automatic attempt; `guardrails engine ensure --retry-now` installs right away and ignores the wait. `guardrails status
+--problems` and `rule test` say when a rule is not enforced or could not be judged.
 
-**Interpreter selection.** `hooks/guardrails.sh` is a tiny POSIX `sh` script that never changes `PATH` (hooks inherit
-Claude Code's environment and the wrapper must not make a macOS lookup touch the `/home` automount). It runs, by absolute
-path, the first of: `/opt/homebrew/bin/python3`; `/usr/local/bin/python3`; `/home/linuxbrew/.linuxbrew/bin/python3` on Linux
-only (after a `uname -s` check, before any stat of `/home`); `python3` from the inherited `PATH`, skipping entries inside
-the project or the cwd; `/usr/bin/python3`, always with `-I -S`. With no python at all it prints a one-line
-`systemMessage` on every call (it cannot keep per-session state without python) and lets the call through. Latency
-measured here (Python 3.14 from Homebrew, one `program` rule, two `ast` rules and a `builtin`, typical command, warm, `hyperfine`,
-load average about 7): about 45 ms for a command with or without a wrapper, 57 ms through a `bash -c` string (one extra
-scan), against about 31 ms when every rule is `regex` and the engine is never started. Apple's
-`/usr/bin/python3` 3.9 spends about 50 ms just importing the standard library (it ships no cached bytecode), so a hook
-running under it takes about 105 ms; install a newer `python3` in `/opt/homebrew/bin` or `/usr/local/bin` to avoid that. The very
-first run of a binary that was just written takes about half a second once (the OS inspects it); the 4 s engine deadline
-covers that.
+**How an evaluation runs.** Every `program`, `args`, `builtin` and `match.ast` rule becomes typed ast-grep rules
+(`lib/rulebuilder.py`); `lib/scanner.py` parses the command as written, then its wrapper variants and each shell string,
+and matches every rule on each; a hit is `wrapped` when it was found in a variant or a script, or when the matched node
+sits inside a pipeline, command substitution or process substitution (read from the node's ancestors). Anything that
+needs the parser runs in a forked child (`lib/bounded.py`) that is killed after 5 s: a call into ast-grep cannot be
+interrupted (it holds the GIL, verified), a hook that times out lets the command through, so a command the parser cannot
+finish in time is denied ("command too complex to check") instead. A typical command costs about 2 ms of fork and 8 ms
+of parsing and matching in the child. A `match.ast` rule is limited to 16 KiB (`rule add/set/test` exit 2, and the hook
+skips and names an oversized one without touching the others).
 
-The binary's location comes only from the plugin's own location and data dir, never from `PATH`, the project or the cwd, so a
-project or cwd that contains the plugin (developing it, or starting in `~/.claude`) does not matter, and a `node_modules` planted
-in a repository is never looked at.
-
-**How an evaluation runs.** Every `program`, `args`, `builtin` and `match.ast` rule becomes ast-grep rules (`lib/astrules.py`):
-a direct branch, the same branch restricted to "inside a pipeline, command substitution or process substitution" (that
-is what tags a hit `wrapped`), and a wrapper branch; two helper rules find the script of `bash -c` and the arguments of
-`eval`. One `ast-grep scan` runs all of them over the command; each script it finds is unquoted (one shell word, nothing
-else) and scanned, level by level, with the same rules, so `not inside` and friends judge the real tree of the real text
-and of each script. A typical command is one scan (about 12 ms of ast-grep), a shell string adds one scan per level.
-Rules and units never travel on the command line: they are files in a private (`0700`) temporary directory with its own
-`sgconfig.yml`, so no rule or command size can overflow the argument list. Every call also carries a canary rule that
-must match every non-empty unit (the root is a `program`, or `ERROR` for text the parser could not finish), and the reply
-must be exactly ast-grep's SARIF document with known rule ids and in-range offsets; anything else (empty output, `{}`, a
-missing canary, a truncated reply, a non-zero exit) counts as an engine failure. Unpacking is bounded by counts and
-bytes; the verdict itself still has a 4 s clock (below). A `match.ast` rule is limited to
-16 KiB (`rule add/set/test` exit 2, and the hook skips and names an oversized one without touching the others) and the
-enabled rules together to 256 KiB (later rules are skipped and named).
-
-**When the engine is unavailable or fails.** There is no degraded parsing: rules that need the parser cannot be
-evaluated, so the hook allows the command and says so loudly, and `regex` rules keep running.
-- Engine missing (unsupported platform, not installed, a binary that failed its checks): the first Bash or Monitor call
-  of every session carries the `GUARDRAILS ENGINE MISSING` notice in both the user-facing `systemMessage` and the
-  agent-facing `additionalContext`: rules using program/args/builtin/ast are NOT enforced until the engine is installed
-  (on an unsupported platform: here), `regex` rules still are, which rules are affected, the precise reason, the fixes
-  that can work on this system, and an instruction to tell the user first. The text is sanitised and framed as coming
-  from the guardrails plugin, not from the repository. If the once-per-session mark cannot be saved, the notice repeats.
-- **Managed rules fail open too.** A managed `program`/`args`/`builtin`/`ast` deny rule is not enforced while the engine
-  is missing or failing; only `regex` rules are. The notice and `status --problems` count and name the managed rules
-  affected. Install the engine (or use `regex`) wherever a managed rule must never be bypassed. After the first notice the
-  rest of that session runs with those rules unenforced.
-- Engine failure during a call (crash, unreadable output, missing canary, timeout on a small command): that call is
-  allowed with a warning naming the failure class, in both channels; the same class is warned again at most every 10
-  minutes while it persists, and `status`/`rule test` show the last failure. A timeout on a command over 8 KiB is a
-  denial ("command too complex to check"), because the content is what makes it slow: a hit already found at a completed
-  level stands, and the remainder is judged the same way.
-- A command over 256 KiB, or that unpacks past the shell-string bounds, is denied unparsed ("command too large to
-  check", "command too complex to check"): padding must never be a way past a rule. Only a deny rule that could not be
-  judged causes the denial; if just `warn` rules need the parser the command is allowed with a warning, and `regex`-only
-  rule sets never start the engine or care about size.
-- The whole hook runs under a 7 s watchdog (hook timeout 10 s); on expiry or any other exception it applies the `regex`
-  rules, allows the rest with a visible warning, and never exits silently.
+**When the engine fails.** There is no degraded parsing. If the library cannot be imported or its self-test fails, rules
+that need the parser cannot be evaluated: the command is allowed with a loud warning naming the reason (repeated at most
+every 10 minutes), and `regex` rules keep running. Managed `program`/`args`/`builtin`/`ast` deny rules fail open too in that
+case; the warning and `status --problems` name them. A command over 256 KiB, one that unpacks past the shell-string or
+variant bounds, one the parser does not finish in 5 s, or one whose checker crashed is denied unparsed: padding must never
+be a way past a rule. Only a deny rule that could not be judged causes the denial; if just `warn` rules need the parser the
+command is allowed with a warning, and `regex`-only rule sets never start the parser. If the hook itself raises, it applies
+the `regex` rules, allows the rest with a visible warning, and never exits silently.
 
 `rule test` and `status` say the same: a rule that needs the engine is reported as `cannot` evaluate (never as "no
 match"), and `status --problems` lists the rules that are not enforced and why.
@@ -338,7 +316,7 @@ final markdown, computed from real results, and the skills paste it unchanged.
 `**Message**`, then `**Block**` / `**Warn**` (the matcher catches it) and `**Allow**` rows, `**Verified**`, `**Note**`
 and `**Raw**`. Commands come from positional arguments (source `inferred`, or `--source`) and from `--examples
 @file|-`, a JSON list of `{"cmd", "source": "yours|inferred|you chose", "expect": "match|pass"}`; `--intent`,
-`--id-name` and `--scope` label a draft. The engine computes each row's `wrapped` tag (the match reached the rule through
+`--id-name` and `--scope` label a draft. The matcher computes each row's `wrapped` tag (the match reached the rule through
 sudo, `bash -c`, xargs, timeout, `$(…)` or a pipeline), and `expect` only feeds the mismatch count: a contradicted row
 gets a `⚠`. Every command is an inline-code span padded inside the backticks to one width (the longest command, capped
 at 40; longer ones go last, unpadded; CJK and emoji count two columns; a command with a backtick gets the longer fence;
@@ -384,22 +362,19 @@ when a skill needs it.
 - `edit`, `mode` and `setup` change configuration only when you ask, always with `--as-user` and your own words in
   `--reason`. They never run `sudo`: a not-writable file prints the `sudo …` command for you to run.
 
-`just test` first runs `just engine`, which installs the pinned binary through the wheel path into
-`~/.cache/guardrails-engine-dev` (network once; it is skipped quietly when offline), then runs the suite; the tests that need
-the real binary use that install, or one they make themselves in a temporary directory, and otherwise skip with a message
-saying how to get it (set `GUARDRAILS_REQUIRE_AST=1` to make that a failure, for CI). Plain `python3 -m unittest discover -s
-tests` works too, under any Python from 3.9 (`just test-39` runs it under `/usr/bin/python3`). The install, download and
-fallback tests stub the network and use a stub binary. `just check` lints and type-checks, `just validate` runs
-`claude plugin validate`.
+`just test` runs the suite on the pinned library (`uv run --python 3.13 --with ast-grep-py==<pin>`). The tests that run the
+real hook install the real runtime once into `~/.cache/guardrails-runtime-dev` (network once; they skip with a message
+when that fails, `GUARDRAILS_REQUIRE_AST=1` makes that a failure, for CI); the bootstrap tests use a stub uv and stub
+downloads and also run under macOS's Python 3.9 (`just test-39`). `just check` lints and type-checks (ruff and ty),
+`just manifest` regenerates the runtime manifest, `just validate` runs `claude plugin validate`.
 
 ## Layout
 
 | path | role |
 |---|---|
-| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py`, `matching.py` (the one evaluation path), `policy.py`, `store.py`, `cli.py`, `wrappers.py` (wrapper names), `astbin.py` (find, install and verify the ast-grep binary), `astrun.py` (run a request against it), `astrules.py` (guardrails rules to ast-grep rules), `astworker.py` (the scan loop over shell-string units) and `astcli.py` (the ast-grep subprocess calls); data: `engine-manifest.json`, `engine-sgconfig.yml` |
-| `hooks/` | `hooks.json` (PreToolUse on `Bash\|Monitor`, and SessionStart to fetch the AST engine) and the `guardrails.sh` POSIX wrapper that picks the interpreter |
-| `package.json`, `package-lock.json` | the npm pin Claude Code installs with `npm ci --ignore-scripts` |
-| `scripts/` | `gen-engine-manifest.py`: rewrites `lib/engine-manifest.json` for the pin |
+| `lib/` | all Python: `guard.py` (entry point: hook without arguments, CLI with them), `engine.py` (the hook), `matching.py` (the one evaluation path), `rulebuilder.py` (typed ast-grep rules), `scanner.py` (units, wrapper variants, shell strings), `bounded.py` (the hard deadline), `verdict.py`, `policy.py`, `store.py`, `cli.py`, `render.py`, `wrappers.py`; `bootstrap.py` (the host-Python installer); data: `runtime-manifest.json`, `runtime-requirements.txt`, `runtime-id` |
+| `hooks/` | `hooks.json` (PreToolUse on `Bash\|Monitor`, and a synchronous SessionStart that ensures the runtime) and the `guardrails.sh` POSIX wrapper |
+| `scripts/` | `gen-runtime-manifest.py`: rewrites the manifest, requirements and runtime id for the pins |
 | `references/` | text the skills read on demand: matching semantics, presentation conventions, config-change rules, the rule-writing guide (`writing-rules.md`) and the tested `ast/` cookbook |
-| `bin/guardrails` | the CLI wrapper on the Bash tool's PATH |
+| `bin/guardrails` | the CLI wrapper on the Bash tool's PATH (ensures the runtime first) |
 | `presets/`, `skills/`, `tests/` | preset rule sets, the six skills, shared skill references, the unittest suite |
