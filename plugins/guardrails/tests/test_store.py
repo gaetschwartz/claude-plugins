@@ -5,7 +5,6 @@ import os
 import stat
 import subprocess
 import unittest
-from pathlib import Path
 from typing import Any, ClassVar
 from unittest import mock
 
@@ -27,11 +26,9 @@ class Paths(Isolated):
                                 "guardrails-gaetans-claude-plugins", "state.json")
         self.assertEqual(store.global_state_path(), expected)
 
-    def test_plugin_id_from_cache_location(self) -> None:
-        here = "/u/.claude/plugins/cache/my.market/guardrails/0.2.0/lib"
-        self.assertEqual(store.plugin_id(here), "guardrails-my-market")
-
-    def test_plugin_id_outside_cache(self) -> None:
+    def test_plugin_id_follows_the_cache_location(self) -> None:
+        self.assertEqual(store.plugin_id("/u/.claude/plugins/cache/my.market/guardrails/0.2.0/lib"),
+                         "guardrails-my-market")
         self.assertEqual(store.plugin_id("/src/claude-plugins/plugins/guardrails/lib"),
                          "guardrails-gaetans-claude-plugins")
 
@@ -45,13 +42,10 @@ class Paths(Isolated):
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         self.assertEqual(store.project_root(str(repo / "sub")), str(repo))
 
-    def test_no_project_outside_git(self) -> None:
+    def test_no_project_outside_git_or_without_a_cwd(self) -> None:
         del os.environ["CLAUDE_PROJECT_DIR"]
-        self.assertIsNone(store.project_state_path(str(self.tmp)))
-
-    def test_missing_cwd_means_no_project(self) -> None:
-        del os.environ["CLAUDE_PROJECT_DIR"]
-        self.assertIsNone(store.project_state_path(str(self.tmp / "gone")))
+        for cwd in (self.tmp, self.tmp / "gone"):
+            self.assertIsNone(store.project_state_path(str(cwd)))
 
 
 class LoadWrite(Isolated):
@@ -59,15 +53,15 @@ class LoadWrite(Isolated):
         self.assertEqual(store.load(str(self.gpath)), {})
         self.assertEqual(store.load(None), {})
 
-    def test_corrupt_raises(self) -> None:
-        self.put(self.gpath, "{nope")
-        with self.assertRaises(store.StateError):
-            store.load(str(self.gpath))
-
-    def test_non_object_raises(self) -> None:
-        self.put(self.gpath, "[]")
-        with self.assertRaises(store.StateError):
-            store.load(str(self.gpath))
+    def test_corrupt_or_non_object_raises_and_is_never_overwritten(self) -> None:
+        for content in ("{nope", "[]"):
+            with self.subTest(content=content):
+                self.put(self.gpath, content)
+                with self.assertRaises(store.StateError):
+                    store.load(str(self.gpath))
+                with self.assertRaises(store.StateError):
+                    store.mutate(str(self.gpath), lambda s: None)
+                self.assertEqual(self.gpath.read_text(), content)
 
     def test_mutate_roundtrip_leaves_no_temp_files(self) -> None:
         store.mutate(str(self.gpath), lambda s: s.update(rules={"x": {}}))
@@ -75,12 +69,6 @@ class LoadWrite(Isolated):
         self.assertEqual(data["rules"], {"x": {}})
         self.assertIn("updatedAt", data)
         self.assertEqual(sorted(p.name for p in self.data.iterdir()), ["state.json", "state.json.lock"])
-
-    def test_mutate_refuses_corrupt_file(self) -> None:
-        self.put(self.gpath, "{nope")
-        with self.assertRaises(store.StateError):
-            store.mutate(str(self.gpath), lambda s: None)
-        self.assertEqual(self.gpath.read_text(), "{nope")
 
     def test_exception_in_mutation_writes_nothing(self) -> None:
         self.put(self.gpath, {"rules": {}})
@@ -100,7 +88,7 @@ class LoadWrite(Isolated):
 
 
 class Prune(unittest.TestCase):
-    def test_drops_stale_and_malformed(self) -> None:
+    def test_drops_stale_and_malformed_and_reads_naive_timestamps_as_utc(self) -> None:
         now = datetime.datetime.now(UTC)
         kept = store.prune({
             "a": {"seenAt": now.isoformat()},
@@ -108,8 +96,10 @@ class Prune(unittest.TestCase):
             "c": "junk",
             "d": {"seenAt": "garbage"},
             "e": {},
+            "naive": {"seenAt": now.replace(tzinfo=None).isoformat()},
         })
-        self.assertEqual(list(kept), ["a"])
+        self.assertEqual(sorted(kept), ["a", "naive"])
+        self.assertEqual(store.prune(["x"]), {})
 
     def test_caps_to_newest(self) -> None:
         now = datetime.datetime.now(UTC)
@@ -119,34 +109,21 @@ class Prune(unittest.TestCase):
         self.assertIn("s0", kept)
         self.assertNotIn("s59", kept)
 
-    def test_naive_timestamp_treated_as_utc(self) -> None:
-        naive = datetime.datetime.now(UTC).replace(tzinfo=None).isoformat()
-        self.assertIn("a", store.prune({"a": {"seenAt": naive}}))
-
-    def test_non_dict_is_empty(self) -> None:
-        self.assertEqual(store.prune(["x"]), {})
-
 
 class ManagedPath(Isolated):
     RULE: ClassVar[dict[str, Any]] = {"match": {"program": "x"}, "message": "m"}
 
-    def test_override_is_a_second_source_below_the_default(self) -> None:
+    def test_the_override_is_a_second_source_below_the_default(self) -> None:
         self.assertEqual(store.managed_paths(), [str(self.dpath), str(self.mpath)])
         self.assertEqual(store.managed_write_path(), str(self.mpath))
-
-    def test_no_override_means_only_the_default(self) -> None:
-        del os.environ["GUARDRAILS_MANAGED_PATH"]
-        self.assertEqual(store.managed_paths(), [str(self.dpath)])
-        self.assertEqual(store.managed_write_path(), str(self.dpath))
-
-    def test_override_equal_to_default_is_loaded_once(self) -> None:
-        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.dpath)
-        self.assertEqual(store.managed_paths(), [str(self.dpath)])
-
-    def test_empty_override_is_ignored(self) -> None:
-        os.environ["GUARDRAILS_MANAGED_PATH"] = ""
-        self.assertEqual(store.managed_paths(), [str(self.dpath)])
-        self.assertEqual(store.managed_write_path(), str(self.dpath))
+        for override in (None, str(self.dpath), ""):
+            with self.subTest(override=override):
+                if override is None:
+                    del os.environ["GUARDRAILS_MANAGED_PATH"]
+                else:
+                    os.environ["GUARDRAILS_MANAGED_PATH"] = override
+                self.assertEqual(store.managed_paths(), [str(self.dpath)])
+                self.assertEqual(store.managed_write_path(), override or str(self.dpath))
 
     def test_platform_defaults(self) -> None:
         expected = {"darwin": "/Library/Application Support/ClaudeCode/guardrails.json",
@@ -203,18 +180,14 @@ class ManagedPath(Isolated):
         self.assertEqual(list(state["rules"]), ["x"])
         self.assertEqual(len(problems), 1)
 
-    def test_unreadable_file_is_reported(self) -> None:
-        if os.geteuid() == 0:
-            self.skipTest("root can read anything")
-        self.put(self.mpath, {})
-        self.mpath.chmod(0)
-        self.addCleanup(self.mpath.chmod, 0o644)
-        self.assertEqual(len(store.load_managed()[1]), 1)
-
-    def test_unreadable_parent_directory_is_reported_not_absent(self) -> None:
+    def test_unreadable_file_or_directory_is_reported_not_absent(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root can read anything")
         self.put(self.mpath, {"rules": {"x": self.RULE}})
+        self.mpath.chmod(0)
+        self.addCleanup(self.mpath.chmod, 0o644)
+        self.assertEqual(len(store.load_managed()[1]), 1)
+        self.mpath.chmod(0o644)
         self.mpath.parent.chmod(0)
         self.addCleanup(self.mpath.parent.chmod, 0o755)
         with self.assertRaises(store.StateError):
@@ -266,26 +239,15 @@ class ManagedPath(Isolated):
 
 
 class ManagedWrite(Isolated):
-    def read_only(self, path: Path) -> None:
-        path.mkdir(parents=True, exist_ok=True)
-        path.chmod(0o555)
-        self.addCleanup(path.chmod, 0o755)
-
-    def test_write_mode_and_directory_creation(self) -> None:
-        nested = self.tmp / "a" / "b" / "guardrails.json"
-        store.mutate(str(nested), lambda s: s.update(rules={}), store.MANAGED_MODE)
-        self.assertEqual(stat.S_IMODE(nested.stat().st_mode), 0o644)
-        self.assertEqual(stat.S_IMODE(nested.parent.stat().st_mode) & 0o022, 0)
-        self.assertEqual(sorted(p.name for p in nested.parent.iterdir()), ["guardrails.json", "guardrails.json.lock"])
-
-    def test_created_directories_ignore_umask(self) -> None:
+    def test_write_mode_and_directory_creation_ignore_the_umask(self) -> None:
         old = os.umask(0o077)
         self.addCleanup(os.umask, old)
-        nested = self.tmp / "u" / "v" / "guardrails.json"
+        nested = self.tmp / "a" / "b" / "guardrails.json"
         store.mutate(str(nested), lambda s: s.update(rules={}), store.MANAGED_MODE)
         self.assertEqual(stat.S_IMODE(nested.stat().st_mode), 0o644)
         for directory in (nested.parent, nested.parent.parent):
             self.assertEqual(stat.S_IMODE(directory.stat().st_mode), 0o755)
+        self.assertEqual(sorted(p.name for p in nested.parent.iterdir()), ["guardrails.json", "guardrails.json.lock"])
 
     def test_existing_directory_mode_is_left_alone(self) -> None:
         self.mpath.parent.mkdir(mode=0o700)
@@ -300,44 +262,29 @@ class ManagedWrite(Isolated):
             pass
         self.assertFalse(target.exists())
 
-    def test_write_syncs_file_and_directory(self) -> None:
+    def test_write_syncs_file_and_directory_and_keeps_a_private_mode(self) -> None:
         with mock.patch.object(store.os, "fsync") as fsync:
             store.write(str(self.gpath), {})
         self.assertEqual(fsync.call_count, 2)
-
-    def test_default_write_keeps_private_mode(self) -> None:
-        store.write(str(self.gpath), {})
         self.assertEqual(stat.S_IMODE(self.gpath.stat().st_mode), 0o600)
 
-    def test_writable_cases(self) -> None:
+    def test_writable_and_unwritable_targets(self) -> None:
         store.ensure_writable(str(self.mpath))
         self.put(self.mpath, {})
         store.ensure_writable(str(self.mpath))
-
-    def test_unwritable_directory_of_absent_file(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root ignores permissions")
-        self.read_only(self.tmp / "ro")
-        target = self.tmp / "ro" / "deeper" / "guardrails.json"
-        with self.assertRaises(store.NotWritable) as ctx:
-            store.ensure_writable(str(target))
-        self.assertIn(str(target), str(ctx.exception))
-        self.assertIsInstance(ctx.exception, store.StateError)
-
-    def test_unwritable_directory_of_existing_file(self) -> None:
-        if os.geteuid() == 0:
-            self.skipTest("root ignores permissions")
-        self.put(self.tmp / "ro" / "guardrails.json", {})
-        (self.tmp / "ro").chmod(0o555)
-        self.addCleanup((self.tmp / "ro").chmod, 0o755)
-        with self.assertRaises(store.NotWritable):
-            store.ensure_writable(str(self.tmp / "ro" / "guardrails.json"))
-
-    def test_read_only_file(self) -> None:
-        if os.geteuid() == 0:
-            self.skipTest("root ignores permissions")
-        self.put(self.mpath, {})
         self.mpath.chmod(0o444)
         self.addCleanup(self.mpath.chmod, 0o644)
         with self.assertRaises(store.NotWritable):
             store.ensure_writable(str(self.mpath))
+        self.mpath.chmod(0o644)
+        locked_dir = self.tmp / "ro"
+        self.put(locked_dir / "guardrails.json", {})
+        locked_dir.chmod(0o555)
+        self.addCleanup(locked_dir.chmod, 0o755)
+        for target in (locked_dir / "guardrails.json", locked_dir / "deeper" / "guardrails.json"):
+            with self.subTest(target=target), self.assertRaises(store.NotWritable) as ctx:
+                store.ensure_writable(str(target))
+        self.assertIn(str(target), str(ctx.exception))
+        self.assertIsInstance(ctx.exception, store.StateError)
