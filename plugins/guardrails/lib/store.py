@@ -12,7 +12,7 @@ import sys
 import tempfile
 from collections.abc import Callable, Iterator
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import bootstrap
 import policy
@@ -23,6 +23,12 @@ HERE = Path(__file__).resolve().parent
 CLI = HERE.parent / "bin" / "guardrails"
 
 State = dict[str, Any]
+
+
+class Layers(NamedTuple):
+    managed: State
+    glob: State
+    project: State
 
 
 def managed_path_for(platform: str) -> Path:

@@ -373,6 +373,7 @@ class Install(Pinned):
         held: list[socket.socket] = []
         threading.Thread(target=lambda: held.append(server.accept()[0]), daemon=True).start()
         self.addCleanup(server.close)
+        self.addCleanup(lambda: [conn.close() for conn in held])
         prefix = f"http://127.0.0.1:{server.getsockname()[1]}/"
         entry = self.pins.wheels["darwin-arm64"]
         self.pins.wheels["darwin-arm64"] = {**entry, "url": prefix + "uv.whl"}

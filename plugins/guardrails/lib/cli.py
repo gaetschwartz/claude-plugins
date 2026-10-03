@@ -104,9 +104,9 @@ def managed_state() -> store.State:
     return store.load_managed()[0]
 
 
-def states() -> tuple[store.State, store.State, store.State]:
+def states() -> store.Layers:
     """The managed, global and project state; an unreadable global or project file raises."""
-    return managed_state(), store.load(store.global_state_path()), store.load(store.project_state_path())
+    return store.Layers(managed_state(), store.load(store.global_state_path()), store.load(store.project_state_path()))
 
 
 def managed_rule_ids() -> set[str]:
@@ -230,11 +230,6 @@ def snapshot(args: Args) -> Snapshot:
             report(text, label)
     parsed = {rid: rule for rid, rule in rules.items() if rule.enabled
               and not any(p.startswith(f"rule {rid}:") for p in problems)}
-    failures = [f for f in (view(v, "engineFailure") for v in view(gstate, "sessions").values()) if f.get("at")]
-    if failures:
-        last = max(failures, key=lambda f: str(f["at"]))
-        report(f"last engine failure: {last.get('kind')} at {last['at']} ({last.get('reason')}); commands that hit it were "
-               "allowed with a warning", "global")
     blind: set[str] = set()
     if parsed:
         where = sorted({layer for rid in parsed for layer in rule_origins.get(rid, [])})

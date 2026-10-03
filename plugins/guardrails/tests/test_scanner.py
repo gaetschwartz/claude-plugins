@@ -305,7 +305,7 @@ class Caps(AstIsolated):
 
     def test_a_direct_hit_stands_when_the_variants_are_limited(self) -> None:
         ev = self.evaluate(f"{K} x; " + "sudo " * 2100 + "ls")
-        self.assertEqual((ev.kinds["r"], ev.refusal_kind is not None), (Kind.DIRECT, True))
+        self.assertEqual((ev.kinds["r"], ev.refusal is not None), (Kind.DIRECT, True))
 
     def test_shell_strings_and_variants_have_separate_budgets(self) -> None:
         many = "; ".join(f"bash -c 'echo {n}'" for n in range(60))

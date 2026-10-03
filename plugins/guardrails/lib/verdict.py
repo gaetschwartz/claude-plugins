@@ -27,14 +27,12 @@ class Limit(StrEnum):
     VARIANT_BYTES = "unwraps into too much command text to parse"
 
 
-class Refusal(StrEnum):
-    OVERSIZE = "oversize"
-    COMPLEX = "complex"
-    TIMEOUT = "timeout"
-    CRASH = "crash"
-
-
 FAILED_PREFIX = "engine-failed:"
+
+
+class Notice(NamedTuple):
+    key: str
+    text: str
 
 
 class UnitTree(NamedTuple):
@@ -55,25 +53,23 @@ class Evaluation:
     invalid: dict[str, str] = field(default_factory=dict)
     failure: str | None = None
     refusal: str | None = None
-    refusal_kind: Refusal | None = None
     runtime_broken: bool = False
 
     def failure_kind(self) -> str:
-        return str(self.refusal_kind) if self.refusal_kind else ("engine" if self.failure else "")
+        return "refusal" if self.refusal else "engine"
 
-    def warnings(self, managed: Collection[str] = ()) -> list[tuple[str, str]]:
-        """(stable key, text) per problem. Keys under FAILED_PREFIX are per failure class, not per message."""
-        out = [(f"rule-invalid:{rid}", f"guardrails: rule {rid} does not compile ({why}) and is skipped")
+    def warnings(self, managed: Collection[str] = ()) -> list[Notice]:
+        """A stable key and text per problem. Keys under FAILED_PREFIX are per failure class, not per message."""
+        out = [Notice(f"rule-invalid:{rid}", f"guardrails: rule {rid} does not compile ({why}) and is skipped")
                for rid, why in sorted(self.invalid.items())]
         if self.failure is not None:
             affected = sorted(self.unevaluated)
             listed = f" Affected rules: {', '.join(affected)}." if affected else ""
             fail_open = sum(1 for rid in affected if rid in managed)
             managed_note = f" {fail_open} of them are MANAGED rules, which fail open too." if fail_open else ""
-            out.append((FAILED_PREFIX + "engine",
-                        (f"[guardrails plugin notice] The rules engine failed on this command ({self.failure}), so rules "
-                        "could not be checked and the command was allowed."
-                        f"{listed}{managed_note} Tell the user if this keeps "
-                        f"happening (this notice repeats every {bootstrap.REPEAT_SECONDS // 60} minutes while it does); `guardrails engine status` "
-                        "shows the runtime.")))
+            out.append(Notice(FAILED_PREFIX + "engine", (
+                f"[guardrails plugin notice] The rules engine failed on this command ({self.failure}), so rules could "
+                f"not be checked and the command was allowed.{listed}{managed_note} Tell the user if this keeps "
+                f"happening (this notice repeats every {bootstrap.REPEAT_SECONDS // 60} minutes while it does); "
+                "`guardrails engine status` shows the runtime.")))
         return out

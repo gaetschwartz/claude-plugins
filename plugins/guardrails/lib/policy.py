@@ -181,13 +181,6 @@ class Activation:
         return {key: value for key, value in (("by", str(self.by)), ("at", self.at), ("reason", self.reason)) if value}
 
 
-@dataclass(frozen=True, slots=True)
-class EngineFailure:
-    kind: str
-    at: str
-    reason: str
-
-
 @dataclass(slots=True)
 class Session:
     """What the hook remembers about one session; every list is a set of things already said or acknowledged."""
@@ -198,7 +191,6 @@ class Session:
     warned: list[str] = field(default_factory=list)
     reported_at: dict[str, float] = field(default_factory=dict)
     modes: dict[str, Activation] = field(default_factory=dict)
-    engine_failure: EngineFailure | None = None
 
     @classmethod
     def from_json(cls, raw: object) -> Self:
@@ -206,12 +198,9 @@ class Session:
             value = raw.get(key) if isinstance(raw, dict) else None
             return [x for x in value if isinstance(x, str)] if isinstance(value, list) else []
 
-        failure = view(raw, "engineFailure")
         return cls(strings("reported"), strings("shown"), strings("acknowledged"), strings("warned"),
                    {k: float(v) for k, v in view(raw, "reportedAt").items() if isinstance(v, (int, float))},
-                   {k: Activation.from_json(v) for k, v in view(raw, "modes").items() if isinstance(v, dict)},
-                   EngineFailure(str(failure.get("kind", "")), str(failure["at"]), str(failure.get("reason", "")))
-                   if failure.get("at") else None)
+                   {k: Activation.from_json(v) for k, v in view(raw, "modes").items() if isinstance(v, dict)})
 
     def to_json(self, seen_at: str) -> dict[str, Any]:
         out: dict[str, Any] = {"seenAt": seen_at}
@@ -221,9 +210,6 @@ class Session:
                 out[key] = items
         if self.modes:
             out["modes"] = {name: record.to_json() for name, record in self.modes.items()}
-        if self.engine_failure:
-            out["engineFailure"] = {"kind": self.engine_failure.kind, "at": self.engine_failure.at,
-                                    "reason": self.engine_failure.reason}
         return out
 
 

@@ -13,7 +13,7 @@ from typing import TYPE_CHECKING, assert_never
 
 import bounded
 import policy
-from verdict import MAX_COMMAND_BYTES, Evaluation, Kind, Limit, Refusal, UnitTree
+from verdict import MAX_COMMAND_BYTES, Evaluation, Kind, Limit, UnitTree
 
 if TYPE_CHECKING:
     from ast_grep_py import Config
@@ -107,7 +107,6 @@ def evaluate(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
     size = len(command.encode("utf-8", "replace"))
     if size > MAX_COMMAND_BYTES:
         ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND_BYTES // 1024} KiB)"
-        ev.refusal_kind = Refusal.OVERSIZE
         ev.unevaluated = set(rules)
         return ev
     started = time.monotonic()
@@ -129,16 +128,13 @@ def evaluate(command: str, rules: dict[str, policy.Rule]) -> Evaluation:
                 ev.failure = done.failure
                 if done.limit is not None:
                     ev.refusal = f"command too complex to check (it {done.limit})"
-                    ev.refusal_kind = Refusal.COMPLEX
             case bounded.Outcome.TIMEOUT:
                 ev.refusal = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "
                               "split it up or write it to a script file and run that")
-                ev.refusal_kind = Refusal.TIMEOUT
             case bounded.Outcome.CRASHED:
                 match state:
                     case Health.HEALTHY:
                         ev.refusal = "this command crashes the parser"
-                        ev.refusal_kind = Refusal.CRASH
                     case Health.BROKEN:
                         ev.failure = ("the ast-grep-py library crashes even on a trivial command; the runtime is being "
                                       "rebuilt")
@@ -182,5 +178,6 @@ def tree(command: str) -> tuple[list[UnitTree], Limit | None]:
     ensure_engine()
     import scanner
 
-    units, limit = scanner.units_of(parseable(command))
-    return [scanner.tree_of(unit) for unit in units], limit
+    trees: list[UnitTree] = []
+    limit = scanner.walk(parseable(command), False, lambda unit, root: trees.append(scanner.tree_of(unit, root)))
+    return trees, limit

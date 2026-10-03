@@ -12,7 +12,7 @@ import itertools
 import math
 import re
 from collections import deque
-from collections.abc import Iterator, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import NamedTuple
@@ -315,46 +315,55 @@ class Scanner:
 
     def run(self, command: str) -> Scan:
         """Scan the command, then its variants and scripts level by level. Hits found before a cap is reached stand."""
-        queue = deque([Unit(command, Origin.COMMAND, 0, False)])
-        seen = {(command, False, False)}
-        scripts = variants = script_bytes = variant_bytes = 0
-        limit: Limit | None = None
-        while queue and limit is None:
-            unit = queue.popleft()
-            root = SgRoot(unit.text, "bash").root()
+
+        def visit(unit: Unit, root: SgNode) -> None:
             if unit.depth == 0 and unit.origin is Origin.COMMAND:
                 self.judge_regexes(root)
             self.judge(unit, root)
-            found: Iterator[Unit] = iter(())
-            if unit.origin is not Origin.VARIANT:
-                try:
-                    spans = wrapper_spans(root, WRAPPERS)
-                except TooManyVariants:
-                    limit = Limit.VARIANTS
-                    break
-                found = (Unit(text, Origin.VARIANT, unit.depth, unit.restricted)
-                         for text in variants_of(unit.text, spans) if text != unit.text)
-            found = itertools.chain(found, (Unit(text, Origin.SCRIPT, unit.depth + 1, only)
-                                            for text, only in scripts_in(root, unit.restricted)))
-            for new in found:
-                key = (new.text, new.restricted, new.origin is Origin.VARIANT)
-                if key in seen:
-                    continue
-                if new.origin is Origin.VARIANT:
-                    variants += 1
-                    variant_bytes += len(new.text)
-                    limit = Limit.VARIANTS if variants > MAX_VARIANTS else (
-                        Limit.VARIANT_BYTES if variant_bytes > MAX_VARIANT_BYTES else None)
-                else:
-                    scripts += 1
-                    script_bytes += len(new.text)
-                    limit = (Limit.DEPTH if new.depth > MAX_DEPTH else Limit.UNITS if scripts > MAX_UNITS
-                             else Limit.SIZE if script_bytes > MAX_COMMAND_BYTES else None)
-                if limit is not None:
-                    break
-                seen.add(key)
-                queue.append(new)
+
+        limit = walk(command, True, visit)
         return Scan(tuple(self.found.values()), dict(self.invalid), limit)
+
+
+def walk(command: str, with_variants: bool, visit: Callable[[Unit, SgNode], None]) -> Limit | None:
+    """Visit the command, then its shell-string scripts (and wrapper variants) breadth first; the bound that stopped the
+    walk, if any."""
+    queue = deque([Unit(command, Origin.COMMAND, 0, False)])
+    seen = {(command, False, False)}
+    scripts = variants = script_bytes = variant_bytes = 0
+    while queue:
+        unit = queue.popleft()
+        root = SgRoot(unit.text, "bash").root()
+        visit(unit, root)
+        found: Iterator[Unit] = iter(())
+        if with_variants and unit.origin is not Origin.VARIANT:
+            try:
+                spans = wrapper_spans(root, WRAPPERS)
+            except TooManyVariants:
+                return Limit.VARIANTS
+            found = (Unit(text, Origin.VARIANT, unit.depth, unit.restricted)
+                     for text in variants_of(unit.text, spans) if text != unit.text)
+        found = itertools.chain(found, (Unit(text, Origin.SCRIPT, unit.depth + 1, only)
+                                        for text, only in scripts_in(root, unit.restricted)))
+        for new in found:
+            key = (new.text, new.restricted, new.origin is Origin.VARIANT)
+            if key in seen:
+                continue
+            if new.origin is Origin.VARIANT:
+                variants += 1
+                variant_bytes += len(new.text)
+                limit = Limit.VARIANTS if variants > MAX_VARIANTS else (
+                    Limit.VARIANT_BYTES if variant_bytes > MAX_VARIANT_BYTES else None)
+            else:
+                scripts += 1
+                script_bytes += len(new.text)
+                limit = (Limit.DEPTH if new.depth > MAX_DEPTH else Limit.UNITS if scripts > MAX_UNITS
+                         else Limit.SIZE if script_bytes > MAX_COMMAND_BYTES else None)
+            if limit is not None:
+                return limit
+            seen.add(key)
+            queue.append(new)
+    return None
 
 
 def compile_errors(configs: dict[str, Config], regexes: dict[str, Config] | None = None) -> dict[str, str]:
@@ -365,28 +374,6 @@ def compile_errors(configs: dict[str, Config], regexes: dict[str, Config] | None
         scanner.matches(rid, root, True)
     scanner.judge_regexes(root)
     return scanner.invalid
-
-
-def units_of(command: str) -> tuple[list[Unit], Limit | None]:
-    """The command and the shell-string scripts it hands to shells (wrapper variants are not units of their own)."""
-    units = [Unit(command, Origin.COMMAND, 0, False)]
-    seen = {(command, False)}
-    spent = 0
-    at = 0
-    while at < len(units):
-        unit = units[at]
-        at += 1
-        for text, only in scripts_in(SgRoot(unit.text, "bash").root(), unit.restricted):
-            if (text, only) in seen:
-                continue
-            spent += len(text)
-            limit = (Limit.DEPTH if unit.depth + 1 > MAX_DEPTH else Limit.UNITS if len(units) > MAX_UNITS
-                     else Limit.SIZE if spent > MAX_COMMAND_BYTES else None)
-            if limit is not None:
-                return units, limit
-            seen.add((text, only))
-            units.append(Unit(text, Origin.SCRIPT, unit.depth + 1, only))
-    return units, None
 
 
 def broken(root: SgNode) -> bool:
@@ -402,9 +389,8 @@ def broken(root: SgNode) -> bool:
     return False
 
 
-def tree_of(unit: Unit) -> UnitTree:
+def tree_of(unit: Unit, root: SgNode) -> UnitTree:
     """[depth, kind, text or None] per named node: text for leaves and for the kinds that hold a name or a literal."""
-    root = SgRoot(unit.text, "bash").root()
     rows: list[tuple[int, str, str | None]] = []
     stack = [(root, 0)]
     while stack:

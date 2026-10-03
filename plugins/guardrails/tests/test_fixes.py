@@ -16,7 +16,7 @@ import engine
 import matching
 import policy
 import verdict
-from verdict import Kind, Refusal
+from verdict import Kind
 
 K = "pk" + "ill"
 BY_NAME: dict[str, Any] = {"any": [{"pattern": f"{K} $$$"}, {"pattern": "killall $$$"}]}
@@ -178,7 +178,7 @@ class FailurePolicy(AstIsolated):
     def test_a_hit_stands_when_a_cap_is_hit_later(self) -> None:
         command = "zap x; " + "; ".join(f"bash -c 'echo {n}'" for n in range(80))
         ev = matching.evaluate(command, {"z": policy.Rule.from_json({"match": {"program": "zap"}, "message": "m"})})
-        self.assertEqual((ev.kinds["z"], ev.refusal_kind), (Kind.DIRECT, Refusal.COMPLEX))
+        self.assertEqual((ev.kinds["z"], ev.refusal is not None), (Kind.DIRECT, True))
         out = self.hook(command, "hit")
         self.assertTrue(is_denied(out))
         self.assertIn("No zap.", deny_text(out))
@@ -198,7 +198,6 @@ class FailurePolicy(AstIsolated):
         self.break_engine("it misparsed a test command")
         first = self.hook("zap x", "s")
         assert first is not None
-        self.assertEqual(self.get(self.gpath)["sessions"]["s"]["engineFailure"]["kind"], "engine")
         self.assertIsNone(self.hook("zap y", "s"))
         real_time = time.time
         with mock.patch.object(engine.time, "time", lambda: real_time() + 601):
@@ -212,12 +211,8 @@ class FailurePolicy(AstIsolated):
             for _ in range(2):
                 self.assertIn("rules engine failed", json.dumps(self.hook("zap x", "ro")))
 
-    def test_status_and_rule_test_name_the_last_failure(self) -> None:
+    def test_rule_test_names_the_failure(self) -> None:
         self.break_engine("it misparsed a test command")
-        self.hook("zap x", "s")
-        out = self.cli("status", "--session-id", "s")[1]
-        self.assertIn("last engine failure", out)
-        self.assertIn("engine", out)
         rule = json.dumps({"match": {"program": "zap"}, "message": "m"})
         self.assertIn("unexpected error: RuntimeError", self.cli("rule", "test", "--json", rule, "zap x")[1])
 

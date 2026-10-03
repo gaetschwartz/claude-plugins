@@ -143,9 +143,6 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
             changed = True
             notices.append(warning)
             agent_notes.append(warning)
-            if key.startswith(FAILED_PREFIX):
-                session.engine_failure = policy.EngineFailure(evaluation.failure_kind(), store.now(),
-                                                              str(evaluation.failure)[:200])
 
     def unsuspended(rule: policy.Rule) -> bool:
         return not any(name in active for name in rule.modes)
@@ -251,14 +248,14 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
     except store.StateError:
         pstate = {}
 
-    def states(g: store.State) -> tuple[store.State, store.State, store.State]:
+    def layers(g: store.State) -> store.Layers:
         killed = not gstate_ok or g.get("enabled", True) is False
-        return (managed, {}, {}) if killed else (managed, g, pstate)
+        return store.Layers(managed, {}, {}) if killed else store.Layers(managed, g, pstate)
 
     if gstate_ok and gstate.get("enabled", True) is not False:
         warnings += tuple(f"guardrails: {problem}" for problem in
                           policy.removed_key_problems(("global", gstate), ("project", pstate)))
-    found = policy.effective(*states(gstate))
+    found = policy.effective(*layers(gstate))
     warnings += tuple(f"guardrails: rule {rid} is invalid ({why}) and is skipped" for rid, why in found.problems.items())
     if not found.rules and not warnings:
         return
@@ -272,9 +269,9 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
                 gstate = store.load(gpath)
                 sessions = policy.view(gstate, "sessions")
                 session = policy.Session.from_json(sessions.get(sid))
-                output, changed = evaluate(command, policy.effective_rules(*states(gstate)),
-                                           policy.effective_modes(*states(gstate)), session, sid, managed_ids, warnings,
-                                           pre)
+                now = layers(gstate)
+                output, changed = evaluate(command, policy.effective_rules(*now), policy.effective_modes(*now), session,
+                                           sid, managed_ids, warnings, pre)
                 if changed:
                     sessions[sid] = session.to_json(store.now())
                     gstate["sessions"] = sessions
@@ -282,7 +279,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
         except OSError:
             stateless = True
     if stateless:
-        output, _ = evaluate(command, found.rules, policy.effective_modes(*states(gstate)), policy.Session(), sid,
+        output, _ = evaluate(command, found.rules, policy.effective_modes(*layers(gstate)), policy.Session(), sid,
                              managed_ids, warnings, pre)
     if output:
         json.dump(output, stdout)
