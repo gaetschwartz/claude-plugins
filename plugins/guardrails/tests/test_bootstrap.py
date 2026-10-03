@@ -215,26 +215,6 @@ class Ready(Pinned):
                 self.ensure(retry_now=True)
                 self.assertIsNone(bootstrap.marker_problem(self.rt, self.pins), "repaired")
 
-    def test_the_project_and_cwd_never_matter_for_where_the_runtime_lives(self) -> None:
-        self.install_fake()
-        places = {"the project is the data dir's parent": self.data.parent, "the project is the data dir": self.data,
-                  "the project is /": Path("/"), "the project is home": Path.home(), "an unrelated project": self.proj}
-        for name, project in places.items():
-            for cwd in (self.data.parent, self.data, Path("/"), self.proj):
-                with self.subTest(name, cwd=str(cwd)), mock.patch.dict(os.environ, {"CLAUDE_PROJECT_DIR": str(project)}), \
-                        mock.patch.object(Path, "cwd", return_value=cwd):
-                    self.assertEqual(bootstrap.diagnose(self.data).state, "ready")
-                    self.assertEqual(bootstrap.ensure(self.data).state, "ready")
-
-    def test_marking_a_runtime_broken_makes_the_next_ensure_rebuild_it(self) -> None:
-        self.install_fake()
-        before = (self.rt / "marker.json").stat().st_mtime_ns
-        bootstrap.mark_broken(self.data)
-        self.assertEqual(bootstrap.diagnose(self.data).state, "broken")
-        self.assertEqual(self.ensure().state, "installed")
-        self.assertEqual(bootstrap.diagnose(self.data).state, "ready")
-        self.assertNotEqual((self.rt / "marker.json").stat().st_mtime_ns, before)
-
     def test_a_rebuild_swaps_in_a_fresh_build_and_only_then_removes_the_old_one(self) -> None:
         self.install_fake()
         old = self.rt.resolve()

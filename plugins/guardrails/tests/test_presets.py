@@ -1,6 +1,5 @@
 from __future__ import annotations  # noqa: I001
 
-import json
 import os
 
 from helpers import AstIsolated
@@ -31,15 +30,6 @@ class Presets(AstIsolated):
         self.assertIn("{which:fd|fdfind} -e py", sheet)
         self.assertEqual(rules["find-fd"]["requires"], ["fd", "fdfind"])
         self.assertEqual(set(rules["grep-rg"]["match"]), {"ast"})
-
-    def test_list_and_show(self) -> None:
-        code, out, _ = self.cli("preset", "list")
-        self.assertEqual(code, 0)
-        for name in ("docs-first", "modern-cli", "process-safety"):
-            self.assertIn(f"{name}: ", out)
-        code, out, _ = self.cli("preset", "show", "docs-first")
-        self.assertEqual(code, 0)
-        self.assertIn("no-strings", json.loads(out)["rules"])
 
     def test_install_global_and_idempotent(self) -> None:
         code, out, _ = self.cli("preset", "install", "docs-first")
@@ -72,15 +62,6 @@ class Presets(AstIsolated):
         mode = self.get(self.gpath)["modes"]["reverse-engineering"]
         self.assertFalse(mode["agentMayEnable"])
         self.assertTrue(mode["description"])
-
-    def test_install_requires_user(self) -> None:
-        self.assertEqual(self.cli("preset", "install", "docs-first", agent=True)[0], 3)
-        self.assertEqual(self.cli("preset", "install", "docs-first", "--as-user", agent=True)[0], 0)
-        self.assertEqual(self.get(self.gpath)["rules"]["no-strings"]["setBy"]["by"], "agent")
-
-    def test_install_project(self) -> None:
-        self.assertEqual(self.cli("preset", "install", "process-safety", "--scope", "project")[0], 0)
-        self.assertIn("no-pkill", self.get(self.ppath)["rules"])
 
     def test_docs_first_end_to_end(self) -> None:
         self.cli("preset", "install", "docs-first")

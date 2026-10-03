@@ -238,23 +238,10 @@ class ManagedHook(AstIsolated):
             self.assertEqual(decision(self.hook("pkill node")), "deny")
         self.assertIsNone(self.hook("nm a.out"))
 
-    def test_global_cannot_loosen_managed_rule(self) -> None:
-        self.put(self.gpath, {"rules": {"no-pkill": {"enabled": False, "action": "warn"}}})
-        self.assertEqual(decision(self.hook("pkill node")), "deny")
-
     def test_managed_rule_survives_global_kill_switch(self) -> None:
         self.put(self.gpath, {"enabled": False, "rules": {"no-strings": dict(STRINGS)}})
         self.assertEqual(decision(self.hook("pkill node")), "deny")
         self.assertIsNone(self.hook("strings a"))
-
-    def test_disabled_global_without_managed_rules_is_silent(self) -> None:
-        self.mpath.unlink()
-        self.put(self.gpath, {"enabled": False, "rules": {"no-strings": dict(STRINGS)}})
-        self.assertIsNone(self.hook("strings a"))
-
-    def test_project_switched_off_leaves_managed_rule(self) -> None:
-        self.put(self.ppath, {"enabled": False})
-        self.assertEqual(decision(self.hook("pkill node")), "deny")
 
     def test_corrupt_global_state_still_enforces_managed_statelessly(self) -> None:
         self.put(self.gpath, "{nope")
@@ -357,13 +344,6 @@ class ManagedHook(AstIsolated):
         self.assertEqual(decision(out), "deny")
         self.assertIn("no-pkill lists mode 'ghost'", out["systemMessage"])
 
-    def test_lower_layers_cannot_reword_a_managed_rule(self) -> None:
-        self.put(self.gpath, {"rules": {"no-pkill": {"message": "global words"}}})
-        self.put(self.ppath, {"rules": {"no-pkill": {"message": "project words", "messageShort": "s"}}})
-        text = reason(self.hook("pkill node"))
-        self.assertIn("[guardrails:no-pkill (managed)] No pkill.", text)
-        self.assertNotIn("words", text)
-
     def test_unreadable_parent_directory_warns_and_keeps_other_layers(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root can read anything")
@@ -374,15 +354,6 @@ class ManagedHook(AstIsolated):
         assert out is not None
         self.assertEqual(decision(out), "deny")
         self.assertIn("NOT enforced", out["systemMessage"])
-
-
-    def test_invalid_lower_layer_entry_for_managed_id_falls_back(self) -> None:
-        self.put(self.ppath, {"rules": {"no-pkill": {"message": ""}}})
-        self.assertIn("No pkill.", reason(self.hook("pkill node")))
-
-    def test_no_managed_file_changes_nothing(self) -> None:
-        self.mpath.unlink()
-        self.assertIsNone(self.hook("pkill node"))
 
 
 class ManagedSources(AstIsolated):

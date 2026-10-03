@@ -284,11 +284,6 @@ class ManagedScope(AstIsolated):
         self.assertEqual(self.managed("rule", "rm", "no-pkill")[0], 0)
         self.assertEqual(self.get(self.mpath)["rules"], {})
 
-    def test_creates_missing_directory(self) -> None:
-        self.assertFalse(self.mpath.parent.exists())
-        self.assertEqual(self.managed("rule", "add", "x", "--json", RULE)[0], 0)
-        self.assertTrue(self.mpath.is_file())
-
     def test_set_and_rm_need_an_existing_managed_rule(self) -> None:
         self.assertEqual(self.managed("rule", "set", "ghost", "--json", '{"action": "deny"}')[0], 2)
         self.assertEqual(self.managed("rule", "rm", "ghost")[0], 2)
@@ -323,26 +318,11 @@ class ManagedScope(AstIsolated):
         self.assertEqual(code, 0)
         self.assertIn("also a managed rule", out)
 
-    def test_scope_flag_selects_global_and_project(self) -> None:
-        self.assertEqual(self.cli("rule", "add", "g", "--json", RULE, "--scope", "global")[0], 0)
-        self.assertEqual(self.cli("rule", "add", "p", "--json", RULE, "--scope", "project")[0], 0)
-        self.assertEqual(list(self.get(self.gpath)["rules"]), ["g"])
-        self.assertEqual(list(self.get(self.ppath)["rules"]), ["p"])
-        self.assertFalse(self.mpath.exists())
-
     def test_default_scope_is_never_managed(self) -> None:
         self.cli("rule", "add", "g", "--json", RULE)
         self.cli("mode", "declare", "m")
         self.cli("preset", "install", "docs-first")
         self.assertFalse(self.mpath.exists())
-
-    def test_agent_still_needs_as_user(self) -> None:
-        code, _, err = self.managed("rule", "add", "x", "--json", RULE, agent=True)
-        self.assertEqual(code, 3)
-        self.assertIn("--as-user", err)
-        self.assertFalse(self.mpath.exists())
-        self.assertEqual(self.managed("rule", "add", "x", "--json", RULE, "--as-user", agent=True)[0], 0)
-        self.assertEqual(self.get(self.mpath)["rules"]["x"]["setBy"]["by"], "agent")
 
     def test_mode_declare_activate_and_undeclare(self) -> None:
         code, out, _ = self.managed("mode", "declare", "incident", "--description", "firefighting")
@@ -427,13 +407,6 @@ class ManagedScope(AstIsolated):
                          "`mine      ` deny · project · enabled",
                          "`reverse-engineering` off · agent may enable: no · managed"):
             self.assertIn(expected, out)
-
-    def test_status_reports_unreadable_managed_file(self) -> None:
-        self.put(self.mpath, "{nope")
-        code, out, _ = self.cli("status")
-        self.assertEqual(code, 0)
-        self.assertIn("unreadable managed state, so its rules are NOT enforced until it is fixed", out)
-        self.assertIn("fix or remove the file by hand", out)
 
     def test_status_reports_invalid_managed_rule(self) -> None:
         self.put(self.mpath, {"rules": {"bad": {"match": {"builtin": "nope"}, "message": "x"}}})

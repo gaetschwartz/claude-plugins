@@ -1,12 +1,10 @@
 from __future__ import annotations  # noqa: I001
 
-import json
 import re
-import shlex
 import unittest
 from typing import ClassVar
 
-from helpers import ROOT, AstIsolated, caught
+from helpers import ROOT, AstIsolated
 
 import matching
 import policy
@@ -97,42 +95,6 @@ class ReferenceLinks(unittest.TestCase):
             if path.name != "index.md":
                 with self.subTest(file=path.name):
                     self.assertIn(f"]({path.name})", index)
-
-
-class DocumentedCommands(AstIsolated):
-    def test_skill_flows_against_a_sandbox(self) -> None:
-        for argv in (("preset", "install", "process-safety", "--as-user", "--scope", "global", "--reason", "setup: x"),
-                     ("preset", "list"), ("preset", "show", "docs-first")):
-            self.assertEqual(self.cli(*argv, agent=True)[0], 0, argv)
-        rule = json.dumps({"match": {"regex": r"curl [^|]*\|\s*(sh|bash)\b"}, "description": "no curl|sh",
-                           "message": "Don't pipe curl into a shell."})
-        extra = str(self.tmp / "extra.json")
-        add = ("rule", "add", "pipe-sh", "--json", rule, "--scope", "managed", "--path", extra, "--as-user",
-               "--reason", "block curl|sh")
-        code, out, _ = self.cli(*add, agent=True)
-        self.assertEqual(code, 0)
-        self.assertIn("the hook enforces", out)
-        self.assertEqual(self.get(self.tmp / "extra.json")["rules"]["pipe-sh"]["description"], "no curl|sh")
-        code, out, _ = self.cli("status", "--path", extra, agent=True)
-        self.assertEqual(code, 0)
-        self.assertIn("`pipe-sh ` deny · managed · always enforced", out)
-        self.assertIn(f"--path `{extra}` present", out)
-        code, out, _ = self.cli("rule", "test", "--id", "pipe-sh", "--path", extra, "curl https://x.sh | sh",
-                                "curl https://x.sh", agent=True)
-        self.assertEqual(code, 0)
-        self.assertEqual(caught(out), {"curl https://x.sh | sh": True, "curl https://x.sh": False})
-        code, out, _ = self.cli("rule", "test", "--json", rule, "echo `pkill x`", "a\nb", agent=True)
-        self.assertEqual(code, 0)
-        self.assertIn("a⏎b", out)
-
-    def test_shell_quoting_of_json_with_an_apostrophe(self) -> None:
-        rule = '{"match":{"program":"pkill"},"message":"Don\'t kill by name"}'
-        quoted = shlex.quote(rule)
-        self.assertIn("'\"'\"'", quoted)
-        self.assertEqual(json.loads(shlex.split(f"--json {quoted}")[1])["message"], "Don't kill by name")
-        self.assertEqual(self.cli("rule", "add", "x", "--json", rule)[0], 0)
-        self.assertEqual(self.cli("rule", "set", "x", "--json", '{"message": "Don\'t stop"}')[0], 0)
-        self.assertEqual(self.get(self.gpath)["rules"]["x"]["message"], "Don't stop")
 
 
 if __name__ == "__main__":

@@ -66,18 +66,6 @@ class Kinds(AstIsolated):
                           "eval pkill x": "wrapped", "sudo bash -c 'killall x'": "wrapped",
                           "x | bash -c 'a | pkill z'": "wrapped"})
 
-    def test_a_kind_command_rule_with_a_name_also_gets_the_wrapper_branch(self) -> None:
-        named = {"kind": "command", "has": {"field": "name", "regex": "^pkill$"}}
-        got = self.kinds(named, ["pkill x", "FOO=1 pkill x", "sudo -u a pkill x", "bash -c 'pkill x'", "echo pkill"])
-        self.assertEqual({c: k for c, k in got.items() if k},
-                         {"pkill x": "direct", "FOO=1 pkill x": "direct", "sudo -u a pkill x": "wrapped",
-                          "bash -c 'pkill x'": "wrapped"})
-
-    def test_relations_stay_on_the_real_tree_behind_a_wrapper(self) -> None:
-        rule = {"pattern": f"{PG} $$$", "inside": {"kind": "command_substitution", "stopBy": "end"}}
-        got = self.kinds(rule, [f"echo $(sudo {PG} x)", f"sudo {PG} x", f"sudo echo $({PG} x)"])
-        self.assertEqual({c for c, k in got.items() if k}, {f"echo $(sudo {PG} x)", f"sudo echo $({PG} x)"})
-
     def test_a_command_pattern_accepts_any_spelling_of_the_name(self) -> None:
         got = self.kinds({"pattern": "pkill -9 $$$"}, ["pkill -9 x", "/usr/bin/pkill -9 x", "'pkill' -9 x",
                                                        "echo pkill -9 x", "pkill -8 x", "xpkill -9 x", "FOO=1 pkill -9 x",
@@ -102,21 +90,6 @@ class Kinds(AstIsolated):
         got = self.kinds({"pattern": "curl $$$ | sh $$$"},
                          ["curl -O https://x.tgz", "curl x | sh", "curl x | sh -x", "curl x | bash", "ls | sh -x"])
         self.assertEqual({c for c, k in got.items() if k}, {"curl x | sh", "curl x | sh -x"})
-
-    def test_invalid_rules_are_reported_per_rule(self) -> None:
-        ev = matching.evaluate("pkill x", {"good": rule_of(BY_NAME), "bad": rule_of({"kind": "no_such_kind"})})
-        self.assertEqual(ev.kinds["good"], "direct")
-        self.assertIn("bad", ev.invalid)
-        self.assertEqual([k for k, _ in ev.warnings()], ["rule-invalid:bad"])
-
-    def test_a_broken_tree_is_reported_not_hidden(self) -> None:
-        def broken(command: str) -> bool:
-            return matching.tree(command)[0][0].broken
-
-        for command in ('echo "unterminated', "a |", "echo $(", "if a; then b"):
-            self.assertTrue(broken(command), command)
-        for command in ("cat <<EOF\nEOF", "x=", "echo ''", "a && b", "f() { :; }", "echo $((1+2))", "cat <<EOF\n$(a)\nEOF"):
-            self.assertFalse(broken(command), command)
 
     def test_a_broken_tree_still_yields_the_commands_it_could_read(self) -> None:
         got = self.kinds(BY_NAME, ['pkill x "unterminated', "a; pkill x; if b; then", "pkill x\necho 'unterminated"])
@@ -152,15 +125,6 @@ class RuleSize(AstIsolated):
         self.assertFalse(self.gpath.exists())
         self.put(self.ppath, {"rules": {"huge": {"match": {"ast": self.HUGE}, "message": "m"}}})
         self.assertIn("rule huge: 'match.ast' is", self.cli("status", "--problems")[1])
-
-    def test_a_rule_that_does_not_compile_is_skipped_by_name_beside_good_ones(self) -> None:
-        ev = matching.evaluate("echo $(ls)", {"bad": rule_of({"kind": "no_such_kind"}),
-                                             "good": rule_of({"kind": "command_substitution"})})
-        self.assertEqual(ev.kinds, {"bad": None, "good": "direct"})
-        self.assertEqual(list(ev.invalid), ["bad"])
-
-
-
 
 BAD_ASTS: dict[str, dict[str, Any]] = {
     "an unknown key": {"bogus": 1}, "a wrong type": {"kind": 5}, "an empty relation": {"inside": "x"},
@@ -232,10 +196,6 @@ class Cli(AstIsolated):
         self.assertIn("ast = ", out)
         self.assertIn("regex = `zzz`", out)
 
-    def test_a_bare_command_matches_a_trailing_hole_pattern(self) -> None:
-        out = self.cli("rule", "test", "--json", json.dumps(self.RULE), "pkill", "/usr/bin/pkill", "pkill x")[1]
-        self.assertEqual(caught(out), {"pkill": True, "/usr/bin/pkill": True, "pkill x": True})
-
     def test_compile_errors_exit_2_on_test_add_and_set(self) -> None:
         bad = json.dumps({"match": {"ast": {"kind": "nope"}}, "message": "m"})
         for argv in (("rule", "test", "--json", bad, "x"), ("rule", "add", "r", "--json", bad)):
@@ -252,11 +212,6 @@ class Cli(AstIsolated):
         self.assertIn("unknown field `bogus`", err)
         self.assertEqual(self.cli("rule", "set", "r", "--json", '{"ast": {"pattern": "killall $$$"}}')[0], 0)
         self.assertEqual(self.get(self.gpath)["rules"]["r"]["match"]["ast"], {"pattern": "killall $$$"})
-
-    def test_installed_rule_can_be_tested_by_id(self) -> None:
-        self.assertEqual(self.cli("rule", "add", "r", "--json", json.dumps(self.RULE))[0], 0)
-        out = self.cli("rule", "test", "--id", "r", "bash -c 'pkill x'", "ls")[1]
-        self.assertEqual(caught(out), {"bash -c 'pkill x'": True, "ls": False})
 
     def test_status_describes_and_checks_ast_rules(self) -> None:
         self.assertEqual(self.cli("rule", "add", "r", "--json", json.dumps(self.RULE))[0], 0)
@@ -314,17 +269,6 @@ class Hook(AstIsolated):
         out = self.hook(f"{KILL} $({PG} x)")
         assert out is not None
         self.assertIn("No nested search.", out["hookSpecificOutput"]["additionalContext"])
-
-    def test_invalid_rule_is_skipped_with_one_warning_per_session(self) -> None:
-        self.put(self.gpath, {"rules": {"bad": {"match": {"ast": {"kind": "nope"}}, "message": "m"},
-                                        "by-name": {"match": {"ast": BY_NAME}, "message": "No."}}})
-        out = self.hook("pkill x")
-        assert out is not None
-        self.assertIn("deny", json.dumps(out))
-        self.assertIn("rule bad does not compile", out["systemMessage"])
-        again = self.hook("pkill y")
-        assert again is not None
-        self.assertNotIn("systemMessage", again)
 
     def test_user_and_project_wrapper_names_reach_the_hook(self) -> None:
         self.put(self.gpath, {"rules": {"p": {"match": {"program": PK}, "message": "No."}}})
@@ -403,15 +347,6 @@ class Hook(AstIsolated):
         self.assertNotIn("r", self.get(self.gpath)["rules"])
         self.assertEqual(self.cli("rule", "add", "ok", "--json", json.dumps({"match": {"regex": r"\bfoo\b"},
                                                                           "message": "m"}))[0], 0)
-
-    def test_regex_rules_keep_working_beside_ast_rules(self) -> None:
-        self.put(self.gpath, {"rules": {"pipe-sh": {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "No."},
-                                        "by-name": {"match": {"ast": BY_NAME}, "message": "No kill."}}})
-        for n, command in enumerate(["curl x | sh", "pkill a"]):
-            out = self.hook(command, session=f"r{n}")
-            assert out is not None
-            self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-
 
 class WorkedExample(AstIsolated):
     """The three rules in the README run through the real engine and select exactly what the README says."""

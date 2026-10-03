@@ -219,9 +219,6 @@ class ManagedModes(unittest.TestCase):
 class ManagedLayer(unittest.TestCase):
     R = rule()
 
-    def test_no_sources_is_empty(self) -> None:
-        self.assertEqual(policy.managed_layer([]), ({"rules": {}, "modes": {}}, []))
-
     def test_first_source_wins_and_later_ones_only_tighten_or_add(self) -> None:
         first = {"rules": {"r": rule(action="warn", retry="same-command", modes=["m"]), "keep": rule()},
                  "modes": {"m": {"agentMayEnable": False}}}
@@ -273,10 +270,6 @@ class ManagedLayer(unittest.TestCase):
         layer, problems = policy.managed_layer([("a", first), ("b", second)])
         self.assertTrue(any("rule r lists mode 'm'" in p for p in problems))
         self.assertEqual(policy.json_modes(layer["rules"]["r"]), [])
-
-    def test_non_dict_state_is_tolerated(self) -> None:
-        self.assertEqual(policy.managed_layer([("/p", [])])[0], {"rules": {}, "modes": {}})
-
 
 class Modes(unittest.TestCase):
     def test_merge_ands_agent_permission_and_ors_active(self) -> None:

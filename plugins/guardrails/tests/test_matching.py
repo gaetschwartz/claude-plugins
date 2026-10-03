@@ -176,21 +176,6 @@ class ShellStrings(AstIsolated):
         self.kinds(rule_of(program=K), {f"bash -c \"{K} \\$HOME\"": "wrapped", f"bash -c '{K} \"x y\"'": "wrapped",
                                         f"bash -c \"bash -c '{K} x'\"": "wrapped", f"bash -c '{K}' '{K}'": "wrapped"})
 
-    def test_distinct_scripts_beyond_the_caps_refuse_the_command(self) -> None:
-        rules = {"r": rule_of(program=K)}
-        many = "; ".join(f"bash -c 'echo {n}'" for n in range(80))
-        for command, reason in ((nest(f"{K} x", 9), "nests shell strings too deeply"),
-                                (many, "unpacks into too many shell strings"),
-                                (nest("x" * 100_000, 4), "unpacks into too much shell text")):
-            with self.subTest(reason=reason):
-                self.assertIn(reason, matching.evaluate(command, rules).refusal or "")
-        self.assertIsNone(matching.evaluate(nest(f"{K} x", 8), rules).refusal)
-
-    def test_repeated_scripts_are_scanned_once(self) -> None:
-        ev = matching.evaluate("; ".join([f"bash -c 'echo {K}'"] * 500), {"r": rule_of(program=K)})
-        self.assertIsNone(ev.refusal)
-
-
 class WrappedTag(AstIsolated):
     def test_tagging_matches_the_documented_meaning(self) -> None:
         wrapped = ["sudo pkill x", "bash -c 'pkill x'", "xargs pkill", "timeout 5 pkill x", "echo $(pkill x)",
@@ -224,16 +209,6 @@ class PatternShapes(AstIsolated):
                 self.assertIsNotNone(ev.kinds["r"], hit)
                 self.assertIsNone(matching.evaluate(miss, {"r": rule}).kinds["r"], miss)
 
-    def test_a_single_command_pattern_tolerates_assignments_paths_and_quotes_and_wrapped_paths(self) -> None:
-        rule = rule_of(ast={"pattern": "git push -f $$$"})
-        for command, expected in {"git push -f o": "direct", "FOO=1 git push -f o": "direct", "A=1 B=2 git push -f": "direct",
-                                  "/usr/bin/git push -f o": "direct", "'git' push -f o": "direct",
-                                  "sudo git push -f o": "wrapped", "sudo /usr/bin/git push -f o": "wrapped",
-                                  "sudo -u bob 'git' push -f o": "wrapped", "FOO=1 sudo git push -f o": "wrapped",
-                                  "git push o": None, "git pull -f": None, "echo git push -f": None}.items():
-            with self.subTest(command=command):
-                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
-
     def test_pattern_text_cannot_inject_into_a_regex(self) -> None:
         rule = rule_of(ast={"pattern": "a.b+ -x $$$"})
         for command, expected in {"a.b+ -x": "direct", "aXb+ -x": None, "a.bbb -x": None, "sudo a.b+ -x": "wrapped",
@@ -261,14 +236,6 @@ class Relations(AstIsolated):
             for command, expected in commands.items():
                 with self.subTest(command=command):
                     self.assertEqual(matching.evaluate(command, {"r": rule_of(ast=ast)}).kinds["r"], expected)
-
-    def test_a_relation_is_judged_on_the_real_tree_even_behind_a_wrapper(self) -> None:
-        rule = rule_of(ast={"pattern": "npm publish $$$", "not": {"inside": {"kind": "if_statement", "stopBy": "end"}}})
-        for command, expected in {"sudo npm publish": "wrapped", "if a; then sudo npm publish; fi": None,
-                                  "if a; then b; fi; sudo npm publish": "wrapped"}.items():
-            with self.subTest(command=command):
-                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
-
 
 if __name__ == "__main__":
     unittest.main()

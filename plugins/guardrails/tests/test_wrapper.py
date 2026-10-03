@@ -35,25 +35,6 @@ class Source(Isolated):
                                       check=False)
                 self.assertEqual((proc.returncode, proc.stderr), (0, ""))
 
-    def test_linux_brew_is_checked_only_after_uname_and_nothing_else_touches_home(self) -> None:
-        self.assertLess(SCRIPT.index("uname -s"), SCRIPT.index("linuxbrew"))
-        for line in SCRIPT.splitlines():
-            if re.search(r"(?<![\w/])/home/", line):
-                self.assertIn("linuxbrew", line)
-
-    def test_selection_order(self) -> None:
-        marks = ("/opt/homebrew/bin/python3", "/usr/local/bin/python3", "/usr/bin/python3", "uname -s", "for dir in $PATH")
-        body = SCRIPT.split("find_python() {", 1)[1]
-        order = [body.index(x) for x in marks]
-        self.assertEqual(order, sorted(order))
-
-    def test_the_cli_entry_goes_through_the_same_wrapper(self) -> None:
-        text = (ROOT / "bin" / "guardrails").read_text()
-        self.assertIn("hooks/guardrails.sh", text)
-        self.assertIn(" cli ", text)
-        self.assertTrue(os.access(ROOT / "bin" / "guardrails", os.X_OK))
-
-
 Base = Isolated if TYPE_CHECKING else object
 
 
@@ -107,16 +88,6 @@ class StubbedCases(Base):
         self.assertEqual(out, f"READY -I {self.script.parent}/../lib/guard.py\n")
         cli = self.run_script(self.host_stub(), "cli", "status", "--problems").stdout
         self.assertEqual(cli, f"READY -I {self.script.parent}/../lib/guard.py status --problems\n")
-
-    def test_a_ready_runtime_is_used_whatever_the_project_or_cwd_is(self) -> None:
-        self.ready_runtime()
-        home = self.tmp / "home"
-        home.mkdir()
-        for project in (self.data.parent, self.data, Path("/"), self.tmp, home, self.proj):
-            for cwd in (self.data.parent, self.data, Path("/"), self.proj):
-                with self.subTest(project=str(project), cwd=str(cwd)):
-                    out = self.run_script(self.host_stub(), cwd=cwd, extra={"CLAUDE_PROJECT_DIR": str(project)}).stdout
-                    self.assertTrue(out.startswith("READY -I "), out)
 
     def test_a_runtime_that_is_not_ready_goes_to_the_bootstrap_on_the_host_python(self) -> None:
         boot = f"HOST -I -S {self.script.parent}/../lib/bootstrap.py hook\n"

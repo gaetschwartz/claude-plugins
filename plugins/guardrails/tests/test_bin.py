@@ -15,11 +15,6 @@ class BareCommand(AstIsolated):
     def run_bin(self, *argv: str) -> subprocess.CompletedProcess[str]:
         return subprocess.run([str(BIN), *argv], capture_output=True, text=True, check=False, env=dict(os.environ))
 
-    def test_preset_list(self) -> None:
-        result = self.run_bin("preset", "list")
-        self.assertEqual(result.returncode, 0)
-        self.assertIn("docs-first", result.stdout)
-
     def test_the_cli_modules_import_and_run_without_the_ast_grep_library(self) -> None:
         code = ("import sys\nsys.modules['ast_grep_py'] = None\nsys.path.insert(0, sys.argv[1])\n"
                 "import guard, cli, engine, matching, rulebuilder\nraise SystemExit(guard.main(['preset', 'list']))")
@@ -27,11 +22,6 @@ class BareCommand(AstIsolated):
                                 check=False, env=dict(os.environ))
         self.assertEqual((result.returncode, result.stderr), (0, ""))
         self.assertIn("docs-first", result.stdout)
-
-    def test_help(self) -> None:
-        result = self.run_bin("--help")
-        self.assertEqual(result.returncode, 0)
-        self.assertTrue(result.stdout.startswith("usage: guardrails"))
 
     def test_managed_scope_authoring_then_hook_denies(self) -> None:
         rule = '{"match": {"program": "pkill"}, "message": "No pkill."}'

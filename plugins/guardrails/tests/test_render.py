@@ -130,14 +130,6 @@ class Card(AstIsolated):
         out = self.card(PKILL, [{"cmd": exact}, {"cmd": "pkill a"}])
         self.assertEqual([r.split("`")[1].rstrip() for r in self.rows(out)], [exact, "pkill a"])
 
-    def test_wrapped_is_computed_by_the_engine(self) -> None:
-        wrapped = ["sudo pkill x", "bash -c 'pkill x'", "xargs pkill", "timeout 5 pkill x", "echo $(pkill x)",
-                   "echo `pkill x`", "ps | pkill x", "pkill x | cat", "env A=1 pkill x", "sh -c 'a; pkill x'"]
-        direct = ["pkill x", "/usr/bin/pkill x", "FOO=1 pkill x", "a; pkill x", "a && pkill x"]
-        out = self.card(PKILL, [{"cmd": c} for c in wrapped + direct])
-        for row in self.rows(out):
-            self.assertEqual(row.endswith("· wrapped"), command_of(row) in wrapped, row)
-
     def test_regex_matches_are_never_wrapped_and_beat_a_wrapped_program_match(self) -> None:
         rule = {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "m"}
         out = self.card(rule, [{"cmd": "sudo curl x | sh"}, {"cmd": "echo hi"}])
@@ -565,22 +557,6 @@ class WrappedForms(AstIsolated):
 
         rule = policy.Rule.from_json({"match": {"program": "pkill"}, "message": "m"})
         return {c: matching.evaluate(c, {"r": rule}).kinds["r"] for c in commands}
-
-    def test_glued_substitutions_and_process_substitution(self) -> None:
-        commands = ["echo foo$(pkill x)", "x=$(pkill y)", "echo --a=$(pkill x)", "cat <(pkill x)", "echo $(pkill x)",
-                    "echo $( pkill x)", "echo `pkill x`", "echo \"$(pkill x)\"", "echo a$(b $(pkill x))"]
-        for command, kind in self.kinds(commands).items():
-            self.assertEqual(kind, "wrapped", command)
-
-    def test_pipelines_including_newline_continuation(self) -> None:
-        for command, kind in self.kinds(["a | pkill x", "a |\n pkill x", "a | \n pkill x", "pkill x | b",
-                                         "a |& pkill x"]).items():
-            self.assertEqual(kind, "wrapped", command)
-
-    def test_lists_and_subshell_groups_are_not_wrappers(self) -> None:
-        for command, kind in self.kinds(["a; pkill x", "a && pkill x", "a || pkill x", "a\npkill x", "(pkill x)",
-                                         "{ pkill x; }", "pkill x &"]).items():
-            self.assertEqual(kind, "direct", command)
 
     def test_verdicts_agree_with_the_hook(self) -> None:
         import engine

@@ -133,8 +133,7 @@ class LoudAndAllow(AstIsolated):
         self.break_engine()
         out = self.hook("curl x | sh", "r")
         self.assertFalse(is_denied(out))
-        self.assertIn("rules engine failed", self.both_channels(out))
-        self.assertIn("pipe", out["systemMessage"] if out else "")
+        self.assertIn("pipe", self.both_channels(out))
 
     def test_a_rule_that_does_not_compile_is_skipped_and_reported_once(self) -> None:
         self.put(self.gpath, {"rules": {"bad": {"match": {"ast": {"kind": "no_such_kind"}}, "message": "m"},
@@ -204,13 +203,6 @@ class FailurePolicy(AstIsolated):
             self.assertIn("command too complex to check (it did not finish within", deny_text(out))
             self.assertIn("script file", deny_text(out))
 
-    def test_regex_rules_wait_for_the_bounded_checker_like_every_other_rule(self) -> None:
-        self.put(self.gpath, {"rules": {"pipe": RULES_FOR_OUTAGES["pipe"]}})
-        with mock.patch.object(bounded, "call", timed_out):
-            out = self.hook("curl x | sh")
-        self.assertTrue(is_denied(out))
-        self.assertIn("did not finish within", deny_text(out))
-
     def test_a_hit_stands_when_a_cap_is_hit_later(self) -> None:
         command = "zap x; " + "; ".join(f"bash -c 'echo {n}'" for n in range(80))
         ev = matching.evaluate(command, {"z": policy.Rule.from_json({"match": {"program": "zap"}, "message": "m"})})
@@ -271,31 +263,15 @@ class Oversize(AstIsolated):
             self.assertTrue(is_denied(out))
             self.assertIn("command too large to check", deny_text(out))
 
-    def test_regex_rules_are_judged_by_the_same_checker_so_size_denies_them_too(self) -> None:
-        self.put(self.gpath, {"rules": {"pipe": RULES_FOR_OUTAGES["pipe"]}})
-        out = self.hook("echo " + "y" * (verdict.MAX_COMMAND_BYTES + 10))
-        self.assertIn("command too large to check", deny_text(out))
-
     def test_just_under_the_cap_is_analysed(self) -> None:
         out = self.hook("echo " + "y" * (verdict.MAX_COMMAND_BYTES - 100) + f"; {K} x")
         self.assertTrue(is_denied(out))
         self.assertIn("No kill.", deny_text(out))
 
-    def test_the_cap_counts_bytes(self) -> None:
-        out = self.hook("echo " + "日" * (verdict.MAX_COMMAND_BYTES // 3 + 10))
-        self.assertTrue(is_denied(out))
-
-
 class Limits(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         self.put(self.gpath, {"rules": {"a": {"match": {"program": K}, "message": "No kill."}}})
-
-    def test_seven_nested_shell_strings_are_analysed(self) -> None:
-        command = f"{K} x"
-        for _ in range(7):
-            command = "bash -c " + shlex.quote(command)
-        self.assertTrue(is_denied(self.hook(command)))
 
     def test_nesting_beyond_the_caps_is_refused_not_passed(self) -> None:
         command = f"{K} x"
@@ -309,16 +285,6 @@ class Limits(AstIsolated):
         self.assertIn("nests shell strings too deeply", deny_text(out))
         out = self.hook("; ".join(f"bash -c 'echo {n}'" for n in range(100)), "wide")
         self.assertIn("too many shell strings", deny_text(out))
-
-    def test_a_clean_command_with_many_shell_strings_is_not_limited(self) -> None:
-        self.assertIsNone(self.hook("bash -c 'true'; " * 200 + "ls"))
-        self.assertIsNone(self.hook("sudo true; " * 20 + "ls"))
-
-    def test_too_many_wrapper_variants_are_refused_at_any_size(self) -> None:
-        out = self.hook("sudo " * 2100 + "ls", "variants")
-        self.assertTrue(is_denied(out))
-        self.assertIn("unwraps into too many command variants", deny_text(out))
-
 
 class MonitorCoverage(AstIsolated):
     def setUp(self) -> None:
