@@ -246,33 +246,34 @@ class ManagedHook(AstIsolated):
         self.assertEqual(decision(self.hook("pkill node")), "deny")
         self.assertIsNone(self.hook("pkill node"))
 
-    def test_rule_without_modes_ignores_every_mode(self) -> None:
-        self.put(self.gpath, {"modes": {"incident": {"active": True, "agentMayEnable": True}},
-                              "sessions": {"s1": {"seenAt": store.now(), "modes": {"incident": {"by": "user"}}}}})
-        self.put(self.ppath, {"modes": {"incident": {"active": True}}, "rules": {"no-pkill": {"modes": ["incident"]}}})
-        self.assertEqual(decision(self.hook("pkill node")), "deny")
+    def test_modes_suspend_a_managed_rule_only_as_the_managed_file_allows(self) -> None:
+        locked = {"rules": {"no-pkill": {**PKILL, "modes": ["incident"]}},
+                  "modes": {"incident": {"agentMayEnable": False}}}
+        active = {"rules": locked["rules"], "modes": {"incident": {"active": True}}}
 
-    def test_managed_rule_with_modes_is_suspended_by_user_session_mode(self) -> None:
-        self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "modes": ["incident"]}},
-                              "modes": {"incident": {"agentMayEnable": False}}})
-        self.assertIn("from their terminal", reason(self.hook("pkill node")))
-        self.put(self.gpath, {"sessions": {"s1": {"seenAt": store.now(), "modes": {"incident": {"by": "user"}}}}})
-        self.assertIsNone(self.hook("pkill node"))
+        def session(by: str) -> dict[str, Any]:
+            return {"sessions": {"s1": {"seenAt": store.now(), "modes": {"incident": {"by": by, "reason": "x"}}}}}
 
-    def test_agent_cannot_suspend_locked_managed_mode_even_if_lower_layer_allows_it(self) -> None:
-        self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "modes": ["incident"]}},
-                              "modes": {"incident": {"agentMayEnable": False}}})
-        self.put(self.gpath, {"modes": {"incident": {"agentMayEnable": True}},
-                              "sessions": {"s1": {"seenAt": store.now(),
-                                                  "modes": {"incident": {"by": "agent", "reason": "x"}}}}})
-        self.assertEqual(decision(self.hook("pkill node")), "deny")
+        def mode(**fields: Any) -> dict[str, Any]:
+            return {"modes": {"incident": fields}}
 
-    def test_managed_active_mode_suspends_and_cannot_be_switched_off(self) -> None:
-        self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "modes": ["incident"]}},
-                              "modes": {"incident": {"active": True}}})
-        self.put(self.gpath, {"modes": {"incident": {"active": False}}})
-        self.put(self.ppath, {"modes": {"incident": {"active": False}}})
-        self.assertIsNone(self.hook("pkill node"))
+        cases = [
+            ("a rule without modes ignores every mode", {"rules": {"no-pkill": dict(PKILL)}},
+             {**mode(active=True, agentMayEnable=True), **session("user")},
+             {"rules": {"no-pkill": {"modes": ["incident"]}}, **mode(active=True)}, "deny"),
+            ("a user session mode suspends it", locked, session("user"), {}, "allow"),
+            ("an agent cannot use a mode the managed file locks", locked,
+             {**mode(agentMayEnable=True), **session("agent")}, {}, "deny"),
+            ("a managed active mode cannot be switched off", active, mode(active=False), mode(active=False), "allow"),
+            ("a project cannot switch on a managed mode", locked, {}, mode(active=True), "deny"),
+            ("a global activation of a managed mode counts", locked, mode(active=True), {}, "allow"),
+        ]
+        for name, managed, global_state, project, expected in cases:
+            with self.subTest(case=name):
+                self.put(self.mpath, managed)
+                self.put(self.gpath, global_state)
+                self.put(self.ppath, project)
+                self.assertEqual(decision(self.hook("pkill node")), expected)
 
     def test_lower_layer_mode_only_suspends_the_lower_layers_own_rule(self) -> None:
         self.put(self.gpath, {"rules": {"mine": {**PKILL, "modes": ["ops"]}},
@@ -336,18 +337,6 @@ class ManagedHook(AstIsolated):
         self.assertEqual(decision(out), "deny")
         self.assertIn("no-pkill lists mode 'ghost'", out["systemMessage"])
 
-    def test_project_cannot_switch_on_a_managed_mode(self) -> None:
-        self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "modes": ["incident"]}},
-                              "modes": {"incident": {"agentMayEnable": False}}})
-        self.put(self.ppath, {"modes": {"incident": {"active": True}}})
-        self.assertEqual(decision(self.hook("pkill node")), "deny")
-
-    def test_global_activation_of_a_managed_mode_is_the_users_own_and_counts(self) -> None:
-        self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "modes": ["incident"]}},
-                              "modes": {"incident": {"agentMayEnable": False}}})
-        self.put(self.gpath, {"modes": {"incident": {"active": True}}})
-        self.assertIsNone(self.hook("pkill node"))
-
     def test_lower_layers_cannot_reword_a_managed_rule(self) -> None:
         self.put(self.gpath, {"rules": {"no-pkill": {"message": "global words"}}})
         self.put(self.ppath, {"rules": {"no-pkill": {"message": "project words", "messageShort": "s"}}})
@@ -381,37 +370,31 @@ class ManagedSources(AstIsolated):
         super().setUp()
         self.put(self.dpath, {"rules": {"no-pkill": dict(PKILL)}})
 
-    def test_default_rules_apply_without_an_override(self) -> None:
+    def test_the_platform_default_is_enforced_whatever_the_override_holds(self) -> None:
+        loosening = {"rules": {"no-pkill": {**PKILL, "message": "Allowed.", "action": "warn",
+                                            "retry": "same-command", "enabled": False}}}
+        for name, state in (("absent", None), ("empty", {}), ("loosening", loosening), ("unreadable", "{nope")):
+            with self.subTest(override=name):
+                if state is not None:
+                    self.put(self.mpath, state)
+                for _ in range(2):
+                    out = self.hook("pkill node", session=name)
+                    self.assertEqual(decision(out), "deny")
+                    self.assertIn("No pkill.", reason(out))
+                self.mpath.unlink(missing_ok=True)
         del os.environ["GUARDRAILS_MANAGED_PATH"]
         self.assertEqual(decision(self.hook("pkill node")), "deny")
 
-    def test_override_pointing_nowhere_leaves_the_default_enforced(self) -> None:
-        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.tmp / "nowhere" / "x.json")
-        self.assertEqual(decision(self.hook("pkill node")), "deny")
-
-    def test_empty_override_file_leaves_the_default_enforced(self) -> None:
-        self.put(self.mpath, {})
-        self.assertEqual(decision(self.hook("pkill node")), "deny")
-
-    def test_override_cannot_loosen_or_reword_a_default_rule(self) -> None:
-        self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "message": "Allowed.", "action": "warn",
-                                                     "retry": "same-command", "enabled": False}}})
-        for _ in range(2):
-            out = self.hook("pkill node")
-            self.assertEqual(decision(out), "deny")
-            self.assertIn("No pkill.", reason(out))
+    def test_an_unreadable_override_is_reported(self) -> None:
+        self.put(self.mpath, "{nope")
+        out = self.hook("pkill node")
+        assert out is not None
+        self.assertIn("NOT enforced", out["systemMessage"])
 
     def test_override_adds_rules(self) -> None:
         self.put(self.mpath, {"rules": {"no-strings": dict(STRINGS)}})
         self.assertEqual(decision(self.hook("strings a")), "deny")
         self.assertEqual(decision(self.hook("pkill a")), "deny")
-
-    def test_unreadable_override_still_enforces_the_default(self) -> None:
-        self.put(self.mpath, "{nope")
-        out = self.hook("pkill node")
-        assert out is not None
-        self.assertEqual(decision(out), "deny")
-        self.assertIn("NOT enforced", out["systemMessage"])
 
 
 class EndToEnd(AstIsolated):

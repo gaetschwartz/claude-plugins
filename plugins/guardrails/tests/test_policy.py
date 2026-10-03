@@ -4,9 +4,8 @@ import os
 import unittest
 from typing import Any, ClassVar
 
-from helpers import AstIsolated, Isolated
+from helpers import Isolated
 
-import matching
 import policy
 
 
@@ -14,10 +13,6 @@ def rule(**overrides: Any) -> dict[str, Any]:
     base: dict[str, Any] = {"match": {"program": "strings"}, "message": "use docs"}
     base.update(overrides)
     return base
-
-
-def matches(r: dict[str, Any], command: str) -> bool:
-    return matching.evaluate(command, {"r": policy.with_defaults(r)}).kinds["r"] is not None
 
 
 class Validate(unittest.TestCase):
@@ -75,11 +70,6 @@ class Layering(unittest.TestCase):
         eff = policy.effective_rules({}, g, {"rules": {"r": {"message": "m2", "match": {"program": "nm"}}}})["r"]
         self.assertEqual((eff["message"], eff["match"]), ("m2", {"program": "strings"}))
 
-    def test_project_match_override_ignored(self) -> None:
-        g = {"rules": {"r": rule()}}
-        eff = policy.effective_rules({}, g, {"rules": {"r": {"match": {"program": "nm"}}}})["r"]
-        self.assertEqual(eff["match"], {"program": "strings"})
-
     def test_project_requires_override_ignored(self) -> None:
         g = {"rules": {"r": rule(requires=["rg"])}}
         eff = policy.effective_rules({}, g, {"rules": {"r": {"requires": ["fd"]}}})["r"]
@@ -112,18 +102,6 @@ class ManagedLayering(unittest.TestCase):
 
     def eff(self, g: Any = None, p: Any = None) -> dict[str, Any]:
         return policy.effective_rules(self.MANAGED, g or {}, p or {})["r"]
-
-    def test_lower_layers_cannot_loosen(self) -> None:
-        loosening = {"action": "warn", "retry": "same-command", "enabled": False, "modes": ["re", "extra"],
-                     "match": {"program": "nm"}, "requires": ["fd"]}
-        for layer in ("global", "project", "both"):
-            with self.subTest(layer=layer):
-                g = {"rules": {"r": dict(loosening)}} if layer in ("global", "both") else {}
-                p = {"rules": {"r": dict(loosening)}} if layer in ("project", "both") else {}
-                eff = self.eff(g, p)
-                self.assertEqual((eff["action"], eff["retry"], eff["enabled"], eff["modes"]),
-                                 ("deny", "none", True, ["re"]))
-                self.assertEqual((eff["match"], eff["requires"]), ({"program": "strings"}, ["rg"]))
 
     def test_each_loosening_is_ignored_on_its_own(self) -> None:
         for field, value in (("action", "warn"), ("retry", "same-command"), ("enabled", False),
@@ -329,44 +307,6 @@ class Modes(unittest.TestCase):
     def test_malformed_session_ignored(self) -> None:
         modes = {"re": {"description": "", "agentMayEnable": True, "active": False}}
         self.assertEqual(policy.active_modes(modes, {"modes": "junk"}), {})
-
-
-class Matching(AstIsolated):
-    def test_program(self) -> None:
-        r = rule()
-        for c in ["strings /bin/ls", "sudo strings x | head", "/usr/bin/strings a", "bash -c 'strings a'",
-                  "x=$(strings a)", "cd /tmp && strings a", "command -v strings"]:
-            with self.subTest(command=c):
-                self.assertTrue(matches(r, c))
-        for c in ["grep strings file", "echo strings", "man strings", "which strings",
-                  "cat <<'EOF' > notes.md\nstrings are fun\nEOF", "rg strings"]:
-            with self.subTest(command=c):
-                self.assertFalse(matches(r, c))
-
-    def test_program_list_and_args(self) -> None:
-        r = rule(match={"program": ["kill"], "args": r"(^|\s)-(9|KILL)(\s|$)"})
-        self.assertTrue(matches(r, "kill -9 123"))
-        self.assertFalse(matches(r, "kill 123"))
-        self.assertFalse(matches(r, "echo kill -9"))
-
-    def test_regex_on_raw_text(self) -> None:
-        r = rule(match={"regex": r"git\s+push\s+--force"})
-        self.assertTrue(matches(r, "git push --force origin"))
-        self.assertFalse(matches(r, "git push origin"))
-
-    def test_builtin_grep_recursive(self) -> None:
-        r = rule(match={"builtin": "grep-recursive"})
-        for c in ["grep -rn foo .", "ps | grep -R x", "grep -d recurse x .", "egrep -r x ."]:
-            with self.subTest(command=c):
-                self.assertTrue(matches(r, c))
-        for c in ["grep -e r file", "grep foo file", "git grep -r foo"]:
-            with self.subTest(command=c):
-                self.assertFalse(matches(r, c))
-
-    def test_unbalanced_quotes_are_not_commands_but_a_complete_command_before_them_is(self) -> None:
-        self.assertFalse(matches(rule(), "echo 'x; strings /bin/ls"))
-        self.assertTrue(matches(rule(), "strings /bin/ls; echo 'x"))
-        self.assertTrue(matches(rule(match={"program": "kill", "args": "-9"}), "kill -9 1 \"x"))
 
 
 class Rendering(Isolated):

@@ -48,6 +48,10 @@ class Matching(AstIsolated):
                                         f"P={K}; $P x": None, f"alias k={K}; k x": None, f"bash -c $'{K} x'": None,
                                         f"eval $'{K} x'": None})
 
+    def test_unbalanced_quotes_are_not_commands_but_a_complete_command_before_them_is(self) -> None:
+        self.kinds(rule_of(program=K), {f"echo 'x; {K} y": None, f"{K} y; echo 'x": "direct"})
+        self.kinds(rule_of(program="kill", args="-9"), {"kill -9 1 \"x": "direct"})
+
     def test_names_with_regex_characters_are_matched_literally(self) -> None:
         for name in ("g++", "a.b", "x-y", "a^b", "x,y", "é"):
             with self.subTest(name=name):

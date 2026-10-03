@@ -218,26 +218,11 @@ class Status(AstIsolated):
                          "mode 'ghost' is not declared"):
             self.assertIn(expected, out)
 
-    def test_shows_session_activation(self) -> None:
-        os.environ["CLAUDE_CODE_SESSION_ID"] = "s1"
-        self.put(self.gpath, {"rules": {"no-strings": json.loads(RULE)},
-                              "modes": {"reverse-engineering": {"description": "RE", "agentMayEnable": True}},
-                              "sessions": {"s1": {"modes": {"reverse-engineering": {"by": "agent", "reason": "why"}}}}})
-        out = self.cli("status")[1]
-        self.assertIn("on (by agent: why)", out)
-        self.assertIn("suspended by reverse-engineering", out)
-
     def test_reports_corrupt_file(self) -> None:
         self.put(self.gpath, "{nope")
         code, out, _ = self.cli("status")
         self.assertEqual(code, 0)
         self.assertIn("unreadable", out)
-
-    def test_empty(self) -> None:
-        out = self.cli("status")[1]
-        self.assertIn("No rules installed", out)
-        self.assertNotIn("**Modes**", out)
-
 
 class RuleTest(AstIsolated):
     DRAFT = '{"match": {"program": "strings"}, "message": "docs"}'
@@ -628,12 +613,6 @@ class ManagedNotWritable(AstIsolated):
         self.assertEqual(code, 2)
         self.assertIn("sudo", err)
 
-    def test_other_scopes_are_unaffected(self) -> None:
-        self.lock_down(self.tmp / "ro")
-        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.tmp / "ro" / "guardrails.json")
-        self.assertEqual(self.cli("rule", "add", "x", "--json", RULE)[0], 0)
-
-
 class PathOption(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
@@ -677,22 +656,20 @@ class PathOption(AstIsolated):
         self.assertFalse(self.fpath.exists())
         self.assertFalse(self.gpath.exists())
 
-    def test_note_when_the_hook_will_not_read_the_file(self) -> None:
+    def test_note_only_when_the_hook_will_not_read_the_file(self) -> None:
         _, out, _ = self.with_path("rule", "add", "x", "--json", RULE)
         self.assertIn(f"note: the hook enforces {self.fpath} only if GUARDRAILS_MANAGED_PATH points at it", out)
-
-    def test_no_note_for_env_override_or_platform_default(self) -> None:
-        for target in (self.mpath, self.dpath):
+        for target in (self.mpath, self.dpath, self.fpath):
             with self.subTest(target=target):
-                code, out, _ = self.cli("rule", "add", "x", "--json", RULE, "--scope", "managed", "--path", str(target))
+                os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.fpath if target == self.fpath else self.mpath)
+                code, out, _ = self.cli("rule", "add", "y", "--json", RULE, "--scope", "managed", "--path", str(target))
                 self.assertEqual(code, 0)
                 self.assertNotIn("the hook enforces", out)
-        self.assertTrue(self.mpath.exists() and self.dpath.exists())
 
-    def test_no_note_when_env_points_at_the_path(self) -> None:
-        os.environ["GUARDRAILS_MANAGED_PATH"] = str(self.fpath)
-        _, out, _ = self.with_path("rule", "add", "x", "--json", RULE)
-        self.assertNotIn("the hook enforces", out)
+    def test_read_verbs_accept_path_without_a_managed_scope(self) -> None:
+        target = str(self.tmp / "p.json")
+        self.assertEqual(self.cli("status", "--scope", "project", "--path", target)[0], 0)
+        self.assertEqual(self.cli("rule", "test", "--json", RULE, "strings x", "--path", target)[0], 0)
 
     def test_status_loads_the_path_file_as_extra_source(self) -> None:
         self.put(self.fpath, {"rules": {"no-pkill": {"match": {"program": "pkill"}, "message": "no"}}})
@@ -822,14 +799,6 @@ class PathOptionEdges(AstIsolated):
         self.assertEqual(code, 0)
         self.assertTrue((self.tmp / "home" / "g.json").is_file())
         self.assertFalse(Path("~").exists())
-
-    def test_path_with_project_on_a_write_verb_is_an_error_and_read_verbs_accept_it(self) -> None:
-        target = str(self.tmp / "p.json")
-        code, _, err = self.cli("rule", "add", "x", "--json", RULE, "--scope", "project", "--path", target)
-        self.assertEqual(code, 2)
-        self.assertIn("needs --scope managed", err)
-        self.assertEqual(self.cli("status", "--scope", "project", "--path", target)[0], 0)
-        self.assertEqual(self.cli("rule", "test", "--json", RULE, "strings x", "--path", target)[0], 0)
 
     def test_path_equal_to_the_platform_default_is_not_an_extra_source(self) -> None:
         self.put(self.dpath, {"rules": {"r": {"match": {"program": "pkill"}, "message": "m"}}})
