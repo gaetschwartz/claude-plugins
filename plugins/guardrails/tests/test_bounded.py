@@ -148,12 +148,38 @@ class Crashes(AstIsolated):
         for banned in ("claude plugin disable", "guardrails disable"):
             self.assertNotIn(banned, text)
 
-    def test_a_probe_that_does_not_answer_counts_as_broken_too(self) -> None:
-        with self.sequence(bounded.Result(bounded.Outcome.CRASHED), bounded.Result(bounded.Outcome.TIMEOUT)):
+    def test_a_probe_that_does_not_answer_is_retried_once_and_the_second_answer_decides(self) -> None:
+        crash, slow = bounded.Result(bounded.Outcome.CRASHED), bounded.Result(bounded.Outcome.TIMEOUT)
+        with self.sequence(crash, slow, bounded.Result(bounded.Outcome.DONE, True)):
             out = self.hook("ls")
+        assert out is not None
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.reported.assert_not_called()
+        with self.sequence(crash, slow, bounded.Result(bounded.Outcome.DONE, False)):
+            out = self.hook("ls", session="s2")
         assert out is not None
         self.assertIn("crashes even on a trivial command", out["systemMessage"])
         self.reported.assert_called_once()
+
+    def test_a_library_that_never_answers_the_probe_is_unverified_not_broken(self) -> None:
+        crash, slow = bounded.Result(bounded.Outcome.CRASHED), bounded.Result(bounded.Outcome.TIMEOUT)
+        with self.sequence(crash, slow, slow) as call:
+            out = self.hook("ls")
+        assert out is not None
+        self.assertEqual(call.call_count, 3)
+        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
+        self.assertIn("could not verify the matcher (timed out)", out["systemMessage"])
+        self.assertNotIn("rebuilt", out["systemMessage"])
+        self.reported.assert_not_called()
+
+    def test_the_probes_never_run_past_the_hooks_own_time_budget(self) -> None:
+        with self.sequence(bounded.Result(bounded.Outcome.CRASHED)) as call, \
+                mock.patch.object(matching, "HOOK_SECONDS", matching.HEADROOM_SECONDS + 0.2):
+            out = self.hook("ls")
+        assert out is not None
+        self.assertEqual(call.call_count, 1)
+        self.assertIn("could not verify the matcher", out["systemMessage"])
+        self.reported.assert_not_called()
 
     def test_a_real_abort_in_the_library_is_classified_end_to_end(self) -> None:
         import sys

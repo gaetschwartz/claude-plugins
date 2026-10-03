@@ -235,6 +235,55 @@ class Ready(Pinned):
         self.assertEqual(bootstrap.diagnose(self.data).state, "ready")
         self.assertNotEqual((self.rt / "marker.json").stat().st_mtime_ns, before)
 
+    def test_a_rebuild_swaps_in_a_fresh_build_and_only_then_removes_the_old_one(self) -> None:
+        self.install_fake()
+        old = self.rt.resolve()
+        bootstrap.mark_broken(self.data)
+        seen: list[bool] = []
+        real = bootstrap.build
+
+        def watching(rt: Path, *args: Any) -> None:
+            seen.append(old.is_dir() and (old / "marker.json").exists())
+            real(rt, *args)
+
+        with mock.patch.object(bootstrap, "build", watching):
+            self.assertEqual(self.ensure().state, "installed")
+        self.assertEqual(seen, [True])
+        self.assertNotEqual(self.rt.resolve(), old)
+        self.assertFalse(old.exists())
+        self.assertIsNone(bootstrap.marker_problem(self.rt, self.pins))
+        self.assertEqual([p.name for p in self.rt.parent.iterdir() if p.is_dir() and not p.is_symlink()],
+                         [self.rt.resolve().name])
+
+    def test_a_failed_rebuild_leaves_the_runtime_in_place_and_no_build_behind(self) -> None:
+        self.install_fake()
+        old = self.rt.resolve()
+        bootstrap.mark_broken(self.data)
+        (self.data / "fail-pip").write_text("boom: no network\n")
+        self.assertEqual(self.ensure(retry_now=True).state, "failed")
+        self.assertEqual(self.rt.resolve(), old)
+        self.assertTrue((old / "marker.json").exists() and (old / "venv" / "bin" / "python").exists())
+        self.assertEqual([p.name for p in self.rt.parent.iterdir() if p.is_dir() and not p.is_symlink()], [old.name])
+
+    def test_a_leftover_build_of_an_interrupted_install_is_removed_by_the_next_one(self) -> None:
+        self.install_fake()
+        leftover = self.rt.parent / "r1-test.leftover"
+        (leftover / "bin").mkdir(parents=True)
+        bootstrap.mark_broken(self.data)
+        self.assertEqual(self.ensure().state, "installed")
+        self.assertFalse(leftover.exists())
+
+    def test_a_runtime_dir_from_before_the_swap_layout_is_replaced_by_the_link(self) -> None:
+        self.install_fake()
+        build = self.rt.resolve()
+        self.rt.unlink()
+        build.rename(self.rt)
+        bootstrap.mark_broken(self.data)
+        self.assertEqual(self.ensure().state, "installed")
+        self.assertTrue(self.rt.is_symlink())
+        self.assertEqual(sorted(p.name for p in self.rt.parent.iterdir() if p.is_dir() and not p.is_symlink()),
+                         [self.rt.resolve().name])
+
     def test_a_symlinked_file_leaving_the_runtime_is_not_trusted(self) -> None:
         self.install_fake()
         link = self.rt / "venv" / "bin" / "python"
@@ -307,10 +356,12 @@ class Install(Pinned):
         self.assertFalse((self.tmp / "pwned").exists())
         lines = self.uv_log().splitlines()
         self.assertEqual(len(lines), 3)
+        build = self.rt.resolve()
+        self.assertEqual((build.parent, build.name.startswith("r1-test.")), (self.rt.parent.resolve(), True))
         for line in lines:
-            self.assertIn(f"cwd={self.rt}", line)
+            self.assertIn(f"cwd={build}", line)
             self.assertIn("PATH=/usr/bin:/bin ", line)
-            self.assertIn(f"CACHE={self.rt}/uv-cache", line)
+            self.assertIn(f"CACHE={build}/uv-cache", line)
             self.assertIn("INDEX=unset PYPATH=unset", line)
         self.assertTrue(all("--no-config" in line for line in lines))
         self.assertTrue(lines[2].endswith(f"-r {ROOT / 'lib' / 'runtime-requirements.txt'}"))
@@ -465,7 +516,9 @@ class Cleanup(Pinned):
         for pins in (self.pins, other, self.pins, other):
             with mock.patch.object(bootstrap, "load_pins", lambda pins=pins: pins):
                 self.assertIn(bootstrap.ensure(self.data).state, ("installed", "ready"))
-        self.assertEqual(sorted(p.name for p in (self.data / "runtime").iterdir() if p.is_dir()), ["r1-test", "r2-other"])
+        runtime = self.data / "runtime"
+        self.assertEqual(sorted(p.name for p in runtime.iterdir() if p.is_symlink()), ["r1-test", "r2-other"])
+        self.assertEqual(sum(p.is_dir() and not p.is_symlink() for p in runtime.iterdir()), 2)
         old = self.data / "runtime" / "r0-ancient"
         old.mkdir()
         long_ago = time.time() - (bootstrap.KEEP_DAYS + 1) * 86400

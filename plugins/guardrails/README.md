@@ -73,9 +73,11 @@ repository), and that rules are NOT enforced meanwhile.
 
 **If guardrails ever blocks everything.** The user can run `claude plugin disable guardrails@<marketplace>` or, from a
 terminal, `guardrails disable` (global hook off; managed rules stay). The hook also fails open, loudly, when its runtime is
-broken: a crash of the library triggers a health probe on a trivial command in a fresh child; if that crashes too, the
-command is allowed with a notice and the runtime is rebuilt in the background; if it passes, only that command is denied
-("this command crashes the parser").
+broken: a crash of the library triggers a health probe on a trivial command in a fresh child; if that crashes or answers
+wrongly too, the command is allowed with a notice and the runtime is rebuilt in the background (into a fresh directory, then
+swapped in; the old one stays until the new one works); if it passes, only that command is denied ("this command crashes the
+parser"); if it does not answer, even on a second, longer try, nothing is rebuilt and the command is allowed with "could not
+verify the matcher (timed out)".
 
 **How an evaluation runs.** Every rule becomes typed ast-grep rules (`lib/rulebuilder.py`); `lib/scanner.py` parses the
 command as written, then its wrapper variants and each shell string, and matches every rule on each; a hit is `wrapped` when

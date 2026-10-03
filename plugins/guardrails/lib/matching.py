@@ -6,7 +6,9 @@ be interrupted and a hook that runs out of time lets the command through.
 
 from __future__ import annotations
 
+import time
 from dataclasses import dataclass, field
+from enum import StrEnum
 from typing import TYPE_CHECKING, assert_never
 
 import bounded
@@ -17,8 +19,11 @@ from verdict import MAX_COMMAND_BYTES, Evaluation, Kind, Limit, Refusal, UnitTre
 if TYPE_CHECKING:
     from ast_grep_py import Config
 
+HOOK_SECONDS = 10.0
+HEADROOM_SECONDS = 2.0
 DEADLINE_SECONDS = 5.0
 PROBE_SECONDS = 3.0
+REPROBE_SECONDS = 6.0
 
 
 class EngineError(Exception):
@@ -35,11 +40,30 @@ class Computed:
     failure: str | None = None
 
 
+class Health(StrEnum):
+    HEALTHY = "healthy"
+    BROKEN = "broken"
+    UNVERIFIED = "unverified"
+
+
 def probe() -> bool:
     """In a fresh child: does the library handle a trivial command?"""
     import scanner
 
     return scanner.self_test() is None
+
+
+def health(started: float) -> Health:
+    """Probe the library after a crash, within what is left of the hook's time. A probe that does not answer is
+    retried once with longer; a library that never answers is unverified, not broken."""
+    for seconds in (PROBE_SECONDS, REPROBE_SECONDS):
+        left = HOOK_SECONDS - HEADROOM_SECONDS - (time.monotonic() - started)
+        if left < 0.5:
+            break
+        result = bounded.call(probe, min(seconds, left))
+        if result.outcome is not bounded.Outcome.TIMEOUT:
+            return Health.HEALTHY if result.payload is True else Health.BROKEN
+    return Health.UNVERIFIED
 
 
 def parseable(command: str) -> str:
@@ -86,10 +110,13 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
         ev.refusal_kind = Refusal.OVERSIZE
         ev.unevaluated = set(rules)
         return ev
+    started = time.monotonic()
+    state = Health.HEALTHY
     try:
         result = bounded.call(lambda: compute(command, rules, names), DEADLINE_SECONDS)
-        if result.outcome is bounded.Outcome.CRASHED and bounded.call(probe, PROBE_SECONDS).payload is not True:
-            ev.runtime_broken = True
+        if result.outcome is bounded.Outcome.CRASHED:
+            state = health(started)
+            ev.runtime_broken = state is Health.BROKEN
     except OSError as exc:
         ev.failure = f"the checker could not be started ({type(exc).__name__})"
     else:
@@ -107,11 +134,18 @@ def evaluate(command: str, rules: dict[str, policy.Rule], wrappers: wrapper_tabl
                 ev.refusal = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "
                               "split it up or write it to a script file and run that")
                 ev.refusal_kind = Refusal.TIMEOUT
-            case bounded.Outcome.CRASHED if ev.runtime_broken:
-                ev.failure = "the ast-grep-py library crashes even on a trivial command; the runtime is being rebuilt"
             case bounded.Outcome.CRASHED:
-                ev.refusal = "this command crashes the parser"
-                ev.refusal_kind = Refusal.CRASH
+                match state:
+                    case Health.HEALTHY:
+                        ev.refusal = "this command crashes the parser"
+                        ev.refusal_kind = Refusal.CRASH
+                    case Health.BROKEN:
+                        ev.failure = ("the ast-grep-py library crashes even on a trivial command; the runtime is being "
+                                      "rebuilt")
+                    case Health.UNVERIFIED:
+                        ev.failure = "could not verify the matcher (timed out)"
+                    case _:
+                        assert_never(state)
             case bounded.Outcome.GARBLED:
                 ev.failure = "the checker answered with something unreadable"
             case _:

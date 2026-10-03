@@ -227,8 +227,10 @@ read, exactly one member unpacked), then runs that uv with a scrubbed environmen
 variables; `PATH=/usr/bin:/bin`; `UV_*` pointing inside the runtime dir; `--no-config`; the runtime dir as cwd): `uv python
 install 3.13`, `uv venv`, `uv pip install --require-hashes --only-binary :all: --no-deps`. A repository's `uv.toml`, `UV_*`,
 `PATH`, `PYTHONPATH` or `pip.conf` never influence what runs. A self-test must import the library and match a pipeline before
-the marker is written. Installs run under a `flock` (released by the OS if the installer dies); an interrupted install has no
-marker and is wiped by the next. Cleanup runs only inside an install, under the lock: temp leftovers, and runtimes of other
+the marker is written. Installs run under a `flock` (released by the OS if the installer dies); an install builds in a fresh
+directory next to `runtime/<id>` (a symlink to the current build), self-tests it, points the link at it with one atomic
+rename and only then removes the old build, so a failed or interrupted install never touches the runtime in use. Cleanup
+runs only inside an install, under the lock: builds nobody points at, and runtimes of other
 pins once they are 30 days old (two plugin versions sharing a data dir never delete each other's runtime; nothing is deleted
 on the hot path).
 
@@ -267,9 +269,12 @@ imported or fails its self-test, rules cannot be evaluated, so the hook allows t
   and `status` / `rule test` show the last failure. Managed deny rules fail open too; the warning and `status --problems`
   name them.
 - **A crash of the library**: the checker runs a health probe on a trivial command in a fresh child. Probe passes: that
-  command crashes the parser and is denied alone ("this command crashes the parser"). Probe fails or hangs: the library is
-  broken, the command is allowed with a loud notice, the runtime is marked broken and rebuilt in the background (same backoff
-  as an install), and the notice repeats every 10 minutes until it is healthy. A checker that cannot even be started (fork
+  command crashes the parser and is denied alone ("this command crashes the parser"). Probe crashes or answers wrongly: the
+  library is broken, the command is allowed with a loud notice, the runtime is marked broken and rebuilt in the background
+  (same backoff as an install; the old build stays in place until the new one is swapped in), and the notice repeats every 10
+  minutes until it is healthy. Probe does not answer in 3 s: it is retried once with a longer deadline (both bounded by the
+  hook's 10 s budget minus 2 s headroom); still silent means the library is unverified, not broken: the command is allowed
+  with "could not verify the matcher (timed out)", the runtime is left alone and no rebuild is started. A checker that cannot even be started (fork
   failure) is a loud allow that leaves the runtime alone.
 - **A command the parser does not finish in 5 s is a denial** ("command too complex to check"): anything that needs the
   parser, `regex` rules included, runs in a forked child killed at that deadline, because a native call into ast-grep holds

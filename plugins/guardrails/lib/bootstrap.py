@@ -132,6 +132,7 @@ def platform_problem() -> Platform:
 
 
 def runtime_dir(data: Path, pins: Pins) -> Path:
+    """The path everything runs from: a symlink to the current build, swapped atomically by an install."""
     return data / "runtime" / pins.runtime_id
 
 
@@ -270,13 +271,36 @@ def run_tool(argv: list[str], rt: Path, env: dict[str, str], deadline: float, st
     return out
 
 
-def install(rt: Path, pins: Pins, plat: str, progress: Callable[[str], None]) -> None:
+def install(link: Path, pins: Pins, plat: str, progress: Callable[[str], None]) -> None:
+    """Build a runtime in a fresh directory next to `link`, self-test it, then point `link` at it and remove the old
+    build. The runtime in use is never touched before its replacement works; a failed build leaves nothing behind."""
+    import shutil
+    import tempfile
+
+    rt = Path(tempfile.mkdtemp(prefix=f"{link.name}.", dir=link.parent))
+    try:
+        build(rt, pins, plat, progress)
+        previous = link.resolve() if link.is_symlink() else None
+        swap = link.with_name(f".{rt.name}.link")
+        swap.unlink(missing_ok=True)
+        swap.symlink_to(rt.name)
+        if link.is_dir() and not link.is_symlink():
+            link.rename(link.with_name(f"{link.name}.replaced"))
+        swap.replace(link)
+    except BaseException:
+        shutil.rmtree(rt, ignore_errors=True)
+        raise
+    for old in (previous, link.with_name(f"{link.name}.replaced")):
+        if old is not None and old != rt:
+            shutil.rmtree(old, ignore_errors=True)
+
+
+def build(rt: Path, pins: Pins, plat: str, progress: Callable[[str], None]) -> None:
     import io
     import shutil
     import zipfile
 
     deadline = time.monotonic() + INSTALL_SECONDS
-    shutil.rmtree(rt, ignore_errors=True)
     (rt / "bin").mkdir(parents=True, mode=0o700)
     wheel, uv, python = pins.wheels[plat], rt / "bin" / "uv", rt / "venv" / "bin" / "python"
     env = {key: os.environ[key] for key in ENV_ALLOWED if key in os.environ}
@@ -310,12 +334,21 @@ def install(rt: Path, pins: Pins, plat: str, progress: Callable[[str], None]) ->
 
 
 def clean_up(data: Path, keep: Path) -> None:
-    """With the lock held: runtimes of other pins go once their directory is over KEEP_DAYS old, never sooner."""
+    """With the lock held: builds nobody points at are leftovers of an interrupted install and go at once; runtimes
+    of other pins go once they are over KEEP_DAYS old, never sooner."""
     import shutil
 
     cutoff = time.time() - KEEP_DAYS * 86400
+    current = keep.resolve() if keep.is_symlink() else None
     for entry in (data / "runtime").iterdir():
-        if entry.is_dir() and entry != keep and entry.stat().st_mtime < cutoff:
+        if entry.name.startswith(".") and entry.is_symlink():
+            entry.unlink()
+        elif entry.is_symlink():
+            if entry != keep and entry.resolve().stat().st_mtime < cutoff:
+                shutil.rmtree(entry.resolve(), ignore_errors=True)
+                entry.unlink()
+        elif entry.is_dir() and entry != current and (entry.name.startswith(f"{keep.name}.")
+                                                    or entry.stat().st_mtime < cutoff):
             shutil.rmtree(entry, ignore_errors=True)
 
 
