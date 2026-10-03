@@ -6,30 +6,47 @@ import json
 import re
 import unicodedata
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 import policy
 
 MAX_WIDTH = 40
-SOURCES = ("yours", "inferred", "you chose")
-EXPECTATIONS = ("match", "pass")
-UNEVALUATED = "unevaluated"
 NEWLINE = "⏎"
 
 
-@dataclass
+class Source(StrEnum):
+    YOURS = "yours"
+    INFERRED = "inferred"
+    CHOSEN = "you chose"
+
+
+class Expect(StrEnum):
+    MATCH = "match"
+    PASS = "pass"
+
+
+class Outcome(StrEnum):
+    DIRECT = "direct"
+    WRAPPED = "wrapped"
+    ALLOWED = "allowed"
+    UNEVALUATED = "unevaluated"
+
+
+@dataclass(frozen=True, slots=True)
 class Result:
     cmd: str
-    source: str
-    kind: str | None
-    expect: str | None = None
+    source: Source
+    outcome: Outcome
+    expect: Expect | None = None
 
     @property
     def matched(self) -> bool:
-        return self.kind in ("direct", "wrapped")
+        return self.outcome in (Outcome.DIRECT, Outcome.WRAPPED)
 
     @property
     def mismatch(self) -> bool:
-        return self.expect is not None and (self.kind == UNEVALUATED or (self.expect == "match") != self.matched)
+        return self.expect is not None and (self.outcome is Outcome.UNEVALUATED
+                                            or (self.expect is Expect.MATCH) != self.matched)
 
 
 @dataclass
@@ -130,10 +147,6 @@ def plural(n: int, word: str) -> str:
     return f"{n} {word}" if n == 1 else f"{n} {word}{'es' if word.endswith('ch') else 's'}"
 
 
-def kind_group(result: Result) -> str | None:
-    return "direct" if result.matched else result.kind if result.kind == UNEVALUATED else None
-
-
 def rule_card(rid: str, rule: policy.Rule, message: str, scope: str, intent: str,
               results: list[Result], notes: list[str], file: str = "") -> str:
     action = str(rule.action)
@@ -153,20 +166,20 @@ def rule_card(rid: str, rule: policy.Rule, message: str, scope: str, intent: str
     shown = [clean(r.cmd) for r in results]
     width = common_width(shown)
     hit = "Warn" if rule.action is policy.Action.WARN else "Block"
-    for heading, glyph, wanted in ((hit, "✗", "direct"), ("Allow", "✓", None), ("Not evaluated", "?", UNEVALUATED)):
-        group = [(text, r) for text, r in zip(shown, results) if kind_group(r) == wanted]
+    for heading, glyph, wanted in ((hit, "✗", Outcome.DIRECT), ("Allow", "✓", Outcome.ALLOWED), ("Not evaluated", "?", Outcome.UNEVALUATED)):
+        group = [(text, r) for text, r in zip(shown, results) if (Outcome.DIRECT if r.matched else r.outcome) is wanted]
         if not group:
             continue
         group.sort(key=lambda pair: display_width(pair[0]) > width)
         lines += ["", f"**{heading}**"]
         for text, r in group:
             flag = "⚠ " if r.mismatch else ""
-            tag = r.source + (" · wrapped" if r.kind == "wrapped" else "")
+            tag = r.source + (" · wrapped" if r.outcome is Outcome.WRAPPED else "")
             lines.append(f"- {glyph} {flag}{span(text, width)} {tag}")
 
     bad = sum(r.mismatch for r in results)
     count = f"{plural(len(results), 'command')}, {plural(bad, 'mismatch')}"
-    blind = sum(r.kind == UNEVALUATED for r in results)
+    blind = sum(r.outcome is Outcome.UNEVALUATED for r in results)
     lines += ["", f"**Verified** NOT verified: {blind} of {plural(len(results), 'command')} could not be evaluated" if blind
               else f"**Verified** matcher checked with `rule test`, {count}"]
     if notes:

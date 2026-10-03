@@ -11,7 +11,7 @@ import sys
 from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import Any, NamedTuple
 
 import bootstrap
 import hostcli
@@ -511,7 +511,12 @@ def effect_notes(args: Args, rule: policy.Rule, layers: list[str], mstate: store
     return notes
 
 
-Example = tuple[str, str, str | None]
+
+
+class Example(NamedTuple):
+    cmd: str
+    source: render.Source
+    expect: render.Expect | None
 
 
 def split_envelope(document: Any) -> tuple[Any, Any]:
@@ -538,12 +543,23 @@ def example_list(data: Any) -> list[Example]:
         if unknown:
             raise Invalid(f"--examples[{i}] has unknown keys: {', '.join(sorted(unknown))}")
         source, expect = item.get("source", "inferred"), item.get("expect")
-        if source not in render.SOURCES:
-            raise Invalid(f"--examples[{i}] source must be one of {', '.join(render.SOURCES)}")
-        if expect is not None and expect not in render.EXPECTATIONS:
-            raise Invalid(f"--examples[{i}] expect must be one of {', '.join(render.EXPECTATIONS)}")
-        out.append((item["cmd"], source, expect))
+        try:
+            parsed_source = render.Source(source)
+        except ValueError:
+            raise Invalid(f"--examples[{i}] source must be one of {', '.join(render.Source)}") from None
+        try:
+            parsed_expect = None if expect is None else render.Expect(expect)
+        except ValueError:
+            raise Invalid(f"--examples[{i}] expect must be one of {', '.join(render.Expect)}") from None
+        out.append(Example(item["cmd"], parsed_source, parsed_expect))
     return out
+
+
+def outcome_of(ev: Evaluation, rid: str) -> render.Outcome:
+    kind = ev.kinds[rid]
+    if rid in ev.unevaluated:
+        return render.Outcome.UNEVALUATED
+    return render.Outcome(kind) if kind else render.Outcome.ALLOWED
 
 
 def cannot_evaluate_note(ev: Evaluation) -> str:
@@ -562,7 +578,7 @@ def cmd_rule_test(args: Args) -> int:
         raise Invalid("a command must not be blank")
     if args.json is None and (args.scope or args.id_name):
         raise Invalid("--scope and --id-name label a draft given with --json; --id reads them from the rule")
-    examples: list[Example] = [(c, args.source, None) for c in args.commands]
+    examples: list[Example] = [Example(c, render.Source(args.source), None) for c in args.commands]
     if args.examples is not None:
         examples += parse_examples(args.examples)
     mstate, gstate, pstate = states(args)
@@ -604,7 +620,7 @@ def cmd_rule_test(args: Args) -> int:
     unjudged = next((ev for ev in evaluations if rid in ev.unevaluated), None)
     if unjudged:
         notes.append(cannot_evaluate_note(unjudged))
-    results = [render.Result(cmd, source, render.UNEVALUATED if rid in ev.unevaluated else ev.kinds[rid], expect)
+    results = [render.Result(cmd, source, outcome_of(ev, rid), expect)
                for (cmd, source, expect), ev in zip(examples, evaluations)]
     print(render.rule_card(rid, rule, policy.render(rule.message), scope,
                            args.intent or "", results, notes, str(file or "")))
@@ -920,7 +936,7 @@ def build_parser() -> argparse.ArgumentParser:
     source.add_argument("--id", help="an installed rule's id")
     test.add_argument("commands", nargs="*", metavar="CMD")
     test.add_argument("--examples", help='JSON list of {"cmd", "source", "expect"} objects, @<file> or - for stdin')
-    test.add_argument("--source", choices=render.SOURCES, default="inferred",
+    test.add_argument("--source", choices=[s.value for s in render.Source], default="inferred",
                       help="source tag of the positional commands (default: inferred)")
     test.add_argument("--intent", help="the rule's intent line")
     test.add_argument("--id-name", help="with --json: the id shown in the title")
