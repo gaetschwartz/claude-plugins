@@ -34,6 +34,25 @@ class Paths(Isolated):
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         self.assertEqual(store.project_root(repo / "sub"), repo)
 
+    def test_a_project_whose_state_file_is_the_global_one_is_no_project(self) -> None:
+        home = self.tmp / "home"
+        data = home / ".claude" / "plugins" / "data" / "guardrails-gaetans-claude-plugins"
+        data.mkdir(parents=True)
+        link = self.tmp / "home-link"
+        link.symlink_to(home)
+        os.environ["CLAUDE_PLUGIN_DATA"] = str(data)
+        rule = '{"match": {"program": "x"}, "message": "m"}'
+        for project in (home, link):
+            os.environ["CLAUDE_PROJECT_DIR"] = str(project)
+            self.assertIsNone(store.project_state_path())
+            self.assertEqual(self.cli("rule", "add", "r", "--json", rule)[0], 0)
+            self.assertEqual(self.cli("rule", "add", "r", "--json", rule, "--scope", "project")[0], 2)
+            status = self.cli("status")[1]
+            self.assertIn("`r` deny · global · enabled", status)
+            self.assertNotIn("global+project", status)
+        os.environ["CLAUDE_PROJECT_DIR"] = str(self.proj)
+        self.assertEqual(store.project_state_path(), self.ppath)
+
     def test_no_project_outside_git_or_without_a_cwd(self) -> None:
         del os.environ["CLAUDE_PROJECT_DIR"]
         for cwd in (self.tmp, self.tmp / "gone"):

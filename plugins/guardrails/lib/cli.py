@@ -74,7 +74,8 @@ def table(mapping: dict[str, Any], key: str) -> dict[str, Any]:
 def project_path() -> Path:
     path = store.project_state_path()
     if not path:
-        raise Invalid("not inside a project (no CLAUDE_PROJECT_DIR and no git repository)")
+        raise Invalid("no project state here: not inside a project (no CLAUDE_PROJECT_DIR and no git repository), or "
+                      "the project's state file is the global one (a project at the home directory)")
     return path
 
 
