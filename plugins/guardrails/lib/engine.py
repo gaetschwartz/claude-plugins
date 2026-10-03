@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import time
+from pathlib import Path
 from typing import IO, TypedDict
 
 import bootstrap
@@ -232,7 +233,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> None:
     managed_ids = frozenset(policy.origins("rules", managed, {}, {}))
     cwd = payload.get("cwd")
     try:
-        pstate = store.load(store.project_state_path(cwd if isinstance(cwd, str) else None))
+        pstate = store.load(store.project_state_path(Path(cwd) if isinstance(cwd, str) else None))
     except store.StateError:
         pstate = {}
 

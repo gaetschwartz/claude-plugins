@@ -241,7 +241,7 @@ sudo guardrails rule add <id> --scope managed --json @rule.json --reason "…"
 default is unchanged and managed is never the default. `--scope managed` writes the override file when
 `GUARDRAILS_MANAGED_PATH` is set, else the platform file. When the file (or its directory, if absent) is not writable
 the CLI says so and prints the `sudo` command to re-run. Under root the parent directory is created (0755, whatever the
-umask) and the file is written mode 0644 atomically with fsync. `status` warns when the managed file or its directory
+umask) and the file is written mode 0644 atomically. `status` warns when the managed file or its directory
 is not owned by root or is writable by group or others, since that makes the layer decorative.
 
 ### `--path <file>`

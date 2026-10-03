@@ -4,6 +4,7 @@ import contextlib
 import json
 import re
 from collections.abc import Iterator
+from pathlib import Path
 from typing import Any, ClassVar
 from unittest import mock
 
@@ -346,7 +347,7 @@ class Hook(AstIsolated):
         real_locked, real_evaluate = store.locked, matching.evaluate
 
         @contextlib.contextmanager
-        def tracked(path: str, *rest: Any) -> Iterator[None]:
+        def tracked(path: Path, *rest: Any) -> Iterator[None]:
             with real_locked(path, *rest):
                 held[0] = True
                 try:

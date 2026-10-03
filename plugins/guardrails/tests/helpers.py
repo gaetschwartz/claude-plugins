@@ -60,7 +60,7 @@ class Isolated(unittest.TestCase):
         self.proj.mkdir()
         self.mpath = self.tmp / "managed" / "guardrails.json"
         self.dpath = self.tmp / "sysdefault" / "guardrails.json"
-        patch_default = mock.patch.object(store, "default_managed_path", return_value=str(self.dpath))
+        patch_default = mock.patch.object(store, "default_managed_path", return_value=self.dpath)
         patch_default.start()
         self.addCleanup(patch_default.stop)
         env = {k: v for k, v in os.environ.items() if k not in SCRUBBED}

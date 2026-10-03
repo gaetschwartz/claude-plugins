@@ -10,6 +10,7 @@ import shlex
 import sys
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Any
 
 import bootstrap
@@ -22,7 +23,7 @@ import wrappers as wrapper_table
 from policy import Invalid, view
 from verdict import Evaluation, limit_reason
 
-PRESETS_DIR = os.path.join(os.path.dirname(store.HERE), "presets")
+PRESETS_DIR = store.HERE.parent / "presets"
 SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description",
             "program", "args", "regex", "ast", "requires")
 SCOPES = ("global", "project", "managed")
@@ -73,7 +74,7 @@ def table(mapping: dict[str, Any], key: str) -> dict[str, Any]:
     return value
 
 
-def project_path() -> str:
+def project_path() -> Path:
     path = store.project_state_path()
     if not path:
         raise Invalid("not inside a project (no CLAUDE_PROJECT_DIR and no git repository)")
@@ -86,18 +87,18 @@ def resolve_scope(args: Args) -> str:
     return scope
 
 
-def extra_path(args: Args) -> str | None:
+def extra_path(args: Args) -> Path | None:
     path = getattr(args, "path", None)
-    return os.path.abspath(os.path.expanduser(path)) if path else None
+    return Path(path).expanduser().absolute() if path else None
 
 
-def scope_path(scope: str, args: Args | None = None) -> str:
+def scope_path(scope: str, args: Args | None = None) -> Path:
     if scope == "managed":
         return store.managed_write_path(extra_path(args) if args else None)
     return project_path() if scope == "project" else store.global_state_path()
 
 
-def target_path(args: Args) -> str:
+def target_path(args: Args) -> Path:
     return scope_path(resolve_scope(args), args)
 
 
@@ -106,7 +107,7 @@ def check_path_scope(args: Args, scope: str) -> None:
         raise Invalid("--path names a managed-format file and needs --scope managed")
 
 
-def change_state(scope: str, path: str, fn: Callable[[store.State], Any]) -> Any:
+def change_state(scope: str, path: Path, fn: Callable[[store.State], Any]) -> Any:
     if scope != "managed":
         return store.mutate(path, fn)
     store.ensure_writable(path)
@@ -130,7 +131,7 @@ def managed_rule_ids(args: Args) -> set[str]:
     return set(policy.origins("rules", managed_state(args), {}, {}))
 
 
-def refuse_managed_rule(args: Args, scope: str, rid: str, path: str) -> None:
+def refuse_managed_rule(args: Args, scope: str, rid: str, path: Path) -> None:
     if scope == "managed" or rid not in managed_rule_ids(args):
         return
     try:
@@ -161,10 +162,9 @@ def read_arg(value: str, flag: str) -> str:
         return sys.stdin.read()
     if not value.startswith("@"):
         return value
-    path = os.path.expanduser(value[1:])
+    path = Path(value[1:]).expanduser()
     try:
-        with open(path, encoding="utf-8") as fh:
-            return fh.read()
+        return path.read_text(encoding="utf-8")
     except OSError as exc:
         raise Invalid(f"{flag}: cannot read {path}: {exc.strerror or exc}") from exc
 
@@ -173,7 +173,7 @@ def load_json(value: str, flag: str) -> Any:
     try:
         return json.loads(read_arg(value, flag))
     except ValueError as exc:
-        where = f" in {os.path.expanduser(value[1:])}" if value.startswith("@") else ""
+        where = f" in {Path(value[1:]).expanduser()}" if value.startswith("@") else ""
         raise Invalid(f"{flag} is not valid JSON{where}: {exc}") from exc
 
 
@@ -184,13 +184,13 @@ def check_stdin(*pairs: tuple[str | None, str]) -> None:
 
 @dataclass
 class Snapshot:
-    extra: str | None
-    sources: list[str]
+    extra: Path | None
+    sources: list[Path]
     mstate: store.State
     gstate: store.State
     pstate: store.State
-    gpath: str
-    ppath: str | None
+    gpath: Path
+    ppath: Path | None
     hook_on: bool
     rules: dict[str, policy.Rule]
     modes: dict[str, policy.Mode]
@@ -214,7 +214,7 @@ def snapshot(args: Args) -> Snapshot:
         problems.append(text)
         layers.append(frozenset(where))
 
-    def safe_load(path: str | None, what: str) -> store.State:
+    def safe_load(path: Path | None, what: str) -> store.State:
         try:
             return store.load(path)
         except store.StateError as exc:
@@ -287,22 +287,21 @@ def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, policy.Ac
     return "enabled"
 
 
-def presence_word(path: str) -> str:
+def presence_word(path: Path) -> str:
     return store.presence(path).strip(" ()") or "present"
 
 
 def managed_line(snap: Snapshot) -> str:
     default, *override = snap.sources
-    env = os.environ.get(store.MANAGED_ENV)
-    parts = [f"platform file {render.span(default)} {presence_word(default)}"]
+    env = store.env_managed_path()
+    parts = [f"platform file {render.span(str(default))} {presence_word(default)}"]
     for path in override:
-        label = "--path" if snap.extra and path == snap.extra and not (env and os.path.abspath(env) == path) \
-            else "override"
-        parts.append(f"{label} {render.span(path)} {presence_word(path)}")
+        label = "--path" if snap.extra and path == snap.extra and not (env and env.absolute() == path) else "override"
+        parts.append(f"{label} {render.span(str(path))} {presence_word(path)}")
     in_use = [path for path in override if not store.presence(path)]
     if store.presence(default) == " (absent)":
         if in_use:
-            parts.append("managed rules come only from " + ", ".join(render.span(p) for p in in_use))
+            parts.append("managed rules come only from " + ", ".join(render.span(str(p)) for p in in_use))
         else:
             parts.append("no managed file is present, so there are no managed rules")
     if snap.extra and not store.hook_enforces(snap.extra):
@@ -567,7 +566,7 @@ def cmd_rule_test(args: Args) -> int:
     if args.examples is not None:
         examples += parse_examples(args.examples)
     mstate, gstate, pstate = states(args)
-    file = ""
+    file: Path | None = None
     if args.json is not None:
         draft, carried = split_envelope(load_json(args.json, "--json"))
         if carried is not None:
@@ -608,7 +607,7 @@ def cmd_rule_test(args: Args) -> int:
     results = [render.Result(cmd, source, render.UNEVALUATED if rid in ev.unevaluated else ev.kinds[rid], expect)
                for (cmd, source, expect), ev in zip(examples, evaluations)]
     print(render.rule_card(rid, rule, policy.render(rule.message), scope,
-                           args.intent or "", results, notes, file))
+                           args.intent or "", results, notes, str(file or "")))
     return 0
 
 
@@ -820,16 +819,13 @@ def set_enabled(args: Args, enabled: bool) -> int:
 
 
 def preset_names() -> list[str]:
-    if not os.path.isdir(PRESETS_DIR):
-        return []
-    return sorted(f[:-5] for f in os.listdir(PRESETS_DIR) if f.endswith(".json"))
+    return sorted(path.stem for path in PRESETS_DIR.glob("*.json"))
 
 
 def load_preset(name: str) -> dict[str, Any]:
     if name not in preset_names():
         raise Invalid(f"no preset '{name}' (available: {', '.join(preset_names()) or 'none'})")
-    with open(os.path.join(PRESETS_DIR, f"{name}.json")) as fh:
-        data = json.load(fh)
+    data = json.loads((PRESETS_DIR / f"{name}.json").read_text())
     if not isinstance(data, dict):
         raise Invalid(f"preset {name} is malformed")
     return data
@@ -1012,7 +1008,7 @@ def sudo_hint(args: Args, argv: list[str]) -> str:
     if getattr(args, "scope", None) != "managed" or extra_path(args):
         return shlex.join(argv)
     target = scope_path("managed", args)
-    extra = [] if target == store.default_managed_path() else ["--path", target]
+    extra = [] if target == store.default_managed_path() else ["--path", str(target)]
     return shlex.join([*argv, *extra])
 
 

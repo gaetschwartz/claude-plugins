@@ -62,7 +62,7 @@ class Hook(AstIsolated):
         text = reason(self.hook("strings /bin/ls"))
         self.assertIn("from their terminal", text)
         self.assertIn("mode on reverse-engineering --session-id s1", text)
-        self.assertIn(store.CLI, text)
+        self.assertIn(str(store.CLI), text)
         self.assertNotIn("python3", text)
         self.assertNotIn("guardrails:mode", text)
 
