@@ -92,4 +92,6 @@ The body of a heredoc is never a command, quoted delimiter or not; `cat <<EOF` m
 `ssh host sudo x`, `find . -exec sudo x {} \;`, script files, `python -c`, `watch 'sudo x'`
 (a string argument of a wrapper other than `bash -c`, `script -c` and `eval`), `echo sudo x | sh`, obfuscated or dynamic names (`$'s\x75do'`, `s''udo`,
 `$CMD`), and wrappers the list does not know (declare them with `guardrails wrapper add`). Unbalanced quotes and
-unterminated heredocs give a partial tree (`ERROR` nodes): the commands the parser could still read are matched.
+unterminated heredocs give a partial tree (`ERROR` nodes): the commands the parser could still read are matched. After a
+syntax error a wrapped command is seen by `program` and `args` rules but not by `pattern` rules: `{ ; }; xargs -r pkill` (an
+empty group, valid zsh) is a known miss for a `pkill $$$` pattern rule.

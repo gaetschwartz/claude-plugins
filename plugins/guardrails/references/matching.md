@@ -167,7 +167,7 @@ data: the built-in list above, extended per layer with `guardrails wrapper add <
 and `--path`, like `rule`), `wrapper rm <name>`, `wrapper list`. Look-through only grows: a layer can add names and never
 remove or change a higher layer's; invalid names are skipped and reported.
 
-**False-positive and false-negative risks.** A wrapper the list does not know (`mywrap pkill x`) is an ordinary command,
+**False-positive and false-negative risks.** A command that is not valid bash gives a partial tree: `program` and `args` rules still read the bare words the parser left behind, but a `pattern` rule does not see a wrapper's wrapped command there (`{ ; }; xargs -r pkill`: an empty group is valid zsh and a syntax error in bash). A wrapper the list does not know (`mywrap pkill x`) is an ordinary command,
 so the `pkill x` inside is not seen: declare it. A word of a wrapper that merely equals the program name matches
 (`sudo grep pkill file`, `command -v pkill`, `sudo -u pkill ls`); a rule that denies with `retry: same-command` lets a
 deliberate repeat through.

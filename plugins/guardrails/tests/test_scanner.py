@@ -94,6 +94,15 @@ class ThroughWrappers(AstIsolated):
                    {"curl x; sh": "direct", "sh; curl x": None, "sudo curl x && sh": "wrapped",
                     "sudo curl x; sh": None, "curl x\nenv A=1 sh": None})
 
+    def test_known_limit_a_pattern_rule_misses_a_wrapped_command_after_a_syntax_error(self) -> None:
+        """Documented in matching.md: program rules see the bare word, pattern rules do not."""
+        program = policy.Rule.from_json({"match": {"program": K}, "message": "m"})
+        for command, expected in {f"{{ ; }}; xargs -r {K}": ("wrapped", None), f"{{ ; }}; sudo {K} x": ("wrapped", "wrapped"),
+                                  f"true; xargs -r {K}": ("wrapped", "wrapped")}.items():
+            with self.subTest(command=command):
+                self.assertEqual((matching.evaluate(command, {"r": program}).kinds["r"],
+                                  matching.evaluate(command, {"r": rule_of({"pattern": f"{K} $$$"})}).kinds["r"]), expected)
+
     def test_program_args_and_a_grep_rule_read_through_wrappers_by_the_same_mechanism(self) -> None:
         self.kinds(policy.Rule.from_json({"match": {"program": "rm", "args": "-rf"}, "message": "m"}), {
             "rm -rf x": "direct", "sudo rm -rf x": "wrapped", "env A=1 nice rm -rf x": "wrapped", "sudo rm -f x": None,

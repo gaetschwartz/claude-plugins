@@ -160,6 +160,8 @@ Known limits, where the rule cannot see the command (say so in the description r
 - a wrapper the table does not know (declare it with `guardrails wrapper add`)
 - an obfuscated name (`p''kill`, `$'p\x6bill'`, `p\kill`) or a script given as an ANSI-C literal (`bash -c $'X'`): it cannot be analysed statically
 - `watch 'X'`, `su -c 'X'`, `echo X | sh`, `source <(echo X)`: only `bash -c`, `script -c`, `eval` and shell-fed heredocs and here-strings are scanned
+- a wrapped command after a syntax error (`{ ; }; xargs -r X`, zsh-valid and a syntax error in bash): `program` and `args` rules still
+  see it, a `pattern` rule does not
 - the coarseness of wrapper variants: any word of a wrapper can start a command, so `sudo grep curl f | sh` matches a `curl $$$ | sh` rule
 
 ## The six pitfalls
