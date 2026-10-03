@@ -49,6 +49,16 @@ class MatchingClaims(AstIsolated):
             self.assertFalse(matches(rule, command), command)
 
 
+class RuntimeDocs(unittest.TestCase):
+    def test_the_kill_switches_the_rust_regex_flavor_and_the_backoff_are_documented(self) -> None:
+        for name in ("README.md", "references/matching.md"):
+            text = " ".join((ROOT / name).read_text().split())
+            for needle in ("claude plugin disable guardrails@<marketplace>", "guardrails disable", "Rust regex",
+                           "1 hour", "30 days", "plugin data dir is not a safe absolute path", "this command crashes the parser",
+                           "install.log"):
+                self.assertIn(needle, text, f"{name} lacks {needle!r}")
+
+
 def slug(heading: str) -> str:
     return re.sub(r"[^a-z0-9 _-]", "", heading.lower().replace("`", "")).replace(" ", "-")
 

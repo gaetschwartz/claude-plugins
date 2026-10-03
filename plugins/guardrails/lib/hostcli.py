@@ -103,7 +103,7 @@ def status_text(data: Path) -> str:
     rt = bootstrap.runtime_dir(data, pins)
     lines = [f"runtime: {'ready' if found.state == 'ready' else 'NOT ready (' + found.state + ')'}",
              f"pins: uv {pins.uv}, Python {pins.python}, ast-grep-py {pins.ast_grep_py}, id {pins.runtime_id}",
-             f"platform: {bootstrap.platform_problem()[0] or 'unsupported: ' + found.detail}",
+             f"platform: {bootstrap.platform_problem().key or 'unsupported: ' + found.detail}",
              f"path: {bootstrap.sanitised(str(rt), 300)}"]
     with contextlib.suppress(OSError, ValueError, KeyError):
         lines.append(f"installed: Python {json.loads((rt / 'marker.json').read_text())['python']}")

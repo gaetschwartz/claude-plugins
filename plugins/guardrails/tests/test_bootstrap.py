@@ -94,7 +94,7 @@ class Pinned(unittest.TestCase):
         self.clock = [time.time()]
         clock = Clock(self.clock)
         for patcher in (mock.patch.object(bootstrap, "load_pins", lambda: self.pins),
-                        mock.patch.object(bootstrap, "platform_problem", lambda: ("darwin-arm64", None)),
+                        mock.patch.object(bootstrap, "platform_problem", lambda: bootstrap.Platform("darwin-arm64", None)),
                         mock.patch("urllib.request.urlopen", self.urlopen),
                         mock.patch.object(bootstrap, "time", clock), mock.patch.object(hostcli, "time", clock)):
             patcher.start()
@@ -358,7 +358,7 @@ class Install(Pinned):
         self.assertEqual((outcome.state, outcome.reason, outcome.step), ("failed", "crash", "self-test"))
 
     def test_an_unsupported_platform_is_reported_without_touching_anything(self) -> None:
-        with mock.patch.object(bootstrap, "platform_problem", return_value=("", "Linux x86_64 without glibc (musl)")):
+        with mock.patch.object(bootstrap, "platform_problem", return_value=bootstrap.Platform("", "Linux x86_64 without glibc (musl)")):
             found = self.ensure()
             text = hostcli.notice(found)
         self.assertEqual(found.state, "unsupported")
@@ -540,7 +540,7 @@ class Hook(Pinned):
             self.assertTrue(self.hook())
 
     def test_an_unsupported_platform_notice_says_so(self) -> None:
-        with mock.patch.object(bootstrap, "platform_problem", return_value=("", "Linux x86_64 without glibc (musl)")):
+        with mock.patch.object(bootstrap, "platform_problem", return_value=bootstrap.Platform("", "Linux x86_64 without glibc (musl)")):
             self.assertIn("musl", self.hook()["systemMessage"])
 
     def test_the_notice_wording_never_tells_anyone_to_run_an_install_command(self) -> None:

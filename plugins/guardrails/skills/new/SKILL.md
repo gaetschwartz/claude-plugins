@@ -43,7 +43,7 @@ opens a `ws` URL has no command, and monitors a plugin declares itself are not c
 ## How to write the rule
 
 - One behavior per rule: split on "and"; a different message, alternative, action or mode is a different rule.
-- Narrowest matcher that separates the examples: `program`, `program` + `args`, `builtin`, `ast`, `regex`.
+- Narrowest matcher that separates the examples: `program`, `program` + `args`, `builtin`, `ast`, `regex` (Rust regex syntax: no backreferences or look-around).
 - For a structural `ast` rule run `guardrails rule ast '<a command it must catch>'` and use the kinds it prints.
 - Anchor the `pattern` on the dangerous command; put its surroundings in a relation (`inside`, `has`, `follows`,
   `precedes`).
@@ -159,7 +159,7 @@ shape is structural, `regex` for dataflow across commands (`regex` also fires in
 wrappers and shells themselves (`sudo`, `bash`) are programs too (`program: sudo` matches `sudo ls`). A rule with
 `program`, `args`, `builtin` or `match.ast` needs the ast-grep runtime, which guardrails installs by itself (every `guardrails` call ensures it first); if
 `rule test` reports `cannot` for a command or prints a note that the engine failed, tell the user before going on
-(`guardrails engine status` shows the state); only `regex` rules work while the engine fails.
+(`guardrails engine status` shows the state); no rule, `regex` included, works while the engine fails.
 
 **1.b.2** With examples, test them: `guardrails rule test --json - 'cmd' …` with the rule on stdin (see "Passing the
 rule as JSON").

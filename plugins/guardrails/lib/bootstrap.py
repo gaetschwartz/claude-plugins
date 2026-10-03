@@ -16,7 +16,7 @@ import time
 from collections.abc import Callable, Iterator
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Literal, TypedDict
+from typing import Literal, NamedTuple, TypedDict
 
 LIB = Path(__file__).resolve().parent
 BACKOFFS = (600, 3600, 21600)
@@ -121,25 +121,30 @@ def data_problem(data: Path) -> str | None:
     return "not owned by you or writable by others" if info.st_uid != os.geteuid() or info.st_mode & 0o022 else None
 
 
-def platform_problem() -> tuple[str, str | None]:
-    """(platform key, why unsupported)."""
+class Platform(NamedTuple):
+    key: str
+    why: str | None
+
+
+def platform_problem() -> Platform:
+    """The platform key, or why there is no runtime for it."""
     import platform
 
     arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x86_64", "amd64": "x86_64"}.get(platform.machine().lower())
     system = platform.system()
     if arch is None or system not in ("Darwin", "Linux"):
-        return "", f"{system} {platform.machine()}"
+        return Platform("", f"{system} {platform.machine()}")
     if system == "Darwin":
-        return f"darwin-{arch}", None
+        return Platform(f"darwin-{arch}", None)
     try:
         libc = os.confstr("CS_GNU_LIBC_VERSION") or ""
     except (OSError, ValueError):
         libc = ""
     if not libc.startswith("glibc "):
-        return "", f"Linux {platform.machine()} without glibc (musl is not supported)"
+        return Platform("", f"Linux {platform.machine()} without glibc (musl is not supported)")
     if tuple(int(x) for x in re.findall(r"\d+", libc)[:2]) < (2, 28):
-        return "", f"{libc} is older than glibc 2.28"
-    return f"linux-{'aarch64' if arch == 'arm64' else arch}", None
+        return Platform("", f"{libc} is older than glibc 2.28")
+    return Platform(f"linux-{'aarch64' if arch == 'arm64' else arch}", None)
 
 
 def runtime_dir(data: Path, pins: Pins) -> Path:
@@ -344,7 +349,7 @@ def ensure(data: Path, *, wait: bool = True, retry_now: bool = False,
             return Outcome("ready")
         try:
             clean_up(data, rt)
-            install(rt, pins, platform_problem()[0], progress)
+            install(rt, pins, platform_problem().key, progress)
         except (InstallError, OSError, ValueError) as exc:
             error = exc if isinstance(exc, InstallError) else InstallError("disk", "install", repr(exc))
             previous = read_stamp(data)

@@ -6,6 +6,7 @@ process can be killed whatever it is doing, and the parent always gets control b
 
 from __future__ import annotations
 
+import contextlib
 import os
 import resource
 import select
@@ -64,6 +65,11 @@ def call(work: Callable[[], str], seconds: float) -> Result:
             if not chunk:
                 break
             chunks.append(chunk)
+    except BaseException:
+        with contextlib.suppress(ProcessLookupError):
+            os.kill(pid, signal.SIGKILL)
+        os.waitpid(pid, 0)
+        raise
     finally:
         os.close(reader)
     _, status = os.waitpid(pid, 0)

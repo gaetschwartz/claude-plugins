@@ -36,7 +36,8 @@ Take the first rung that separates your examples. Each rung down costs precision
 | `ast` | structure decides: nesting, pipelines, order, a flag on one command among several, a wrapper or shell itself | [ast/index.md](ast/index.md) |
 | `regex` | only raw text can say it, across nodes the tree cannot relate | text of one shell line, or unparseable input |
 
-`regex` is last because it reads heredocs and quoted strings as if they were code. `args` is per command and never sees
+`regex` is last because it reads heredocs and quoted strings as if they were code. It is Rust regex syntax (ast-grep's engine,
+linear time): no backreferences or look-around, and `rule add/test` refuse them. `args` is per command and never sees
 a pipe or a substitution. `program` never matches a wrapper or shell (`sudo`, `bash`). Each is a pitfall below.
 
 ## 4. Get the tree

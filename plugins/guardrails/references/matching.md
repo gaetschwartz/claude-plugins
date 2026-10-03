@@ -7,7 +7,7 @@ test` before stating it, but know what it checks.
 
 ast-grep does all the lexing and parsing, in process through the `ast-grep-py` library: guardrails writes no shell parser.
 `program`, `args`, `builtin` and `match.ast` become typed ast-grep rules and are matched on the tree-sitter Bash parse of the
-command as written, of its wrapper variants and of each shell string; `regex` reads the raw text in Python.
+command as written, of its wrapper variants and of each shell string; `regex` reads the raw text of the whole command with ast-grep's own regex engine, inside the same bounded checker.
 
 Matcher ladder, narrowest first: `program`, then `program` + `args`, then `builtin`, then an `ast` rule (a `pattern`,
 plus `inside` / `has` when context matters), then `regex`. Before writing an `ast` rule with relations, run
@@ -43,7 +43,7 @@ by guardrails; leading assignments such as `A=1 sudo x` are dropped with it). Ne
 later word starts the inner command directly. A command with several wrappers also gets every combination of them replaced
 together while there are at most 64 (else each k-th word of all of them), so `sudo curl x | sudo sh` reads as `curl x | sh`.
 Every rule is matched on each variant, and a hit found in one is wrapped. Variants are not unwrapped again, are
-de-duplicated and are bounded: 256 variants and 256 KiB of variant text per command, past which the command is denied
+de-duplicated and are bounded: 2048 variants and 16 MiB of variant text parsed in total per command (and the 5 s deadline), past which the command is denied
 unparsed ("command too complex to check") at any size. There is no table of which flags take a value: any word counts as a
 start, so `sudo grep pkill file` and `command -v pkill` also match `pkill` (known false positives, see below). The same
 coarseness applies to relation rules, which judge the real tree of each variant: `sudo grep curl f | sh` matches a
@@ -85,7 +85,10 @@ positives.
   among its words: `-r`, `-R`, a cluster such as `-rn` or `-nr` (not when an option that takes a value, `e f m A B C d D`, comes
   first: `-er` is pattern `r`), `--recursive`, `--dereference-recursive`, `--directories=recurse`, `-d recurse`,
   `--directories recurse`. Words after `--` are ignored. ANDed with `program` and `args`.
-- `match.regex`: a Python regex (`re.search`) over the raw, whole command text, quotes, heredocs and pipelines included.
+- `match.regex`: a Rust regex (ast-grep's engine: linear time, no backreferences or look-around; `rule add/set/test` reject
+  those with exit 2, and a state rule that does not compile is skipped and named) searched in the command's whole text, quotes,
+  heredocs and pipelines included. The text is the parse root's: it starts at the first token (leading blanks are not part of
+  it) and `$` matches only at its very end, not before a trailing newline.
 - `match.ast`: an ast-grep rule object over the parsed syntax tree; see below.
 - The matchers are alternatives: the rule fires when the program/args/builtin part matches OR `regex` matches OR `ast`
   matches; `program` and `args` are ANDed with each other.
@@ -179,8 +182,7 @@ quoted-delimiter heredoc body, single-quoted text, the arguments of other comman
 
 Dataflow across commands (`ps | xargs kill` where the PIDs come from the other command, `curl x | sh`) is text spanning
 nodes. A relation often expresses it (`xargs kill` inside a `pipeline`); a regex expresses the rest. A regex also fires
-on text that only mentions the command, including heredocs, and it is the only matcher that still runs when the library fails
-(not while the runtime is still installing).
+on text that only mentions the command, including heredocs, and it needs the same engine as every other matcher.
 
 ### Idioms
 
@@ -199,24 +201,36 @@ deleted after the install). `<id>` is `lib/runtime-id`, a digest of `lib/runtime
 `lib/runtime-requirements.txt`, so a pin change installs a new runtime and removes the old one.
 
 Automatic install, no user command: (1) SessionStart runs `ensure` synchronously (timeout 120 s; first ever install about
-3 to 10 s, later sessions about 0.1 s); (2) the PreToolUse hook, when the marker is missing, allows the command with a loud
-notice (once per session, repeated every 10 minutes while a failure persists) and starts a detached `ensure`; (3) every
-`guardrails` CLI call ensures first, in the foreground, with progress on stderr; (4) the `setup` skill's first step runs
-`guardrails engine ensure`. A failed attempt (offline, timeout, bad hash) is stamped and the next one is 10 minutes later;
-`guardrails engine ensure --retry-now` ignores the wait.
+3 to 10 s, later sessions about 0.1 s); (2) the PreToolUse hook, when the runtime is not ready, allows the command with a
+loud notice (once per session, repeated every 10 minutes while a failure persists) and starts a detached `ensure`;
+(3) every `guardrails` CLI call runs at once on a ready runtime and otherwise ensures first, in the foreground, with
+progress on stderr; (4) the `setup` skill's first step runs `guardrails engine ensure`. Limits: a 10 s connect timeout, a
+60 s budget per install, every tool step in its own process group killed at the deadline. A failed attempt is stamped with a
+class and a step, and the next attempt is 10 minutes later, then 1 hour, then 6 hours (reset by a success); while a stamp is
+fresh SessionStart and the hot path do not try, they say when the next attempt is. `guardrails engine ensure --retry-now`
+ignores the wait. Raw failure detail goes to `runtime/install.log`; notices carry only the class (dns, connect, timeout,
+tls, proxy, http, hash, disk, tool, crash).
 
 **What is enforced while the runtime is not ready: nothing.** `regex` rules included, because every rule runs on the managed
 Python. The window is the first seconds of the first session, or until an install works after a failure. Managed rules fail
 open in it too. The notice says so.
 
-Only `lib/bootstrap.py` runs on the host's Python (3.9 or newer, standard library only). It downloads the pinned `uv` wheel
-from the one `files.pythonhosted.org` URL in the manifest (60 s limit, sha256 checked before the file is read, exactly one
-member unpacked), then runs that uv with a scrubbed environment (HOME, LANG, TMPDIR, proxy and `SSL_CERT_*` variables;
-`PATH=/usr/bin:/bin`; `UV_*` pointing inside the runtime dir; `--no-config`; the runtime dir as cwd): `uv python install
-3.13`, `uv venv`, `uv pip install --require-hashes --only-binary :all: --no-deps`. A repository's `uv.toml`, `UV_*`, `PATH`,
-`PYTHONPATH` or `pip.conf` never influence what runs. A self-test must import the library and match a pipeline before the
-marker is written. Installs run under a `flock` (released by the OS if the installer dies); an interrupted install has no
-marker and is wiped by the next.
+The data dir: the runtime is found only through `CLAUDE_PLUGIN_DATA` (default `~/.claude/plugins/data/<plugin>-<marketplace>`),
+which must be absolute and canonical (no `..`, no symlink component), owned by you, not writable by group or others. If not,
+the notice says "plugin data dir is not a safe absolute path: <path>", nothing is executed or written there, and the notice
+repeats on every call. The project directory and the cwd never decide (a session started in `$HOME` or `~/.claude` enforces
+normally).
+
+Only `lib/bootstrap.py` and `lib/hostcli.py` run on the host's Python (3.9 or newer, standard library only). The bootstrap
+downloads the pinned `uv` wheel from the one `files.pythonhosted.org` URL in the manifest (sha256 checked before the file is
+read, exactly one member unpacked), then runs that uv with a scrubbed environment (HOME, LANG, TMPDIR, proxy and `SSL_CERT_*`
+variables; `PATH=/usr/bin:/bin`; `UV_*` pointing inside the runtime dir; `--no-config`; the runtime dir as cwd): `uv python
+install 3.13`, `uv venv`, `uv pip install --require-hashes --only-binary :all: --no-deps`. A repository's `uv.toml`, `UV_*`,
+`PATH`, `PYTHONPATH` or `pip.conf` never influence what runs. A self-test must import the library and match a pipeline before
+the marker is written. Installs run under a `flock` (released by the OS if the installer dies); an interrupted install has no
+marker and is wiped by the next. Cleanup runs only inside an install, under the lock: temp leftovers, and runtimes of other
+pins once they are 30 days old (two plugin versions sharing a data dir never delete each other's runtime; nothing is deleted
+on the hot path).
 
 How uv verifies the Python: `uv python install` fetches a python-build-standalone distribution (primarily from
 `releases.astral.sh`, falling back to the GitHub releases of `astral-sh/python-build-standalone`, served from
@@ -230,38 +244,45 @@ are not).
 Platforms: macOS arm64 and x86_64, Linux glibc 2.28+ x86_64 and aarch64. Linux musl, older glibc, other architectures and
 Windows get a precise "unsupported platform" notice and no install attempt.
 
-Trust model: the wrapper runs the runtime's Python only when `marker.json` exists, the interpreter is owned by you, and the
-runtime dir is not inside the project or the cwd (a cwd of `/` or the home dir is ignored for that test). Each `ensure`
-(every session start) also checks that the interpreter and the extension module are owned by you, not writable by group
-or others, unchanged in size and mtime since the install, and inside the runtime dir; any failure reinstalls. The hook runs
-with `python -I`.
+Trust model: the wrapper runs the runtime's Python only when the data dir passes the checks above, `marker.json` exists, no
+`broken` file is next to it and the interpreter is owned by you. Each `ensure` (every session start) also checks that the
+interpreter and the extension module are owned by you, not writable by group or others, unchanged in size and mtime since the
+install, and inside the runtime dir; any failure reinstalls. The hook runs with `python -I`. The wrapper picks the host Python
+from fixed absolute locations first, then `PATH` entries that are absolute, outside the project and cwd and not world-writable;
+each candidate is smoke-tested (`python3 -I -S -c` on the version), and a broken one is named in the notice, never skipped
+silently. A hook Python that dies is reported ("failed to run (exit N)").
 
-Troubleshooting: `guardrails engine status` says whether the runtime is ready (or why not), the pins, the platform, the path,
-the installed Python, whether an install is running, and the last failure with the time of the next automatic attempt.
+Troubleshooting: `guardrails engine status` needs no runtime and works offline: whether the runtime is ready (or why not), the
+pins, the platform, the path, the installed Python, whether an install is running, and the last failure (class, step, count in
+a row, next automatic attempt, the log file). Kill switches, for the user: `claude plugin disable guardrails@<marketplace>`,
+or `guardrails disable` from a terminal (global hook off; managed rules stay).
 
 ### When the engine is unavailable or fails
 
-There is no degraded parsing. If the runtime is not ready (above) or the library cannot be imported or fails its self-test,
-rules that need the parser (`program`, `args`, `builtin`, `match.ast`) cannot be evaluated, so the hook allows the command
-and says so loudly; with the runtime ready but the library failing, `regex` rules still run.
+There is no degraded parsing, and no rule runs outside the engine. If the runtime is not ready (above) or the library cannot be
+imported or fails its self-test, rules cannot be evaluated, so the hook allows the command and says so loudly.
 
 - **Engine failure** (import error, failed self-test, an unexpected error in the checker): that call is allowed with a
   warning that names the reason, in both channels; the same class is warned again at most every 10 minutes while it lasts,
   and `status` / `rule test` show the last failure. Managed deny rules fail open too; the warning and `status --problems`
   name them.
-- **A command the parser does not finish in 5 s, or whose checker crashed, is a denial** ("command too complex to check"):
-  anything that needs the parser runs in a forked child killed at that deadline, because a native call into ast-grep holds
+- **A crash of the library**: the checker runs a health probe on a trivial command in a fresh child. Probe passes: that
+  command crashes the parser and is denied alone ("this command crashes the parser"). Probe fails or hangs: the library is
+  broken, the command is allowed with a loud notice, the runtime is marked broken and rebuilt in the background (same backoff
+  as an install), and the notice repeats every 10 minutes until it is healthy. A checker that cannot even be started (fork
+  failure) is a loud allow that leaves the runtime alone.
+- **A command the parser does not finish in 5 s is a denial** ("command too complex to check"): anything that needs the
+  parser, `regex` rules included, runs in a forked child killed at that deadline, because a native call into ast-grep holds
   the GIL (no signal or thread can interrupt it) and a hook that outlives its timeout lets the command through. Dense nesting
   (`$(` x tens of thousands) is quadratic, so the content is the cause and failing open would be a bypass. A hit already
   found stands.
-- **A rule that does not compile** is skipped and named once per session; the others run.
+- **A rule that does not compile** (an `ast` rule, or a regex Rust cannot compile) is skipped and named once per session; the
+  others run.
 - **A command over 256 KiB, or one that nests shell strings more than 8 deep, unpacks into more than 64 distinct strings
-  or 256 KiB of script text, or unwraps into more than 256 variants or 256 KiB of variant text, is denied unparsed**
+  or 256 KiB of script text, or unwraps into more than 2048 variants or 16 MiB of variant text, is denied unparsed**
   ("command too large to check", "command too complex to check"): padding must never be a way past a rule. Only a deny rule
-  that could not be judged causes the denial (warn-only parse rules: allowed with a warning); a rule set with only `regex`
-  rules never starts the parser.
-- If the hook itself raises, it applies the `regex` rules, allows the rest with a visible warning, and never exits
-  silently.
+  that could not be judged causes the denial (warn-only rules: allowed with a warning).
+- If the hook itself raises, it allows with a visible warning that no rule was applied, and never exits silently.
 
 `rule test` and `status` say the same: a rule that needs the engine is reported as `cannot` evaluate, and
 `status --problems` lists the rules that are not enforced and why.

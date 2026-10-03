@@ -6,7 +6,7 @@ import json
 import os
 import sys
 import time
-from typing import IO, Any
+from typing import IO, Any, TypedDict
 
 import matching
 import policy
@@ -15,7 +15,18 @@ import wrappers as wrapper_table
 from verdict import FAILED_PREFIX, Evaluation
 
 Session = dict[str, Any]
-Output = dict[str, Any]
+
+
+class HookDecision(TypedDict, total=False):
+    hookEventName: str
+    permissionDecision: str
+    permissionDecisionReason: str
+    additionalContext: str
+
+
+class Output(TypedDict, total=False):
+    systemMessage: str
+    hookSpecificOutput: HookDecision
 
 
 def digest(text: str) -> str:

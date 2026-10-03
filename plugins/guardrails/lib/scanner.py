@@ -40,6 +40,13 @@ EVAL_NAME = re.compile(rulebuilder.name_regex(["eval"]))
 SELF_TEST_COMMAND = "echo a | cat"
 
 
+class Script(NamedTuple):
+    """A script a unit hands to a shell; `restricted` scripts only count inside their own substitutions."""
+
+    text: str
+    restricted: bool
+
+
 class Origin(StrEnum):
     COMMAND = "command"
     VARIANT = "variant"
@@ -150,20 +157,20 @@ def shell_scripts(command: SgNode) -> list[str]:
     return found
 
 
-def scripts_in(root: SgNode, restricted: bool) -> list[tuple[str, bool]]:
+def scripts_in(root: SgNode, restricted: bool) -> list[Script]:
     """(text, restricted) of each script a unit hands to a shell: `bash -c` strings, `eval` arguments (joined like
     the shell does), heredocs and here-strings fed to a shell, and the bodies of unquoted heredocs that contain a
     substitution, which only count inside their substitutions. A restricted unit only yields scripts inside its own."""
-    found: list[tuple[str, bool]] = []
+    found: list[Script] = []
     for command in root.find_all(kind="command"):
         if restricted and not inside_substitution(command):
             continue
         name = name_of(command)
         if SHELL_NAME.search(name):
-            found += [(script, False) for script in shell_scripts(command)]
+            found += [Script(script, False) for script in shell_scripts(command)]
         elif EVAL_NAME.search(name):
             words = [unquote(arg.text()) for arg in arguments(command) if arg.kind() in ARGUMENT_KINDS]
-            found.append((" ".join(words), False))
+            found.append(Script(" ".join(words), False))
     for redirect in root.find_all(kind="heredoc_redirect"):
         start = next((n for n in redirect.named_children() if n.kind() == "heredoc_start"), None)
         if start is None or not UNQUOTED_DELIMITER.fullmatch(start.text()):
@@ -173,8 +180,8 @@ def scripts_in(root: SgNode, restricted: bool) -> list[tuple[str, bool]]:
         for body in (n for n in redirect.named_children() if n.kind() == "heredoc_body"):
             text = body.text()
             if "`" in text or "$(" in text:
-                found.append((text, True))
-    return [(script, only) for script, only in found if script.strip()]
+                found.append(Script(text, True))
+    return [script for script in found if script.text.strip()]
 
 
 def wrapper_spans(root: SgNode, wrappers: re.Pattern[str]) -> list[Span]:
