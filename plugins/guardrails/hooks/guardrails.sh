@@ -10,11 +10,8 @@ for dir in / "$HOME"; do
   if [ "$here" = "$dir" ]; then here=/nonexistent; fi
 done
 
-trusted() {
-  case $1 in /*) ;; *) return 1 ;; esac
-  [ -x "$1" ] || return 1
-  perms=$(/bin/ls -ldL "$1" 2>/dev/null) || return 1
-  case $perms in ????????w*) return 1 ;; esac
+usable() {
+  case $1 in /*) [ -x "$1" ] ;; *) return 1 ;; esac
 }
 
 works() { "$1" -I -S -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; }
@@ -23,12 +20,12 @@ find_python() {
   py=
   broken=
   for cand in /opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3; do
-    if trusted "$cand"; then
+    if usable "$cand"; then
       if works "$cand"; then py=$cand; return; fi
       : "${broken:=$cand}"
     fi
   done
-  if [ "$(/usr/bin/uname -s)" = Linux ] && trusted /home/linuxbrew/.linuxbrew/bin/python3; then
+  if [ "$(/usr/bin/uname -s)" = Linux ] && usable /home/linuxbrew/.linuxbrew/bin/python3; then
     if works /home/linuxbrew/.linuxbrew/bin/python3; then py=/home/linuxbrew/.linuxbrew/bin/python3; return; fi
     : "${broken:=/home/linuxbrew/.linuxbrew/bin/python3}"
   fi
@@ -36,7 +33,7 @@ find_python() {
   IFS=:
   for dir in $PATH; do
     case $dir/ in "$proj"/* | "$here"/*) continue ;; esac
-    if trusted "$dir/python3"; then
+    if usable "$dir/python3"; then
       if works "$dir/python3"; then py=$dir/python3; break; fi
       : "${broken:=$dir/python3}"
     fi
@@ -54,21 +51,17 @@ say() {
 }
 
 if [ "$mode" != session-start ] && [ -n "${CLAUDE_PLUGIN_DATA-}" ] && read -r id < "$lib/runtime-id"; then
-  d=$CLAUDE_PLUGIN_DATA
-  rt=$d/runtime/$id
-  case $d in
+  rt=$CLAUDE_PLUGIN_DATA/runtime/$id
+  case $rt in
     /*)
-      if [ -O "$d" ] && [ -f "$rt/marker.json" ] && [ ! -e "$rt/broken" ] && [ -O "$rt/venv/bin/python" ] &&
-        [ -x "$rt/venv/bin/python" ]; then
+      if [ -f "$rt/marker.json" ] && [ ! -e "$rt/broken" ] && [ -x "$rt/venv/bin/python" ]; then
         "$rt/venv/bin/python" -I "$lib/guard.py" "$@"
         code=$?
-        if [ "$code" -ne 111 ]; then
-          if [ "$mode" = cli ]; then exit "$code"; fi
-          if [ "$code" -ne 0 ]; then
-            say "[guardrails plugin notice] the guardrails hook failed to run (exit $code), so guardrails rules are NOT enforced and this command was not checked. Tell the user about this now."
-          fi
-          exit 0
+        if [ "$mode" = cli ]; then exit "$code"; fi
+        if [ "$code" -ne 0 ]; then
+          say "[guardrails plugin notice] the guardrails hook failed to run (exit $code), so guardrails rules are NOT enforced and this command was not checked. Tell the user about this now."
         fi
+        exit 0
       fi
       ;;
   esac

@@ -67,10 +67,10 @@ class StubbedCases(Base):
         self.data.mkdir(exist_ok=True)
         self.rt = self.data / "runtime" / RUNTIME_ID
 
-    def stub(self, path: Path, label: str, mode: int = 0o755, body: str = "") -> Path:
+    def stub(self, path: Path, label: str, body: str = "") -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(f'#!/bin/sh\n{body}echo "{label} $*"\n')
-        path.chmod(mode)
+        path.chmod(0o755)
         return path
 
     def ready_runtime(self, data: Path | None = None, body: str = "") -> Path:
@@ -123,13 +123,6 @@ class StubbedCases(Base):
                 self.assertNotIn("READY", out)
         self.assertTrue(self.run_script(self.host_stub(), data=str(repo)).stdout.startswith("READY"), "the same dir, absolute")
 
-    def test_a_guard_that_refuses_the_data_dir_falls_through_to_the_bootstrap_in_every_mode(self) -> None:
-        self.ready_runtime(body="exit 111\n")
-        boot = f"HOST -I -S {self.script.parent}/../lib/bootstrap.py"
-        host = self.host_stub()
-        self.assertEqual(self.run_script(host).stdout, f"{boot} hook\n")
-        self.assertEqual(self.run_script(host, "cli", "status").stdout, f"{boot} run status\n")
-
     def test_the_cli_passes_the_guards_exit_code_through(self) -> None:
         self.ready_runtime(body="exit 3\n")
         self.assertEqual(self.run_script(self.host_stub(), "cli", "status").returncode, 3)
@@ -143,12 +136,11 @@ class StubbedCases(Base):
         self.assertEqual(self.run_script(path, "cli", "status", "--problems", data=None).stdout,
                          f"a -I -S {boot} run status --problems\n")
 
-    def test_path_entries_inside_the_project_relative_or_world_writable_are_skipped(self) -> None:
+    def test_path_entries_inside_the_project_or_relative_are_skipped(self) -> None:
         self.stub(self.proj / "bin" / "python3", "evil")
         self.stub(self.proj / "python3", "evil-cwd")
-        self.stub(self.tmp / "loose" / "python3", "loose", 0o757)
         self.stub(self.tmp / "ok" / "python3", "ok")
-        for path in (f"{self.proj}/bin:{self.tmp}/loose:{self.tmp}/ok", f".:bin:{self.tmp}/ok", f":{self.tmp}/ok"):
+        for path in (f"{self.proj}/bin:{self.tmp}/ok", f".:bin:{self.tmp}/ok", f":{self.tmp}/ok"):
             with self.subTest(path=path):
                 out = self.run_script(path, "session-start").stdout
                 self.assertTrue(out.startswith("ok -I -S "), out)
@@ -280,30 +272,15 @@ class RealWrapperReady(RealRuntime):
                               check=False, env=env, cwd=cwd)
         return proc.returncode == 0 and '"permissionDecision": "deny"' in proc.stdout
 
-    def test_a_data_dir_that_is_not_safe_gets_the_notice_and_the_guard_never_reads_or_writes_in_it(self) -> None:
+    def test_a_relative_data_dir_gets_the_notice_and_nothing_runs_from_it(self) -> None:
         payload = self.deny_rule()
-        shutil.copy(self.gpath, self.tmp / "state.json")
-        loose, grouped, alias = self.tmp / "loose", self.tmp / "grouped", self.tmp / "alias"
-        for path, mode in ((loose, 0o777), (grouped, 0o775)):
-            path.mkdir()
-            (path / "runtime").symlink_to(DEV_DATA / "runtime")
-            shutil.copy(self.tmp / "state.json", path / "state.json")
-            path.chmod(mode)
-        alias.symlink_to(self.data)
-        cases = {"world-writable": str(loose), "group-writable": str(grouped), "aliased through a symlink": str(alias),
-                 "dot-dot": f"{self.data}/../data", "relative": "data"}
-        for name, value in cases.items():
-            with self.subTest(name):
-                env = {**os.environ, "CLAUDE_PLUGIN_DATA": value}
-                proc = subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True,
-                                      text=True, check=False, env=env, cwd=self.tmp)
-                self.assertEqual(proc.returncode, 0, proc.stderr)
-                output = json.loads(proc.stdout)
-                self.assertIn("the plugin data directory is not a safe absolute path", output["systemMessage"])
-                self.assertNotIn("permissionDecision", output["hookSpecificOutput"])
-        for path in (loose, grouped):
-            self.assertEqual(sorted(p.name for p in path.iterdir()), ["runtime", "state.json"])
-        self.assertTrue(self.enforced(payload, {**os.environ, "CLAUDE_PLUGIN_DATA": str(self.data)}, self.tmp))
+        (self.tmp / "data").mkdir(exist_ok=True)
+        proc = subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+                              check=False, env={**os.environ, "CLAUDE_PLUGIN_DATA": "data"}, cwd=self.tmp)
+        self.assertEqual(proc.returncode, 0, proc.stderr)
+        output = json.loads(proc.stdout)
+        self.assertIn("the plugin data directory is not an absolute path", output["systemMessage"])
+        self.assertNotIn("permissionDecision", output["hookSpecificOutput"])
 
     def test_the_hook_process_has_written_its_telemetry_when_it_exits(self) -> None:
         payload = self.deny_rule()

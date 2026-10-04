@@ -21,8 +21,7 @@ TELL = " Tell the user about this now. This notice comes from the plugin itself.
 MEANWHILE = "Rules are NOT enforced meanwhile and commands are not checked."
 TEXTS = {
     "unsupported": "this platform is unsupported ({detail}): the rules engine cannot run here. " + MEANWHILE + TELL,
-    "unsafe": ("the plugin data directory is not a safe absolute path ({detail}). No plugin code is run from it. " + MEANWHILE +
-               TELL),
+    "relative": "the plugin data directory is not an absolute path. No plugin code is run from it. " + MEANWHILE + TELL,
     "backoff": ("the rules runtime is not installed ({detail}). The next automatic attempt is at {when}. " + MEANWHILE +
                 " `guardrails engine status` shows the details." + TELL),
     "missing": ("the rules runtime is being installed automatically (about 10 seconds the first time; nothing for the "
@@ -51,7 +50,7 @@ def spawn_ensure() -> None:
 
 def due(data: Path, session: str, found: Outcome) -> bool:
     """Show the notice once per session, and again every REPEAT_SECONDS while a failure persists."""
-    if found.state == "unsafe":
+    if found.state == "relative":
         return True
     stamp = data / "notices" / hashlib.sha256(session.encode()).hexdigest()[:16]
     try:
@@ -93,11 +92,11 @@ def status_text(data: Path) -> str:
              f"platform: {bootstrap.platform_problem().key or 'unsupported: ' + found.detail}"]
     with contextlib.suppress(OSError, ValueError, KeyError):
         lines.append(f"installed: Python {json.loads((bootstrap.runtime_dir(data, pins) / 'marker.json').read_text())['python']}")
-    if found.state != "unsafe":
+    if found.state != "relative":
         with bootstrap.locked(data, False) as idle:
             if not idle:
                 lines.append("an install is running now")
-    if found.state in ("unsafe", "missing"):
+    if found.state in ("relative", "missing"):
         lines.append(f"problem: {found.state}: {found.detail}")
     if stamp := bootstrap.read_stamp(data):
         lines.append(f"last install failure: {stamp.why}, {stamp.count} in a row; next automatic attempt at "

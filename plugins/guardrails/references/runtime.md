@@ -34,6 +34,11 @@ Windows get an "unsupported platform" notice and no install attempt.
 
 ## Trust model
 
+The guard stops mistakes by an honest agent and by an agent steered by hostile repository content (a cloned repo's
+`.claude/settings.json` can set environment variables). Other local users, same-user malware and anyone who can write the
+plugin data dir are out of scope: they could edit the rules directly. Known gap: a repository that sets an absolute
+`CLAUDE_PLUGIN_DATA` chooses which runtime and rules the hook uses.
+
 Only `lib/bootstrap.py`, `lib/installer.py` and `lib/hostcli.py` run on the host's Python (3.9 or newer, standard
 library only). The installer downloads the pinned `uv` wheel from the one `files.pythonhosted.org` URL in the manifest
 (sha256 checked before the file is read, exactly one member unpacked), then runs that uv with a scrubbed environment
@@ -47,25 +52,17 @@ Network hosts: `pypi.org`, `files.pythonhosted.org`, `releases.astral.sh`, and `
 `release-assets.githubusercontent.com` as the Python fallback. `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and `SSL_CERT_FILE/DIR`
 are passed through; mirror and index variables are not.
 
-The hook wrapper starts the runtime's Python only when `CLAUDE_PLUGIN_DATA` is absolute and owned by you, `marker.json`
-exists, no `broken` file is next to it and the interpreter is owned by you (shell builtins only: nothing is spawned to
-decide). Each `ensure` also checks that the interpreter and the extension module are owned by you, not writable by group or
-others and inside the runtime dir; any failure reinstalls. The hook runs with `python -I`. The rest of the data dir check
-is the first thing `lib/guard.py` does, before it reads a rule, a state file or the payload: the path must be canonical (no
-`..`, no symlink component) and the directory not writable by group or others. A data dir that fails gets the notice "the
-plugin data directory is not a safe absolute path" with a fixed reason (the guard exits with code 111 and the wrapper falls
-back to the bootstrap), no plugin code runs from it, nothing is read or written there, and the notice repeats on every call.
-No notice, hook answer or `engine status` text contains a path or any other text taken from the environment or the
-repository; the runtime and log paths go to the stderr of `guardrails engine status` only. The project directory and the cwd
-never decide where the runtime is. Residuals, out of scope: a `CLAUDE_PLUGIN_DATA` that the repository controls and that
-points at a planted runtime passes these checks, because the variable is provided by the harness; and the interpreter
-itself starts before the guard can check the directory it lives in, so another local user who can write into a data dir
-that was made group- or world-writable could redirect that start (a hard-linked interpreter beside a planted standard
-library) before the guard refuses it.
+The hook wrapper starts the runtime's Python, with `python -I`, only when `CLAUDE_PLUGIN_DATA` is an absolute path,
+`marker.json` exists and no `broken` file is next to it (shell builtins only: nothing is spawned to decide); each `ensure`
+also checks that the files the marker lists exist, and reinstalls otherwise. A relative `CLAUDE_PLUGIN_DATA` gets the notice
+"the plugin data directory is not an absolute path" on every call and nothing runs from it. No notice, hook answer or
+`engine status` text contains a path or any other text taken from the environment or the repository; the runtime and log
+paths go to the stderr of `guardrails engine status` only. The project directory and the cwd never decide where the runtime
+is.
 
-The wrapper picks the host Python from fixed absolute locations first, then `PATH` entries that are absolute, outside the
-project and cwd and not world-writable; each candidate is smoke-tested, and a broken one is reported (its path on stderr),
-never skipped silently. A hook Python that dies is reported ("failed to run (exit N)").
+The wrapper picks the host Python from fixed absolute locations first, then `PATH` entries that are absolute and outside
+the project and cwd; each candidate is smoke-tested, and a broken one is reported (its path on stderr), never skipped
+silently. A hook Python that dies is reported ("failed to run (exit N)").
 
 ## When the engine fails
 

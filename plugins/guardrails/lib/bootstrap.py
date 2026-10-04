@@ -21,7 +21,7 @@ REPEAT_SECONDS = 600
 BACKOFFS = (REPEAT_SECONDS, 3600, 21600)
 KEEP_SECONDS = 30 * 86400
 PLUGIN_ID = "guardrails-gaetans-claude-plugins"
-State = Literal["ready", "installed", "backoff", "busy", "failed", "unsupported", "unsafe", "missing"]
+State = Literal["ready", "installed", "backoff", "busy", "failed", "unsupported", "relative", "missing"]
 
 
 class Wheel(TypedDict):
@@ -65,7 +65,7 @@ def load_pins() -> Pins:
 
 def data_dir() -> Path:
     data = os.environ.get("CLAUDE_PLUGIN_DATA")
-    return Path(data) if data else Path(os.path.realpath(Path.home() / ".claude" / "plugins" / "data" / PLUGIN_ID))
+    return Path(data) if data else Path.home() / ".claude" / "plugins" / "data" / PLUGIN_ID
 
 
 def sanitised(text: str, limit: int = 120) -> str:
@@ -76,19 +76,6 @@ def session_id(payload: object) -> str:
     """The session a hook payload belongs to; calls without one share a single bucket."""
     found = payload.get("session_id") if isinstance(payload, dict) else None
     return str(found or "nosession")
-
-
-def data_problem(data: Path) -> str | None:
-    """Why the data dir is not safe to run code from: it must be absolute, canonical, ours and not writable by others."""
-    if not data.is_absolute() or os.path.realpath(data) != str(data):
-        return "not an absolute canonical path"
-    try:
-        info = data.stat()
-    except FileNotFoundError:
-        return None
-    except OSError:
-        return "not accessible"
-    return "not owned by you or writable by others" if info.st_uid != os.geteuid() or info.st_mode & 0o022 else None
 
 
 class Platform(NamedTuple):
@@ -123,15 +110,13 @@ def runtime_dir(data: Path, pins: Pins) -> Path:
 
 
 def marker_problem(rt: Path, pins: Pins) -> str | None:
-    """None when the runtime is complete and the files the hook runs are ours, not writable by others and inside it."""
+    """None when the runtime is complete: the marker matches the pins and the files the hook runs exist."""
     try:
         marker = json.loads((rt / "marker.json").read_text())
         if marker["runtimeId"] != pins.runtime_id or (rt / "broken").exists():
             return "marker does not match the pins or the runtime is marked broken"
         for rel in marker["files"]:
-            info = (rt / rel).stat()
-            if info.st_uid != os.geteuid() or info.st_mode & 0o022 or not (rt / rel).resolve().is_relative_to(rt.resolve()):
-                return f"{rel} is not ours, is writable by others or leaves the runtime"
+            (rt / rel).stat()
     except (OSError, ValueError, KeyError, TypeError):
         return "not installed"
     return None
@@ -153,8 +138,8 @@ def diagnose(data: Path, pins: Pins | None = None) -> Outcome:
     key, why = platform_problem()
     if why:
         return Outcome("unsupported", sanitised(why))
-    if (bad := data_problem(data)) is not None:
-        return Outcome("unsafe", bad)
+    if not data.is_absolute():
+        return Outcome("relative", "not an absolute path")
     problem = marker_problem(runtime_dir(data, pins), pins)
     if problem is None:
         return Outcome("ready", key)
@@ -187,7 +172,7 @@ def ensure(data: Path, *, wait: bool = True, retry_now: bool = False) -> Outcome
     """Make the runtime ready: a no-op when it is; otherwise install, unless a recent failure says to wait."""
     pins = load_pins()
     found = diagnose(data, pins)
-    if found.state in ("ready", "unsupported", "unsafe") or (found.state == "backoff" and not retry_now):
+    if found.state in ("ready", "unsupported", "relative") or (found.state == "backoff" and not retry_now):
         return found
     rt = runtime_dir(data, pins)
     data.mkdir(parents=True, mode=0o700, exist_ok=True)
