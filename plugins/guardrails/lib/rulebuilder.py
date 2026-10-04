@@ -97,8 +97,7 @@ def loosened(node: Any) -> Any:
         if isinstance(node.get(key), list):
             forms = [loosened(member) for member in node[key]]
             found = found or any(form is not None for form in forms)
-            out[key] = ([form for form in forms if form is not None] if key == "any"
-                        else [form or member for form, member in zip(forms, node[key], strict=True)])
+            out[key] = [form or member for form, member in zip(forms, node[key], strict=True)]
     pattern = out.pop("pattern", None)
     in_context = isinstance(pattern, dict) and pattern.get("selector") == "command"
     text = pattern.get("context") if in_context else pattern

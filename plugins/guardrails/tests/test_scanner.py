@@ -143,6 +143,13 @@ class PatternShapes(AstIsolated):
             with self.subTest(command=command):
                 self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
 
+    def test_an_any_member_without_a_command_pattern_survives_next_to_one_with(self) -> None:
+        rule = rule_of({"any": [{"pattern": "pgrep $$$"}, {"kind": "command", "regex": r"^xargs\b.*\bkill\b"}]})
+        for command, expected in {"pgrep x": "direct", "xargs kill": "direct", "/usr/bin/pgrep x": "direct",
+                                  "ls | xargs kill": "wrapped", "ls": None}.items():
+            with self.subTest(command=command):
+                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
+
     def test_every_documented_and_preset_pattern_still_compiles_after_loosening(self) -> None:
         import json
 
