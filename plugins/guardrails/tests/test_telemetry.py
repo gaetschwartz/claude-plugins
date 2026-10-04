@@ -25,9 +25,9 @@ SECRETS = ("hunter2", "example.com", "/Users/gaetan/private", "ключ", "token
 CORPUS = ["kill -9 1234", "curl https://user:hunter2@example.com/x?token=abc", "ls /Users/gaetan/private",
           "echo 'ünïcode ключ'", "git status", "bash -c 'kill 1234'"]
 HOSTILE = ["x" * 200, "evil'); DROP TABLE rule_hours;--", "\x1b[31mred", "@parse", "ünï"]
-RULES = {"no-kill": {"match": {"program": "kill"}, "message": "No kill."},
-         "warn-ls": {"match": {"program": "ls"}, "action": "warn", "message": "Careful."},
-         "no-curl": {"match": {"program": "curl"}, "message": "No curl."}}
+RULES = {"no-kill": {"match": {"command": "kill"}, "message": "No kill."},
+         "warn-ls": {"match": {"command": "ls"}, "action": "warn", "message": "Careful."},
+         "no-curl": {"match": {"command": "curl"}, "message": "No curl."}}
 
 
 class Fixture(AstIsolated):
@@ -76,7 +76,7 @@ class Counted(Fixture):
         self.assertNotIn("no-curl", self.table())
 
     def test_only_rule_ids_integers_and_hours_reach_the_file_even_for_hostile_ids(self) -> None:
-        self.put(self.gpath, {"rules": {**RULES, **{rid: {"match": {"program": "kill"}, "message": "No kill."}
+        self.put(self.gpath, {"rules": {**RULES, **{rid: {"match": {"command": "kill"}, "message": "No kill."}
                                                     for rid in HOSTILE}}})
         for command in CORPUS:
             self.run_hook(command)
@@ -172,7 +172,7 @@ class Stats(Fixture):
     def test_the_card_names_every_group_and_a_named_rule_shows_its_days(self) -> None:
         for command in CORPUS:
             self.run_hook(command)
-        self.put(self.gpath, {"rules": {**RULES, "fresh": {"match": {"program": "zz"}, "message": "m"}}})
+        self.put(self.gpath, {"rules": {**RULES, "fresh": {"match": {"command": "zz"}, "message": "m"}}})
         code, out, _ = self.cli("stats", "--days", "3")
         self.assertEqual(code, 0)
         for needle in ("last 3 days · 6 calls", "**Rules**", "`no-kill", "**Never fired**", "`fresh", "no data",

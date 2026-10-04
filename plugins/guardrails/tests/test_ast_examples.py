@@ -25,8 +25,8 @@ def examples() -> list[tuple[Path, dict[str, Any]]]:
 
 
 def rule_of(example: dict[str, Any]) -> policy.Rule:
-    rule = policy.Rule.from_json({"match": example["rule"], "message": "m", "action": example["action"]})
-    return rule
+    return policy.Rule.from_json({"match": example["rule"], "message": "m", "action": example["action"],
+                                  "wrappers": example.get("wrappers", True)})
 
 
 class ExampleShape(unittest.TestCase):
@@ -38,7 +38,7 @@ class ExampleShape(unittest.TestCase):
         for path, e in found:
             with self.subTest(example=e.get("id"), file=path.name):
                 self.assertEqual(REQUIRED - set(e), set())
-                self.assertEqual(set(e) - REQUIRED - {"tree"}, set())
+                self.assertEqual(set(e) - REQUIRED - {"tree", "wrappers"}, set())
                 self.assertIn(e["action"], ("deny", "warn"))
                 self.assertGreaterEqual(len(e["catch"]), 3)
                 self.assertGreaterEqual(len(e["pass"]), 3)
@@ -76,7 +76,7 @@ class ExamplesRun(AstIsolated):
 
     def test_negated_relations_are_documented_as_working(self) -> None:
         text = "\n".join(path.read_text() for path in sources())
-        for needle in ('"not": {"inside"', '"not": {\n        "follows"'):
+        for needle in ('"not": {"inside"', '"not": {\n      "follows"'):
             self.assertIn(needle, text)
         self.assertNotIn("Negated context does not work", text)
 

@@ -21,12 +21,10 @@ A direct hit beats a wrapped one on the same rule.
   "id": "git-after-cd",
   "title": "git after cd",
   "rule": {
-    "ast": {
-      "pattern": "git $$$",
-      "follows": {
-        "any": [{"pattern": "cd $$$"}, {"kind": "list", "has": {"pattern": "cd $$$", "stopBy": "end"}}],
-        "stopBy": "end"
-      }
+    "pattern": "git $$$",
+    "follows": {
+      "any": [{"pattern": "cd $$$"}, {"kind": "list", "has": {"pattern": "cd $$$", "stopBy": "end"}}],
+      "stopBy": "end"
     }
   },
   "action": "warn",
@@ -54,13 +52,11 @@ is not a sibling. `git status && cd repo` passes: `follows` is directional. The 
   "id": "push-without-pull",
   "title": "git push with no git pull before it",
   "rule": {
-    "ast": {
-      "pattern": "git push $$$",
-      "not": {
-        "follows": {
-          "any": [{"pattern": "git pull $$$"}, {"kind": "list", "has": {"pattern": "git pull $$$", "stopBy": "end"}}],
-          "stopBy": "end"
-        }
+    "pattern": "git push $$$",
+    "not": {
+      "follows": {
+        "any": [{"pattern": "git pull $$$"}, {"kind": "list", "has": {"pattern": "git pull $$$", "stopBy": "end"}}],
+        "stopBy": "end"
       }
     }
   },
@@ -87,7 +83,7 @@ needed for the same reason as in the `git after cd` rule: `a && b && git push` n
 {
   "id": "terraform-auto-approve",
   "title": "terraform apply -auto-approve",
-  "rule": {"ast": {"pattern": "terraform apply $$$", "has": {"regex": "^-auto-approve$"}}},
+  "rule": {"pattern": "terraform apply $$$", "has": {"regex": "^-auto-approve$"}},
   "action": "deny",
   "catch": [
     "terraform apply -auto-approve", "make && terraform apply -auto-approve",

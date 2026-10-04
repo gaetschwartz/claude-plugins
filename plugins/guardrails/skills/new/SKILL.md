@@ -39,22 +39,25 @@ no modes.
 ## How to write the rule
 
 Read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md` (matcher ladder, tree, test matrix, edge cases, the six pitfalls)
-in full unless the rule is a bare `program` / `args` one. In short: one behavior per rule (split on "and"); the narrowest
-matcher that separates the examples; for an `ast` rule run `guardrails rule ast '<a command it must catch>'` and use the
+in full unless the rule is a bare `command` atom (with or without `args`). In short: one behavior per rule (split on
+"and"); the narrowest matcher that separates the examples (`match` is one rule, its keys ANDed, `any` for "either"); for
+a rule with relations run `guardrails rule ast '<a command it must catch>'` and use the
 kinds it prints, never guessed ones; at least 3 commands that must be caught (one wrapped: `sudo X`, `bash -c 'X'`, a pipe
 or `$( )`) and at least 3 that must pass (a look-alike, `man X`, `echo "X"`, a heredoc mentioning X); tighten to zero
 mismatches; a `message` that names the alternative.
 
 Three examples (each block is machine-checked: every `catch` command matches, every `pass` command does not).
 
-A plain pattern. `tree` shows why it matches: the command is a `command` whose `command_name` is `pkill`; `$$$` covers
-the words after it, and a command pattern is also tried behind a wrapper (`sudo pkill x`) and inside `bash -c` strings.
+A command by name. `tree` shows why it matches: the command is a `command` whose `command_name` is `pkill`; the
+`command` atom reads the name in any spelling (`/usr/bin/pkill`, `'pkill'`, after `FOO=1`), and it is also tried behind a
+wrapper (`sudo pkill x`) and inside `bash -c` strings. Add `"wrappers": false` next to `match` to leave the wrapped
+forms alone.
 
 ```rule-example
 {
   "id": "no-pkill",
   "title": "kill by name",
-  "rule": {"ast": {"pattern": "pkill $$$"}},
+  "rule": {"command": "pkill"},
   "action": "deny",
   "catch": [
     "pkill -f vite", "pkill", "sudo pkill node", "bash -c 'echo; pkill x'", "echo $(pkill x)"
@@ -73,10 +76,8 @@ A contextual relation. `stopBy: end` lets `inside` climb past the parent; the qu
   "id": "pgrep-in-subst-or-pipe",
   "title": "pgrep nested in a substitution or pipeline",
   "rule": {
-    "ast": {
-      "pattern": "pgrep $$$",
-      "inside": {"any": [{"kind": "command_substitution"}, {"kind": "pipeline"}], "stopBy": "end"}
-    }
+    "pattern": "pgrep $$$",
+    "inside": {"any": [{"kind": "command_substitution"}, {"kind": "pipeline"}], "stopBy": "end"}
   },
   "action": "deny",
   "catch": [
@@ -99,11 +100,9 @@ A negation with an exception. `not` + `has` looks inside the matched command, so
   "id": "no-force-push",
   "title": "force push except with lease",
   "rule": {
-    "ast": {
-      "pattern": "git push $$$",
-      "has": {"regex": "^(--force|-f)$"},
-      "not": {"has": {"regex": "^--force-with-lease"}}
-    }
+    "pattern": "git push $$$",
+    "has": {"regex": "^(--force|-f)$"},
+    "not": {"has": {"regex": "^--force-with-lease"}}
   },
   "action": "deny",
   "catch": [
@@ -127,9 +126,9 @@ that must pass. Skipped when a description was passed.
 
 **1.b.1** Elaborate the rule with the ladder from the guide. Derive the `id` from the intent (`no-pkill`); ask only when it
 collides with an id in `guardrails status`, and say when the colliding rule is managed. Put the user's description in the
-rule's `description`. A question about what a command is piped into is out of reach for `program`/`args`: use `ast` with
-`inside` for structure, `regex` for dataflow across commands. Every rule needs the ast-grep runtime, which installs itself;
-if `rule test` reports `cannot` for a command or says the engine failed, tell the user before going on
+rule's `description`. A question about what a command is piped into is out of reach for a `command` atom's `args`: use
+`inside` / `follows` for structure, a whole-text regex for dataflow across commands. Every rule needs the ast-grep
+runtime, which installs itself; if `rule test` reports `cannot` for a command or says the engine failed, tell the user before going on
 (`guardrails engine status` shows the state); no rule works while the engine fails.
 
 **1.b.2** With examples, test them: `guardrails rule test --json - 'cmd' …` with the rule on stdin (see "Passing the

@@ -3,7 +3,7 @@
   "rules": {
     "no-strings": {
       "description": "strings(1) used to work out how a program behaves",
-      "match": {"program": "strings"},
+      "match": {"command": "strings"},
       "action": "deny",
       "retry": "same-command",
       "modes": ["reverse-engineering"],
@@ -11,7 +11,7 @@
     },
     "binary-spelunking": {
       "description": "Symbol or disassembly dumps used for API discovery",
-      "match": {"program": ["otool", "nm", "objdump"]},
+      "match": {"command": ["otool", "nm", "objdump"]},
       "action": "warn",
       "modes": ["reverse-engineering"],
       "message": "If you are dumping symbols or disassembly to learn how to use a program or library, read its documentation instead (Context7, --help, man pages, upstream docs or source). Checking linkage or debugging a build is fine."

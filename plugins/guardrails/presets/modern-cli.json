@@ -4,7 +4,7 @@
     "find-fd": {
       "description": "find when fd is installed",
       "match": {
-        "program": "find"
+        "command": "find"
       },
       "requires": [
         "fd",
@@ -18,58 +18,56 @@
     "grep-rg": {
       "description": "recursive grep when ripgrep is installed",
       "match": {
-        "ast": {
-          "all": [
-            {
-              "kind": "command",
-              "has": {
-                "field": "name",
-                "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$"
-              }
-            },
-            {
-              "any": [
-                {
-                  "has": {
-                    "regex": "^(?:-[A-Za-z&&[^efmABCdD]]*[rR][A-Za-z]*|-drecurse|--recursive|--dereference-recursive|--directories=recurse)$",
-                    "not": {
-                      "follows": {
-                        "regex": "^--$",
-                        "stopBy": {
-                          "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$"
-                        }
-                      }
-                    },
+        "all": [
+          {
+            "command": [
+              "grep",
+              "egrep",
+              "fgrep"
+            ]
+          },
+          {
+            "any": [
+              {
+                "has": {
+                  "regex": "^(?:-[A-Za-z&&[^efmABCdD]]*[rR][A-Za-z]*|-drecurse|--recursive|--dereference-recursive|--directories=recurse)$",
+                  "not": {
                     "follows": {
-                      "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$",
-                      "stopBy": "end"
-                    }
-                  }
-                },
-                {
-                  "has": {
-                    "regex": "^(?:-d|--directories)$",
-                    "precedes": {
-                      "regex": "^recurse$"
-                    },
-                    "not": {
-                      "follows": {
-                        "regex": "^--$",
-                        "stopBy": {
-                          "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$"
-                        }
+                      "regex": "^--$",
+                      "stopBy": {
+                        "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$"
                       }
-                    },
-                    "follows": {
-                      "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$",
-                      "stopBy": "end"
                     }
+                  },
+                  "follows": {
+                    "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$",
+                    "stopBy": "end"
                   }
                 }
-              ]
-            }
-          ]
-        }
+              },
+              {
+                "has": {
+                  "regex": "^(?:-d|--directories)$",
+                  "precedes": {
+                    "regex": "^recurse$"
+                  },
+                  "not": {
+                    "follows": {
+                      "regex": "^--$",
+                      "stopBy": {
+                        "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$"
+                      }
+                    }
+                  },
+                  "follows": {
+                    "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$",
+                    "stopBy": "end"
+                  }
+                }
+              }
+            ]
+          }
+        ]
       },
       "requires": [
         "rg"

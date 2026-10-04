@@ -21,9 +21,10 @@ Parse the text above; every long flag has a short one.
 - `<id>`: the rule. `enable` / `disable`: set `enabled` to `true` / `false` on the rule (this is the rule's own flag,
   not the `guardrails enable|disable` hook verbs, which agents cannot run). `rm`: remove it. `key=value` pairs are
   turned into a JSON object for `guardrails rule set --json`; the keys are `action`, `retry`, `enabled`, `modes`,
-  `message`, `messageShort`, `description`, `program`, `args`, `regex`, `ast`, `requires`. Comma lists for
-  `modes`, `requires` and `program` become JSON arrays, `enabled` is a boolean, an empty value becomes `null`, which
-  clears the field; `program`, `args`, `regex`, `ast` edit `match` (`ast` is a JSON object).
+  `message`, `messageShort`, `description`, `match`, `wrappers`, `requires`. Comma lists for `modes` and `requires`
+  become JSON arrays, `enabled` and `wrappers` are booleans, `match` is a JSON object that replaces the whole matcher
+  (the rule's current `match` from the state file is the starting point), an empty value becomes `null`, which clears
+  the field.
 - `-s` / `--scope global|project|managed` (default global), `-y` / `--yes` (do not confirm `rm`).
 - No arguments: run `guardrails status`, paste its output VERBATIM, ask (AskUserQuestion, or chat when there
   are more than four) which rule, then ask what to change. A rule given without a change: paste the output of
@@ -44,11 +45,11 @@ Parse the text above; every long flag has a short one.
    - removal: confirm first with AskUserQuestion (`header` `Remove`, question "Remove rule `<id>` from `<scope>`?",
      options `Remove` and `Keep (Recommended)`) unless `-y`; then `guardrails rule rm <id> --scope <s>
      --as-user --reason "…"`
-3. For a non-trivial change to `match`, read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md`; worked `ast` rules
+3. For a non-trivial change to `match`, read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md`; worked rules
    by shape are in `${CLAUDE_PLUGIN_ROOT}/references/ast/index.md` (read only the file that matches).
-   When a change to `match` uses `ast`, follow the matcher ladder (`program`, `program` + `args`, `ast`
-   pattern with `inside` / `has`, `regex`) and run `guardrails rule ast '<command>'` to read the node kinds before
-   writing relational rules. After a change to `match` (program, args, regex, ast), re-verify: write the
+   Follow the matcher ladder (a `command` atom, a `command` with `args`, a `pattern` with `inside` / `has`, a
+   whole-text `{"kind": "program", "regex": ...}`) and run `guardrails rule ast '<command>'` to read the node kinds
+   before writing relational rules. After a change to `match` or `wrappers`, re-verify: write the
    commands the user gives, or sensible ones (a caught command, a wrapped form, a look-alike that must pass), as an examples list
    (`{"cmd", "source": "yours" | "inferred", "expect": "match" | "pass"}`, `expect` from what the user wants) on stdin
    and run `guardrails rule test --id <id> --examples - <<'EOF'` … `EOF`. Paste the output VERBATIM:

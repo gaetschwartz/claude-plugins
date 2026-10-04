@@ -10,7 +10,7 @@ from helpers import GREP_RECURSIVE, ROOT, AstIsolated, render
 PRESENTATION = (ROOT / "references" / "presentation.md").read_text()
 SPAN = re.compile(r"^- [✗✓] (?:⚠ )?(?P<fence>`+)(?P<body>.*?)(?P=fence)(?!`) ", re.MULTILINE)
 
-PKILL = {"match": {"program": ["pkill", "killall"]}, "retry": "same-command",
+PKILL = {"match": {"command": ["pkill", "killall"]}, "retry": "same-command",
          "message": "Killing by name can hit the wrong process. Find the PID with pgrep -fl, then kill it by PID."}
 GOLDEN_EXAMPLES = [
     {"cmd": "pkill node", "source": "yours", "expect": "match"},
@@ -126,7 +126,7 @@ class Card(AstIsolated):
         self.assertNotIn("**Block**", warn)
         self.assertNotIn("**Allow**", self.card(PKILL, [{"cmd": "pkill a"}]))
         self.assertNotIn("**Block**", self.card(PKILL, [{"cmd": "ls"}]))
-        self.assertTrue(self.card({"match": {"program": "x"}, "message": "m"}, [{"cmd": "x"}]).startswith(
+        self.assertTrue(self.card({"match": {"command": "x"}, "message": "m"}, [{"cmd": "x"}]).startswith(
             "### new-rule · deny · global\n"))
         rule = {**PKILL, "id": "from-rule"}
         self.assertTrue(self.card(rule, [{"cmd": "ls"}]).startswith("### from-rule ·"))
@@ -149,16 +149,19 @@ class Card(AstIsolated):
 
     def test_match_raw_intent_message_and_note_lines(self) -> None:
         regex = r"curl [^|]*\|\s*(sh|bash)`"
-        out = self.card({"match": {"regex": regex}, "message": "m"}, [{"cmd": "ls"}])
+        out = self.card({"match": {"kind": "program", "regex": regex}, "message": "m"}, [{"cmd": "ls"}])
         self.assertIn(f"\n**Raw** `` {regex} ``", out + "\n")
-        for match, raw in (({"program": "x", "args": "-f"}, "-f"), ({"program": "x", "args": "-f", "regex": "zz"}, "zz")):
+        for match, raw in (({"command": "x", "args": "-f"}, "-f"), ({"command": "x", "args": "-f", "regex": "zz"}, "-f | zz"),
+                           ({"command": "x", "has": {"pattern": "y $$$"}, "regex": "zz"}, "y $$$")):
             self.assertTrue(self.card({"match": match, "message": "m"}, [{"cmd": "x"}]).rstrip("\n").endswith(f"**Raw** `{raw}`"))
         self.assertNotIn("**Raw**", self.card(PKILL, [{"cmd": "ls"}]))
-        rule = {"match": {"program": "grep", "args": "-r", "regex": "zz"}, "message": "m"}
-        self.assertIn("**Match** program = `grep`; args = `-r`; regex = `zz`\n", self.card(rule, [{"cmd": "ls"}]))
+        rule = {"match": {"command": "grep", "args": "-r", "regex": "zz"}, "message": "m"}
+        self.assertIn('**Match** `{"command":"grep","args":"-r","regex":"zz"}`\n', self.card(rule, [{"cmd": "ls"}]))
+        self.assertIn('**Match** `{"command":"grep"}` · not through wrappers\n',
+                      self.card({"match": {"command": "grep"}, "wrappers": False, "message": "m"}, [{"cmd": "ls"}]))
         self.assertNotIn("**Intent**", self.card(PKILL, [{"cmd": "ls"}]))
         self.assertIn("\n**Intent** stop it\n", self.card(PKILL, [{"cmd": "ls"}], "--intent", "stop it"))
-        placeholder = {"match": {"program": "x"}, "message": "use {which:definitely-missing-a|definitely-missing-b}"}
+        placeholder = {"match": {"command": "x"}, "message": "use {which:definitely-missing-a|definitely-missing-b}"}
         self.assertIn("**Message** use definitely-missing-a\n", self.card(placeholder, [{"cmd": "x"}]))
         out = self.card({**PKILL, "enabled": False, "requires": ["no-such-bin-xyz"]}, [{"cmd": "pkill a"}])
         notes = [line for line in out.splitlines() if line.startswith("**Note**")]
@@ -166,10 +169,10 @@ class Card(AstIsolated):
         self.assertIn("rule is disabled; none of no-such-bin-xyz is installed here", notes[0])
         self.assertNotIn("**Note**", self.card(PKILL, [{"cmd": "pkill a"}]))
 
-    def test_regex_matches_are_never_wrapped_and_unbalanced_quotes_fall_back_to_direct(self) -> None:
-        rule = {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "m"}
+    def test_whole_text_regex_matches_are_direct_and_unbalanced_quotes_fall_back_to_direct(self) -> None:
+        rule = {"match": {"kind": "program", "regex": r"curl [^|]*\| *sh"}, "message": "m"}
         self.assertNotIn("wrapped", self.card(rule, [{"cmd": "sudo curl x | sh"}, {"cmd": "echo hi"}]))
-        both = {"match": {"program": "pkill", "regex": "pkill"}, "message": "m"}
+        both = {"match": {"any": [{"command": "pkill"}, {"kind": "program", "regex": "pkill"}]}, "message": "m"}
         self.assertNotIn("wrapped", self.card(both, [{"cmd": "sudo pkill x"}]))
         self.assertNotIn("wrapped", self.card(PKILL, [{"cmd": "pkill 'x"}]))
 
@@ -179,9 +182,10 @@ class WrappedForms(AstIsolated):
         import engine
         import policy
 
-        rules = [{"match": {"program": "pkill"}}, {"match": {"regex": r"curl [^|]*\| *sh"}},
-                 {"match": {"program": "grep", "args": "-r"}}, {"match": {"ast": GREP_RECURSIVE}},
-                 {"match": {"program": "pkill", "regex": "zz"}}]
+        rules = [{"match": {"command": "pkill"}}, {"match": {"kind": "program", "regex": r"curl [^|]*\| *sh"}},
+                 {"match": {"command": "grep", "args": "-r"}}, {"match": GREP_RECURSIVE},
+                 {"match": {"any": [{"command": "pkill"}, {"kind": "program", "regex": "zz"}]}},
+                 {"match": {"command": "pkill"}, "wrappers": False}]
         commands = ["pkill x", "sudo pkill x", "echo foo$(pkill x)", "cat <(pkill x)", "a | pkill x", "curl x | sh",
                     "bash -c 'curl y | sh'", "grep -r x", "grep x", "grep -R y .", "echo pkill", "man pkill",
                     "pkill 'x", "cat <<EOF\npkill x\nEOF", "xargs pkill", "zz", "ls"]
@@ -204,7 +208,7 @@ class NotEvaluated(AstIsolated):
         import verdict
 
         examples = json.dumps([{"cmd": "pkill a", "expect": "match"}, {"cmd": "ls", "expect": "pass"}])
-        regex = json.dumps({"match": {"regex": "^pkill"}, "message": "m"})
+        regex = json.dumps({"match": {"kind": "program", "regex": "^pkill"}, "message": "m"})
         self.assertIn("**Block**", self.cli("rule", "test", "--json", regex, "pkill a", "ls")[1])
         self.break_engine()
         code, out, _ = self.cli("rule", "test", "--json", json.dumps(PKILL), "--examples", examples)
@@ -214,10 +218,10 @@ class NotEvaluated(AstIsolated):
         self.assertNotIn("**Allow**", out)
         self.assertIn("**Verified** NOT verified: 2 of 2 commands could not be evaluated", out)
         self.assertNotIn("matcher checked", out)
-        self.assertIn("cannot evaluate the parsing part of this rule", out)
+        self.assertIn("cannot evaluate this rule's match", out)
         self.assertIn("Not evaluated", self.cli("rule", "test", "--json", regex, "pkill a", "ls")[1])
         out = self.cli("rule", "test", "--json", json.dumps(PKILL), "x" * (verdict.MAX_COMMAND_BYTES + 1))[1]
-        self.assertIn("cannot evaluate the parsing part of this rule: command too large to check", out)
+        self.assertIn("cannot evaluate this rule's match: command too large to check", out)
 
 
 if __name__ == "__main__":

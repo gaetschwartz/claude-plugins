@@ -262,7 +262,7 @@ class RealWrapperReady(RealRuntime):
                 self.assertIn(needle, proc.stdout)
 
     def deny_rule(self) -> str:
-        self.put(self.gpath, {"rules": {"no-pkill": {"match": {"program": "pkill"}, "message": "No pkill.",
+        self.put(self.gpath, {"rules": {"no-pkill": {"match": {"command": "pkill"}, "message": "No pkill.",
                                                       "action": "deny"}}})
         return json.dumps({"session_id": "b1", "cwd": str(self.proj), "tool_name": "Bash",
                            "tool_input": {"command": "sudo pkill x"}})
@@ -317,7 +317,7 @@ class RealWrapperReady(RealRuntime):
         data.mkdir(parents=True)
         (data / "runtime").symlink_to(DEV_DATA / "runtime")
         (data / "state.json").write_text(json.dumps({"rules": {"no-pkill": {
-            "match": {"program": "pkill"}, "message": "No pkill.", "action": "deny"}}}))
+            "match": {"command": "pkill"}, "message": "No pkill.", "action": "deny"}}}))
         payload = json.dumps({"session_id": "home", "cwd": str(home), "tool_name": "Bash",
                               "tool_input": {"command": "sudo pkill x"}})
         for project in (home, home / ".claude", home / ".claude" / "plugins", Path("/")):

@@ -1,5 +1,6 @@
-"""Typed ast-grep rules for a guardrails rule: the program/args shorthand and the user's own match.ast, made
-tolerant of how a command is spelled. All of it is data for ast-grep; nothing here reads shell syntax."""
+"""Typed ast-grep rules for a guardrails rule: its match with the command, assignment and wrapper atoms expanded and
+its single-command patterns made tolerant of how a command is spelled. All of it is data for ast-grep; nothing here
+reads shell syntax."""
 
 from __future__ import annotations
 
@@ -17,6 +18,17 @@ PLAIN_NAME = frozenset(string.ascii_letters + string.digits + "_.+-")
 SUBSTITUTIONS = ("command_substitution", "process_substitution")
 ASSIGNMENT_OR_REDIRECT = ("variable_assignment", "file_redirect", "herestring_redirect", "heredoc_redirect")
 ASSIGNMENTS = 3
+WRAPPERS = ("sudo", "doas", "env", "timeout", "nice", "nohup", "time", "command", "exec", "builtin", "stdbuf", "setsid",
+            "ionice", "xargs", "watch")
+ATOMS = ("command", "wrapper", "assignment")
+NESTED = ("not", "all", "any", "stopBy", "inside", "has", "follows", "precedes")
+GRAMMAR_KEYS = frozenset({"pattern", "kind", "regex", "nthChild", "range", "field", *NESTED})
+VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
+REMOVED = {
+    "program": 'match.program was removed: write {"command": <name or list>}, with its "args" beside it',
+    "ast": "match.ast was removed: the ast-grep rule is now the whole of match",
+    "regex": 'match.regex (a regex over the whole command) was removed: write {"kind": "program", "regex": ...}',
+}
 
 
 def name_regex(names: Sequence[str]) -> str:
@@ -38,13 +50,90 @@ def orphan_name(names: Sequence[str]) -> Rule:
     return {"any": [{"kind": "command_name", "regex": found, "inside": {"kind": "ERROR"}}, bare]}
 
 
-def shorthand(match: policy.Match) -> Rule | None:
-    """The rule for program/args, or None when the rule has no program."""
-    if not match.program:
-        return None
-    extra: list[Rule] = [{"regex": match.args}] if match.args else []
-    rule: Rule = {"all": [command_named(match.program), *extra]}
-    return rule if extra else {"any": [rule, orphan_name(match.program)]}
+def named(names: Sequence[str], args: str | None) -> Rule:
+    """A command with one of these names; `args` is a regex its whole text must contain."""
+    if args is not None:
+        return {"all": [command_named(names), {"regex": args}]}
+    return {"any": [command_named(names), orphan_name(names)]}
+
+
+def names_of(value: object, where: str) -> list[str]:
+    names = [value] if isinstance(value, str) else value
+    if not (isinstance(names, list) and names and all(policy.command_name(n) for n in names)):
+        raise policy.Invalid(f"'{where}' must be a command name or a non-empty list of them (no spaces or '/')")
+    return names
+
+
+def constraint(value: object, where: str, exact: str) -> str:
+    """The regex for an assignment's name or value: a string is `exact` filled with it, {"regex": ...} is used as is."""
+    if isinstance(value, str) and value:
+        return exact.format(re.escape(value))
+    if isinstance(value, dict) and set(value) == {"regex"} and isinstance(value["regex"], str):
+        return value["regex"]
+    raise policy.Invalid(f"'{where}' must be a non-empty string or {{\"regex\": \"...\"}}")
+
+
+def assignment(value: object, where: str) -> Rule:
+    if not isinstance(value, dict) or (unknown := set(value) - {"name", "value"}):
+        raise policy.Invalid(f"'{where}' must be an object with optional 'name' and 'value'"
+                             + (f" (unknown key {min(unknown)!r})" if isinstance(value, dict) else ""))
+    if isinstance(value.get("name"), str) and not VARIABLE.fullmatch(value["name"]):
+        raise policy.Invalid(f"'{where}.name' must be a variable name")
+    parts: list[Rule] = []
+    if "name" in value:
+        parts.append({"has": {"field": "name", "regex": constraint(value["name"], f"{where}.name", "^{}$")}})
+    if "value" in value:
+        quoted = "^(?:{0}|'{0}'|\"{0}\")$"
+        parts.append({"has": {"field": "value", "regex": constraint(value["value"], f"{where}.value", quoted)}})
+    return {"kind": "variable_assignment", **({"all": parts} if parts else {})}
+
+
+def atom(key: str, node: dict[str, Any], where: str) -> Rule:
+    value = node[key]
+    if key == "command":
+        args = node.get("args")
+        if args is not None and not isinstance(args, str):
+            raise policy.Invalid(f"'{where}.args' must be a string")
+        return named(names_of(value, f"{where}.command"), args)
+    if key == "wrapper":
+        names = WRAPPERS if value is True else value
+        if not (isinstance(names, list | tuple) and names and all(name in WRAPPERS for name in names)):
+            raise policy.Invalid(f"'{where}.wrapper' must be true or a non-empty list of wrapper names "
+                                 f"({', '.join(WRAPPERS)})")
+        return named(names, None)
+    return assignment(value, f"{where}.assignment")
+
+
+def expanded(node: object, where: str = "match") -> Any:
+    """The rule object with every atom replaced by the ast-grep rule it stands for; raises policy.Invalid on a key that
+    is neither ast-grep's nor an atom, or on a malformed atom."""
+    if isinstance(node, list):
+        return [expanded(item, f"{where}[{i}]") for i, item in enumerate(node)]
+    if not isinstance(node, dict):
+        return node
+    if unknown := set(node) - GRAMMAR_KEYS - set(ATOMS) - {"args"}:
+        raise policy.Invalid(f"unknown field {where}.{min(unknown)}: {policy.UNKNOWN_FIELD_HINT}")
+    if "args" in node and "command" not in node:
+        raise policy.Invalid(f"'{where}.args' only narrows a 'command' atom next to it")
+    out = {key: expanded(value, f"{where}.{key}") if key in NESTED else value
+           for key, value in node.items() if key not in ATOMS and key != "args"}
+    atoms = [atom(key, node, where) for key in ATOMS if key in node]
+    if atoms:
+        if not isinstance(out.get("all", []), list):
+            raise policy.Invalid(f"'{where}.all' must be a list of rules")
+        out["all"] = [*atoms, *out.get("all", [])]
+    return out
+
+
+def checked(match: object) -> dict[str, Any]:
+    """The match object of a stored rule, validated: one ast-grep rule object built from its keys and the atoms."""
+    if isinstance(match, dict) and (old := next((key for key in REMOVED if key in match), None)) \
+            and (old != "regex" or set(match) == {"regex"}):
+        raise policy.Invalid(f"{REMOVED[old]}; see references/matching.md")
+    if not isinstance(match, dict) or not match:
+        raise policy.Invalid("'match' must be a non-empty rule object")
+    expanded(match)
+    return match
 
 
 def widen(rule: Any) -> Any:
@@ -118,23 +207,7 @@ def loosened(node: Any) -> Any:
     return out if found and out.get("any", True) else None
 
 
-def found_rule(rule: policy.Rule) -> Rule | None:
-    """Where this rule matches: its program/args shorthand and its ast rule, spelling-tolerant."""
-    ast = rule.match.ast
-    tolerant = loosened(ast) if ast else None
-    parts = [part for part in (shorthand(rule.match), widen(tolerant or ast) if ast else None) if part]
-    if not parts:
-        return None
-    return parts[0] if len(parts) == 1 else {"any": parts}
-
-
-def config_of(rule: policy.Rule) -> Config | None:
-    """The ast-grep config that finds this rule's matches, or None when the rule has no parsed matcher."""
-    found = found_rule(rule)
-    return {"rule": found} if found else None
-
-
-def regex_config(rule: policy.Rule) -> Config | None:
-    """The config that finds `match.regex` in the whole command's text (ast-grep's regex engine runs in linear time)."""
-    pattern = rule.match.regex
-    return {"rule": {"kind": "program", "regex": pattern}} if pattern else None
+def config_of(rule: policy.Rule) -> Config:
+    """The ast-grep config that finds this rule's matches: its single-command patterns spelling-tolerant, then its
+    atoms expanded."""
+    return {"rule": expanded(widen(loosened(rule.match) or rule.match))}

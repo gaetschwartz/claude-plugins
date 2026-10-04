@@ -20,7 +20,6 @@ from verdict import Kind
 
 K = "pk" + "ill"
 BY_NAME: dict[str, Any] = {"any": [{"pattern": f"{K} $$$"}, {"pattern": "killall $$$"}]}
-PROGRAM_RULE = policy.Rule.from_json({"match": {"program": [K, "killall"]}, "message": "m"})
 
 
 def deny_text(out: dict[str, Any] | None) -> str:
@@ -33,9 +32,9 @@ def is_denied(out: dict[str, Any] | None) -> bool:
 
 
 RULES_FOR_OUTAGES: dict[str, Any] = {
-    "strings": {"match": {"program": "strings"}, "message": "No strings."},
-    "ast": {"match": {"ast": BY_NAME}, "message": "No kill."},
-    "pipe": {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "No pipe."}}
+    "strings": {"match": {"command": "strings"}, "message": "No strings."},
+    "ast": {"match": BY_NAME, "message": "No kill."},
+    "pipe": {"match": {"kind": "program", "regex": r"curl [^|]*\| *sh"}, "message": "No pipe."}}
 
 
 class LoudAndAllow(AstIsolated):
@@ -67,7 +66,7 @@ class LoudAndAllow(AstIsolated):
         self.assertIn("the ast-grep-py library cannot be imported", text)
 
     def test_managed_parse_rules_are_named_as_failing_open(self) -> None:
-        self.put(self.mpath, {"rules": {"m-zap": {"match": {"program": "zap"}, "message": "No zap."}}})
+        self.put(self.mpath, {"rules": {"m-zap": {"match": {"command": "zap"}, "message": "No zap."}}})
         self.break_engine()
         text = self.both_channels(self.hook("zap x", "m"))
         self.assertIn("1 of them are MANAGED rules, which fail open too", text)
@@ -79,7 +78,7 @@ class LoudAndAllow(AstIsolated):
         self.assertIn("pipe", self.both_channels(out))
 
     def test_a_rule_that_does_not_compile_is_skipped_and_reported_once(self) -> None:
-        self.put(self.gpath, {"rules": {"bad": {"match": {"ast": {"kind": "no_such_kind"}}, "message": "m"},
+        self.put(self.gpath, {"rules": {"bad": {"match": {"kind": "no_such_kind"}, "message": "m"},
                                         "strings": RULES_FOR_OUTAGES["strings"]}})
         out = self.hook("strings x", "i")
         self.assertTrue(is_denied(out))
@@ -135,7 +134,7 @@ class FailurePolicy(AstIsolated):
 
     def setUp(self) -> None:
         super().setUp()
-        self.put(self.gpath, {"rules": {"z": {"match": {"program": "zap"}, "message": "No zap."}}})
+        self.put(self.gpath, {"rules": {"z": {"match": {"command": "zap"}, "message": "No zap."}}})
 
     def test_a_checker_that_does_not_finish_denies_any_command_that_needs_the_parser(self) -> None:
         with mock.patch.object(bounded, "call", timed_out):
@@ -148,14 +147,14 @@ class FailurePolicy(AstIsolated):
 
     def test_a_hit_stands_when_a_cap_is_hit_later(self) -> None:
         command = "zap x; " + "; ".join(f"bash -c 'echo {n}'" for n in range(80))
-        ev = matching.evaluate(command, {"z": policy.Rule.from_json({"match": {"program": "zap"}, "message": "m"})})
+        ev = matching.evaluate(command, {"z": policy.Rule.from_json({"match": {"command": "zap"}, "message": "m"})})
         self.assertEqual((ev.kinds["z"], ev.refusal is not None), (Kind.DIRECT, True))
         out = self.hook(command, "hit")
         self.assertTrue(is_denied(out))
         self.assertIn("No zap.", deny_text(out))
 
     def test_warn_only_rules_never_turn_a_refusal_into_a_denial(self) -> None:
-        self.put(self.gpath, {"rules": {"z": {"match": {"program": "zap"}, "message": "Careful.", "action": "warn"}}})
+        self.put(self.gpath, {"rules": {"z": {"match": {"command": "zap"}, "message": "Careful.", "action": "warn"}}})
         with mock.patch.object(bounded, "call", timed_out):
             out = self.hook("sudo " * (self.BIG // 5) + "zap x", "warn")
         assert out is not None
@@ -184,7 +183,7 @@ class FailurePolicy(AstIsolated):
 
     def test_rule_test_names_the_failure(self) -> None:
         self.break_engine("it misparsed a test command")
-        rule = json.dumps({"match": {"program": "zap"}, "message": "m"})
+        rule = json.dumps({"match": {"command": "zap"}, "message": "m"})
         self.assertIn("unexpected error: RuntimeError", self.cli("rule", "test", "--json", rule, "zap x")[1])
 
 
@@ -207,7 +206,7 @@ class Oversize(AstIsolated):
 class Limits(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
-        self.put(self.gpath, {"rules": {"a": {"match": {"program": K}, "message": "No kill."}}})
+        self.put(self.gpath, {"rules": {"a": {"match": {"command": K}, "message": "No kill."}}})
 
     def test_nesting_beyond_the_caps_is_refused_not_passed(self) -> None:
         command = f"{K} x"

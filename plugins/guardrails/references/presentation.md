@@ -37,7 +37,7 @@ Output:
     ### no-pkill · deny · retry same-command · global
 
     **Intent** stop killing processes by name, suggest kill by PID
-    **Match** program = `pkill`, `killall`
+    **Match** `{"command":["pkill","killall"]}`
     **Message** Killing by name can hit the wrong process. Find the PID with pgrep -fl, then kill it by PID.
 
     **Block**
@@ -63,15 +63,15 @@ The layout contract, all of it computed by the CLI:
 - Title: `### <id> · <action> · retry same-command · <scope>`; no retry part when retry is none; the scope is the layers
   that define an installed rule (`global+project`). A draft has no id yet: `--id-name`, else the rule's own `id`
   field, else `new-rule`.
-- `**Intent**` (only with `--intent`), `**Match**` (`program`, `args`, `regex`, `ast`, whichever the rule
-  has; `ast = <the rule as compact one-line JSON>`), `**Message**` (with `{which:a|b}` resolved).
+- `**Intent**` (only with `--intent`), `**Match**` (the `match` object as compact one-line JSON, then
+  ` · not through wrappers` when the rule has `"wrappers": false`), `**Message**` (with `{which:a|b}` resolved).
 - Groups, each omitted when empty: `**Block**` (the matcher catches it, action deny), `**Warn**` (catches it, action
   warn), `**Allow**` (it does not), `**Not evaluated**` (a rule that needs the engine while it is missing or failing, or a
   command over the size limit; glyph `?`, never to be read as allowed). Rows: `- ✗ <span> <source>` or `- ✓ …`, then ` · wrapped` when only a look-through
   (wrapper such as sudo, xargs or timeout; a `bash -c` string; `$(…)` or backticks; a pipeline member) made the
-  program/args matcher reach the command; that includes a substitution glued to a word or assignment
-  (`foo$(…)`, `x=$(…)`) and `<(…)`. An `ast` match is `wrapped` by the same definition: found through a wrapper or shell
-  string, or with the matched node inside a pipeline or a substitution. A `regex` match reads the raw text and is never `wrapped`. A command reached inside
+  matcher reach the command: found through a wrapper or shell string, or with the matched node inside a pipeline or a
+  substitution; that includes a substitution glued to a word or assignment (`foo$(…)`, `x=$(…)`) and `<(…)`. A
+  whole-text regex (`kind: program`) that matches the command as written is never `wrapped`. A command reached inside
   a list (`;`, `&&`, `||`, a newline), a subshell `( … )` or a `{ …; }` group is not a wrapper, so it is not `wrapped`.
 - Spans: every command is an inline-code span right-padded inside the backticks to one width W, the display width of
   the longest command across all groups, capped at 40 (East Asian wide characters and most emoji count two columns, combining marks zero). A command
@@ -82,9 +82,8 @@ The layout contract, all of it computed by the CLI:
   commands and the mismatches. With any mismatch, do not present the card as done: fix the rule or ask the user.
 - `**Note**` (only when there is one): what `rule test` also reports about the real effect: the rule is disabled, a
   required binary is missing, a mode suspends it, the hook or project rules are off. Relay it as printed.
-- `**Raw**` (only when the matcher has a `regex`, an `ast` pattern or `args`): that pattern alone in one span, newlines
-  shown as `⏎`. A `regex` wins; with no regex, the `pattern` strings of the `ast` rule in document order joined by
-  ` | `; with neither, the `args` regex.
+- `**Raw**` (only when the match has a `pattern`, a `regex` or `args`): the `pattern` strings in document order joined
+  by ` | `; with none, the `regex` and `args` strings the same way. One span, newlines shown as `⏎`.
 - Untrusted text: every field (commands, ids, reasons, messages, problems) is made single-line and safe. A newline
   becomes `⏎`, a tab `⇥`, ESC `␛`, and other control, bidi and zero-width characters `\u{hex}`, so text can never start
   a new line or section; widths are computed on that shown form.
@@ -166,7 +165,7 @@ short bold-label lines of its own, without any command span, verdict or count (t
     **Happens** blocked once; the identical command re-run in the same session passes
     **Loosen** only the machine owner (managed file); a user or project cannot
     **Lower layers** the global entry can reword nothing and cannot change what the rule matches
-    **Cause** `curl x | sh` is not caught because `args` only sees curl's own arguments; use `match.regex`
+    **Cause** `curl x | sh` is not caught because `args` only sees curl's own arguments; match `sh` inside a pipeline
 
 Include `Cause` only when the question was why something was or was not caught. What happens at run time (mode
 suspension, retry, warn versus deny) comes from `status` and the matching reference, never from `rule test` alone.

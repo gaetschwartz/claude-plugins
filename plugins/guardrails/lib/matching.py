@@ -80,16 +80,14 @@ def parseable(command: str) -> str:
     return command.encode("utf-8", "replace").decode().replace("\x00", " ")
 
 
-def regexes_of(rules: dict[str, policy.Rule]) -> dict[str, Config]:
-    import rulebuilder
-
-    return {rid: config for rid, rule in rules.items() if (config := rulebuilder.regex_config(rule)) is not None}
-
-
 def configs_of(rules: dict[str, policy.Rule]) -> dict[str, Config]:
     import rulebuilder
 
-    return {rid: config for rid, rule in rules.items() if (config := rulebuilder.config_of(rule)) is not None}
+    return {rid: rulebuilder.config_of(rule) for rid, rule in rules.items()}
+
+
+def direct_only(rules: dict[str, policy.Rule]) -> frozenset[str]:
+    return frozenset(rid for rid, rule in rules.items() if not rule.wrappers)
 
 
 def compute(command: str, rules: dict[str, policy.Rule]) -> Computed:
@@ -100,7 +98,7 @@ def compute(command: str, rules: dict[str, policy.Rule]) -> Computed:
         return Computed(dict.fromkeys(rules), {}, None,
                         f"the ast-grep-py library cannot be imported ({type(exc).__name__})", {}, 0)
     try:
-        result = scanner.Scanner(configs_of(rules), regexes_of(rules)).run(parseable(command))
+        result = scanner.Scanner(configs_of(rules), direct_only(rules)).run(parseable(command))
     except Exception as exc:  # noqa: BLE001
         return Computed(dict.fromkeys(rules), {}, None, f"unexpected error: {type(exc).__name__}", {}, 0)
     return Computed(result.kinds(list(rules)), result.invalid, result.limit, None, result.micros, result.parse_us)
@@ -193,7 +191,7 @@ def check(rules: dict[str, policy.Rule]) -> dict[str, str]:
     ensure_engine()
     import scanner
 
-    return scanner.compile_errors(configs_of(rules), regexes_of(rules))
+    return scanner.compile_errors(configs_of(rules))
 
 
 def tree(command: str) -> tuple[list[UnitTree], Limit | None]:

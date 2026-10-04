@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from typing import Any
 
 import policy
 import telemetry
@@ -127,23 +128,28 @@ def compact(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
-def describe_match(match: policy.Match) -> str:
-    parts = []
-    if match.program:
-        parts.append("program = " + words(list(match.program)))
-    for key in ("args", "regex"):
-        if value := getattr(match, key):
-            parts.append(f"{key} = {span(value)}")
-    if match.ast:
-        parts.append(f"ast = {span(compact(match.ast))}")
-    return "; ".join(parts) or "(no matcher)"
+def describe_match(rule: policy.Rule) -> str:
+    return span(compact(rule.match)) + ("" if rule.wrappers else " · not through wrappers")
 
 
-def raw_matcher(match: policy.Match) -> str:
-    if match.regex:
-        return match.regex
-    patterns = policy.ast_patterns(match.ast)
-    return " | ".join(patterns) if patterns else (match.args or "")
+def texts_under(node: object, keys: tuple[str, ...]) -> list[str]:
+    """Every value under one of these keys in a rule object, in document order (a pattern object: its context)."""
+    if isinstance(node, list):
+        return [text for item in node for text in texts_under(item, keys)]
+    if not isinstance(node, dict):
+        return []
+    out: list[str] = []
+    for key, value in node.items():
+        if key in keys and isinstance(value, str | dict):
+            out.append(value if isinstance(value, str) else str(policy.view(value, "context")))
+        else:
+            out += texts_under(value, keys)
+    return out
+
+
+def raw_matcher(match: dict[str, Any]) -> str:
+    """The match's patterns, else its regexes (`regex`, and `args` of a command atom), joined."""
+    return " | ".join(texts_under(match, ("pattern",)) or texts_under(match, ("regex", "args")))
 
 
 def plural(n: int, word: str) -> str:
@@ -161,7 +167,7 @@ def rule_card(rid: str, rule: policy.Rule, message: str, scope: str, intent: str
     lines.append("")
     if intent:
         lines.append(f"**Intent** {prose(intent)}")
-    lines.append(f"**Match** {describe_match(rule.match)}")
+    lines.append(f"**Match** {describe_match(rule)}")
     lines.append(f"**Message** {prose(message)}")
 
     shown = [clean(r.cmd) for r in results]

@@ -30,7 +30,7 @@ class RealInstall(Isolated):
         marker = json.loads((rt / "marker.json").read_text())
         self.assertEqual((marker["runtimeId"], marker["python"].split(".")[:2]), (pins.runtime_id, ["3", "13"]))
         self.assertEqual(bootstrap.ensure(self.data).state, "ready")
-        self.put(self.gpath, {"rules": {"no-pkill": {"match": {"program": "pkill"}, "message": "No pkill.",
+        self.put(self.gpath, {"rules": {"no-pkill": {"match": {"command": "pkill"}, "message": "No pkill.",
                                                       "action": "deny"}}})
         payload = json.dumps({"session_id": "real", "cwd": str(self.proj), "tool_name": "Bash",
                               "tool_input": {"command": "sudo -u bob pkill -f x"}})

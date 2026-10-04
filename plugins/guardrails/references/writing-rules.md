@@ -1,8 +1,9 @@
 # Writing guardrails rules
 
-The full procedure for one rule. Read it when a rule is anything beyond `program` / `args`, uses a relation or a regex,
-covers several behaviors, or has wrapper or quoting concerns, and whenever you are unsure. Field and matcher semantics
-are in [matching.md](matching.md) (not repeated here); worked `ast` rules by shape are in [ast/index.md](ast/index.md).
+The full procedure for one rule. Read it when a rule is anything beyond a `command` atom (with or without `args`), uses
+a relation or a regex, covers several behaviors, or has wrapper or quoting concerns, and whenever you are unsure. Field
+and matcher semantics are in [matching.md](matching.md) (not repeated here); worked rules by shape are in
+[ast/index.md](ast/index.md).
 
 The steps: intent, one behavior, cheapest matcher, read the tree, write, test, tighten, message, settings.
 
@@ -19,8 +20,8 @@ or `modes`:
 
 - "Block `pkill` and `killall`, and warn on `kill -9`": two rules (deny, warn), each with its own message.
 - "Block `rm -rf /` and `docker rm $(...)`": two rules; the messages name different alternatives.
-- `pkill` and `killall` with the same message and action are one behavior: one rule with `program: [pkill, killall]`
-  or an `any`.
+- `pkill` and `killall` with the same message and action are one behavior: one rule with
+  `{"command": ["pkill", "killall"]}` or an `any`.
 
 A vague message on a rule that covers several things is the usual symptom of a rule that should be split.
 
@@ -30,18 +31,20 @@ Take the first rung that separates your examples. Each rung down costs precision
 
 | rung | right when | example |
 |---|---|---|
-| `program` | the command name alone decides | `program: pkill` |
-| `program` + `args` | one command's own words decide (regex over its arguments) | `program: docker`, `args: "\\bsystem prune\\b"` |
-| `ast` | structure decides: nesting, pipelines, order, a flag on one command among several, a wrapper or shell itself | [ast/index.md](ast/index.md) |
-| `regex` | only raw text can say it, across nodes the tree cannot relate | text of one shell line, or unparseable input |
+| `command` | the command name alone decides | `{"command": "pkill"}` |
+| `command` + `args` | one command's own words decide (regex over its text) | `{"command": "docker", "args": "\\bsystem prune\\b"}` |
+| relations | structure decides: nesting, pipelines, order, a flag on one command among several, a wrapper or shell itself | [ast/index.md](ast/index.md) |
+| whole-text regex | only raw text can say it, across nodes the tree cannot relate | `{"kind": "program", "regex": "..."}` |
 
-`regex` is last because it reads heredocs and quoted strings as if they were code. It is Rust regex syntax (ast-grep's engine,
-linear time): no backreferences or look-around, and `rule add/test` refuse them. `args` is per command and never sees
-a pipe or a substitution. `program` never matches a wrapper or shell (`sudo`, `bash`). Each is a pitfall below.
+The whole-text regex is last because it reads heredocs and quoted strings as if they were code. Every `regex` is Rust
+regex syntax (ast-grep's engine, linear time): no backreferences or look-around, and `rule add/test` refuse them. `args`
+is per command and never sees a pipe or a substitution. A `command` atom on the wrapped command needs nothing for
+`sudo X`; a rule about the wrapper itself uses the `wrapper` atom, and `"wrappers": false` keeps a rule off the wrapped
+forms. Each is a pitfall below. The keys of `match` are ANDed: say "either" with `any`, "except" with `not`.
 
 ## 4. Get the tree
 
-For any `ast` rule with a relation, before writing it:
+For any rule with a relation, before writing it:
 
     guardrails rule ast 'sudo kill -9 $(pidof vite)'
 
@@ -78,13 +81,15 @@ worse, never matches.
 
 ## 5. Write the rule
 
-1. Start with a `pattern` for the dangerous command (`docker rm $$$`). Anchor the rule on it, not on the wrapper or the
-   context: wrappers are transparent (the command is also matched with the wrapper replaced), so `sudo X` needs no rule.
+1. Start with a `command` atom or a `pattern` for the dangerous command (`{"command": "docker"}`, `docker rm $$$`).
+   Anchor the rule on it, not on the wrapper or the context: wrappers are transparent (the command is also matched with
+   the wrapper replaced), so `sudo X` needs no rule. When the wrapped forms must NOT count, set `"wrappers": false`.
 2. Add one relation per fact about the surroundings (`inside` a substitution, `follows` a downloader). Give relations
    `stopBy: end` unless you mean the nearest level.
 3. Flags and values: `has` with a `regex` on one word; `all` to require several, `any` for alternatives, `not` + `has`
    for an exception on the same command.
-4. A bare `kind` is fine when a pattern cannot say it (`kind: command` with `has: {field: name, regex: ...}`).
+4. A bare `kind` is fine when a pattern cannot say it (`{"kind": "command", "has": {"assignment": {"name":
+   "LD_PRELOAD"}}}` for an assignment prefix); a command name is the `command` atom, never a hand-written name regex.
 5. `id` from the intent (`no-pkill`), `description` in the user's words, `action`, `message`.
 
 Negated context (`not` around `inside`, `follows`, `precedes`) works, because every rule runs on the real tree of the
@@ -145,14 +150,15 @@ Test each that applies to the rule. Expected results are for a rule about the co
 | `<<-` | `cat <<-EOF` with tab-indented body and terminator | body is data |
 | lists, subshells, groups | `a; X`, `a && X`, `(X)`, `{ X; }`, `X &` | caught, direct |
 | newline and continuation | `a\nX`, `X \` + newline + `-f` | caught |
-| absolute path, quoted name, assignment prefix | `/usr/bin/X`, `"X"`, `FOO=1 X` | caught by `program`; a literal-argument `pattern` does not see through `FOO=1` |
+| absolute path, quoted name, assignment prefix | `/usr/bin/X`, `"X"`, `FOO=1 X` | caught by a `command` atom; a literal-argument `pattern` does not see through `FOO=1` |
 | mention only | `man X`, `echo X`, `echo "X -f"` | passes |
 | look-alike name | `visudo` vs `sudo`, `pgrep` vs `pkill` | passes |
 | piped into or fed by | `a \| X`, `X \| b` | per the rule's intent |
 | Monitor and background use | the same command in a Monitor call, `X &` | rules for Bash also apply to Monitor |
 
 Known limits, where the rule cannot see the command (say so in the description rather than hoping): the list "Cannot be
-analysed statically" and the notes on syntax errors and wrapper coarseness in [matching.md](matching.md#program-args).
+analysed statically" and the notes on syntax errors and wrapper coarseness in
+[matching.md](matching.md#how-a-command-is-looked-through).
 
 ## The six pitfalls
 
@@ -178,24 +184,27 @@ or `&&` token next to the node, not the command beyond it. Add `stopBy: end` unl
 
 ### args-no-pipelines
 
-`args` is a regex over one command's own text: `program: curl` + `args: "\| *sh"` never matches `curl x | sh`, because
-the pipe is not part of the `curl` command. A question about what a command is piped into, or fed by, needs an `ast`
-relation or a `regex`. See [ast/pipelines.md](ast/pipelines.md).
+`args` is a regex over one command's own text: `{"command": "curl", "args": "\| *sh"}` never matches `curl x | sh`,
+because the pipe is not part of the `curl` command. A question about what a command is piped into, or fed by, needs a
+relation (`inside` a `pipeline`, `follows` a `command`) or a whole-text regex. See [ast/pipelines.md](ast/pipelines.md).
 
-### program-and-wrapper-words
+### command-and-wrapper-words
 
-`program` matches a command by name, `program: sudo` (or `bash`, `env`, `xargs`) included, and also the command behind a
-wrapper, read from any of the wrapper's own words: `program: pkill` matches `sudo -u bob pkill x` and, as a known false positive,
-`sudo grep pkill file` and `command -v pkill`. Test the look-alikes. See [ast/wrappers.md](ast/wrappers.md).
+A `command` atom matches a command by name, `{"command": "sudo"}` (or `bash`, `env`, `xargs`) included, and also the
+command behind a wrapper, read from any of the wrapper's own words: `{"command": "pkill"}` matches `sudo -u bob pkill x`
+and, as a known false positive, `sudo grep pkill file` and `command -v pkill`. Test the look-alikes; `"wrappers": false`
+drops every wrapped form at once. See [ast/wrappers.md](ast/wrappers.md).
 
 ### regex-in-heredocs
 
-`regex` reads raw text: it fires on `echo "X"`, `man X` and inside heredocs and quotes, and a regex hit is never tagged
-wrapped. Use it only when no tree relation says it, and then test the mentions.
+A whole-text regex (`{"kind": "program", "regex": "..."}`) reads raw text: it fires on `echo "X"`, `man X` and inside
+heredocs and quotes, and its hit on the command as written is never tagged wrapped. Use it only when no tree relation says
+it, and then test the mentions.
 
 ## Anti-patterns
 
-- A raw-text `regex` for a structural question ("only inside `$( )`", "as the last pipeline member").
+- A whole-text regex for a structural question ("only inside `$( )`", "as the last pipeline member").
+- A hand-written name regex (`"regex": "^xargs\\b"`) where a `command` atom says it: it misses `/usr/bin/xargs` and `'ps'`.
 - Matching the wrapper instead of the wrapped command (`sudo` rather than what runs under it).
 - One rule for several behaviors under a vague message.
 - Relying on holes inside `$( )`.
@@ -209,10 +218,11 @@ Intent: "Deny `docker rm` when its targets come from a command substitution (`do
 agent should list the containers and remove the ones it means." One behavior (the `docker ps | xargs docker rm` form is
 another rule with its own shape).
 
-Rung 1, `program: docker`: blocks `docker ps`. Rung 2, `program: docker` with `args: "\brm\b.*\$\("`: `args` is a
-regex over the command's text, so it catches the real commands but cannot tell a substitution from text and fires on
-`docker rm 'a$(b)'` (verified with `rule test`). Rung 5, `regex: "docker (container )?rm\b.*\$\("`: catches the real commands, but
-also `echo "docker rm $(docker ps -aq)"`, a quoted look-alike and a heredoc that mentions it. So `ast`.
+Rung 1, `{"command": "docker"}`: blocks `docker ps`. Rung 2, `{"command": "docker", "args": "\\brm\\b.*\\$\\("}`:
+`args` is a regex over the command's text, so it catches the real commands but cannot tell a substitution from text and
+fires on `docker rm 'a$(b)'` (verified with `rule test`). Rung 4, `{"kind": "program", "regex": "docker (container
+)?rm\\b.*\\$\\("}`: catches the real commands, but also `echo "docker rm $(docker ps -aq)"`, a quoted look-alike and a
+heredoc that mentions it. So a relation.
 
 `guardrails rule ast 'docker rm -f $(docker ps -aq)'` shows a `command` (name `docker`, words `rm`, `-f`) with a
 `command_substitution` child. A substitution can also sit deeper (`"$(...)"`), hence `has` with `stopBy: end`;
@@ -223,12 +233,10 @@ also `echo "docker rm $(docker ps -aq)"`, a quoted look-alike and a heredoc that
   "id": "no-docker-rm-by-substitution",
   "title": "docker rm fed by a substitution",
   "rule": {
-    "ast": {
-      "all": [
-        {"any": [{"pattern": "docker rm $$$"}, {"pattern": "docker container rm $$$"}]},
-        {"has": {"kind": "command_substitution", "stopBy": "end"}}
-      ]
-    }
+    "all": [
+      {"any": [{"pattern": "docker rm $$$"}, {"pattern": "docker container rm $$$"}]},
+      {"has": {"kind": "command_substitution", "stopBy": "end"}}
+    ]
   },
   "action": "deny",
   "catch": [

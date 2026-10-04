@@ -26,7 +26,7 @@ import render  # noqa: F401
 import store
 import telemetry
 
-GREP_RECURSIVE = json.loads((ROOT / "presets" / "modern-cli.json").read_text())["rules"]["grep-rg"]["match"]["ast"]
+GREP_RECURSIVE = json.loads((ROOT / "presets" / "modern-cli.json").read_text())["rules"]["grep-rg"]["match"]
 MAINTAINER = json.loads((ROOT / "tests" / "maintainer_rules.json").read_text())
 
 

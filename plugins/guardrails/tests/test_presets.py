@@ -29,7 +29,7 @@ class Presets(AstIsolated):
             self.assertNotIn(leftover, sheet)
         self.assertIn("{which:fd|fdfind} -e py", sheet)
         self.assertEqual(rules["find-fd"]["requires"], ["fd", "fdfind"])
-        self.assertEqual(set(rules["grep-rg"]["match"]), {"ast"})
+        self.assertEqual(rules["grep-rg"]["match"]["all"][0], {"command": ["grep", "egrep", "fgrep"]})
 
     def test_install_global_and_idempotent(self) -> None:
         code, out, _ = self.cli("preset", "install", "docs-first")

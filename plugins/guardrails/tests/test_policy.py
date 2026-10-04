@@ -14,7 +14,7 @@ def rules_of(managed: Any, g: Any, p: Any) -> dict[str, policy.Rule]:
 
 
 def rule(**overrides: Any) -> dict[str, Any]:
-    return {"match": {"program": "strings"}, "message": "use docs", **overrides}
+    return {"match": {"command": "strings"}, "message": "use docs", **overrides}
 
 
 def shape(eff: policy.Rule) -> tuple[Any, ...]:
@@ -24,17 +24,52 @@ def shape(eff: policy.Rule) -> tuple[Any, ...]:
 class Validate(unittest.TestCase):
     def test_minimal_and_full_rules_are_valid_and_malformed_ones_are_not(self) -> None:
         policy.Rule.from_json(rule())
-        policy.Rule.from_json(rule(match={"ast": {"kind": "command"}}, requires=["rg"], messageShort="s"))
+        policy.Rule.from_json(rule(match={"kind": "command"}, requires=["rg"], messageShort="s", wrappers=False))
         bad: list[Any] = [
-            "notadict", {"match": {"program": "x"}}, rule(message="  "), rule(match={}), rule(match={"args": "-9"}),
-            rule(match={"program": "x", "bogus": 1}), rule(match={"program": 3}), rule(match={"program": ["x", ""]}),
-            rule(match={"builtin": "nope"}), rule(match={"program": "x y"}), rule(match={"program": "a/b"}),
+            "notadict", {"match": {"command": "x"}}, rule(message="  "), rule(match={}), rule(match={"args": "-9"}),
+            rule(match={"command": "x", "bogus": 1}), rule(match={"command": 3}), rule(match={"command": ["x", ""]}),
+            rule(match={"builtin": "nope"}), rule(match={"command": "x y"}), rule(match={"command": "a/b"}),
             rule(action="block"), rule(retry="always"), rule(modes="reverse-engineering"), rule(requires=[]),
-            rule(enabled="false"), rule(messageShort=3),
+            rule(enabled="false"), rule(messageShort=3), rule(wrappers="no"), rule(wrappers=None),
         ]
         for r in bad:
             with self.subTest(rule=r), self.assertRaises(policy.Invalid):
                 policy.Rule.from_json(r)
+
+
+    def test_a_rule_in_the_removed_format_fails_naming_the_new_form(self) -> None:
+        for match, needle in (({"program": "pkill"}, '{"command": <name or list>}'),
+                              ({"program": "kill", "args": "-9"}, '{"command": <name or list>}'),
+                              ({"ast": {"pattern": "pkill $$$"}}, "the ast-grep rule is now the whole of match"),
+                              ({"regex": "curl.*sh"}, '{"kind": "program", "regex": ...}'),
+                              ({"regex": "x", "ast": {"kind": "command"}}, "match.ast was removed"),
+                              ({"args": "-9"}, "only narrows a 'command' atom")):
+            with self.subTest(match=match), self.assertRaises(policy.Invalid) as raised:
+                policy.Rule.from_json(rule(match=match))
+            self.assertIn(needle, str(raised.exception))
+        policy.Rule.from_json(rule(match={"kind": "word", "regex": "x"}))
+
+    def test_atom_values_are_checked(self) -> None:
+        bad: list[Any] = [
+            {"command": ""}, {"command": []}, {"command": "a b"}, {"command": "/usr/bin/x"}, {"command": ["x", 3]},
+            {"command": "x", "args": ["-9"]}, {"has": {"args": "-9"}}, {"wrapper": False}, {"wrapper": []},
+            {"wrapper": ["sudo", "ssh"]}, {"wrapper": "sudo"}, {"assignment": "LD_PRELOAD"}, {"assignment": {"key": "x"}},
+            {"assignment": {"name": "A B"}}, {"assignment": {"name": ""}}, {"assignment": {"value": 3}},
+            {"assignment": {"value": {"regex": 3}}}, {"assignment": {"value": {"regex": "x", "flags": "i"}}},
+            {"kind": "command", "has": {"assignment": {"name": 1}}}, {"command": "x", "all": {"kind": "word"}},
+            {"not": {"comand": "x"}}, {"any": [{"command": "x"}, {"programme": "y"}]},
+        ]
+        for match in bad:
+            with self.subTest(match=match), self.assertRaises(policy.Invalid):
+                policy.Rule.from_json(rule(match=match))
+        for match in ({"command": "x"}, {"command": ["x", "g++"], "args": "-9"}, {"wrapper": True},
+                      {"wrapper": ["sudo", "env"]}, {"assignment": {}}, {"assignment": {"name": "LD_PRELOAD"}},
+                      {"assignment": {"name": {"regex": "^LD_"}, "value": "x.so"}},
+                      {"kind": "command", "has": {"assignment": {"name": "A"}}, "not": {"wrapper": True}},
+                      {"all": [{"command": "x"}], "inside": {"kind": "pipeline", "has": {"command": "y"}}},
+                      {"command": "x", "nthChild": {"position": 1, "ofRule": {"kind": "command"}}}):
+            with self.subTest(match=match):
+                policy.Rule.from_json(rule(match=match))
 
 
 class Layering(unittest.TestCase):
@@ -56,8 +91,8 @@ class Layering(unittest.TestCase):
 
     def test_text_is_replaced_but_match_is_not_and_an_empty_message_falls_back(self) -> None:
         g = {"rules": {"r": rule()}}
-        eff = rules_of({}, g, {"rules": {"r": {"message": "m2", "match": {"program": "nm"}}}})["r"]
-        self.assertEqual((eff.message, eff.match), ("m2", policy.Match(("strings",))))
+        eff = rules_of({}, g, {"rules": {"r": {"message": "m2", "match": {"command": "nm"}}}})["r"]
+        self.assertEqual((eff.message, eff.match), ("m2", {"command": "strings"}))
         self.assertEqual(rules_of({}, g, {"rules": {"r": {"message": ""}}})["r"].message, "use docs")
 
     def test_project_only_rules_get_defaults_and_a_disabled_project_drops_its_entries(self) -> None:
@@ -76,7 +111,8 @@ class ManagedLayering(unittest.TestCase):
 
     def test_each_loosening_is_ignored_on_its_own_and_an_invalid_override_falls_back(self) -> None:
         for field, value in (("action", "warn"), ("retry", "same-command"), ("enabled", False),
-                             ("modes", ["re", "extra"]), ("match", {"program": "nm"}), ("requires", ["fd"]), ("message", "")):
+                             ("modes", ["re", "extra"]), ("match", {"command": "nm"}), ("wrappers", False),
+                             ("requires", ["fd"]), ("message", "")):
             with self.subTest(field=field):
                 base = self.eff()
                 self.assertEqual(self.eff({"rules": {"r": {field: value}}}), base)

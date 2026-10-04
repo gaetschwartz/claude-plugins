@@ -12,19 +12,17 @@ syntax and semantics: [matching.md](../matching.md).
   "id": "pgrep-nested",
   "title": "pgrep only when nested",
   "rule": {
-    "ast": {
-      "pattern": "pgrep $$$",
-      "inside": {
-        "any": [
-          {"kind": "command_substitution"},
-          {"kind": "pipeline"},
-          {"kind": "if_statement"},
-          {"kind": "while_statement"},
-          {"kind": "for_statement"},
-          {"kind": "list"}
-        ],
-        "stopBy": "end"
-      }
+    "pattern": "pgrep $$$",
+    "inside": {
+      "any": [
+        {"kind": "command_substitution"},
+        {"kind": "pipeline"},
+        {"kind": "if_statement"},
+        {"kind": "while_statement"},
+        {"kind": "for_statement"},
+        {"kind": "list"}
+      ],
+      "stopBy": "end"
     }
   },
   "action": "deny",
@@ -43,8 +41,8 @@ syntax and semantics: [matching.md](../matching.md).
 
 `stopBy: end` makes `inside` climb every ancestor; the default checks only the parent, so a `pgrep` in a loop body
 (parent `do_group`) would be missed. `"$(...)"` runs, `'$(...)'` and a quoted heredoc are data, which is why the
-single-quoted and heredoc commands pass. A naive `program: pgrep` also blocks the harmless `pgrep -xl vite`, and a
-`regex` also blocks `man pgrep`. Drop `list` from the kinds to allow `make && pgrep x`.
+single-quoted and heredoc commands pass. A naive `{"command": "pgrep"}` also blocks the harmless `pgrep -xl vite`,
+and a whole-text regex also blocks `man pgrep`. Drop `list` from the kinds to allow `make && pgrep x`.
 
 ## A command inside a loop
 
@@ -52,7 +50,7 @@ single-quoted and heredoc commands pass. A naive `program: pgrep` also blocks th
 {
   "id": "sleep-poll",
   "title": "sleep in a polling loop",
-  "rule": {"ast": {"pattern": "sleep $$$", "inside": {"kind": "while_statement", "stopBy": "end"}}},
+  "rule": {"pattern": "sleep $$$", "inside": {"kind": "while_statement", "stopBy": "end"}},
   "action": "deny",
   "catch": [
     "while ! curl -sf localhost:3000; do sleep 1; done", "until curl -sf localhost:3000; do sleep 2; done",
@@ -78,10 +76,8 @@ A bare `sleep 5` passes because nothing contains it.
   "id": "deny-in-subst",
   "title": "kill-by-name inside $( )",
   "rule": {
-    "ast": {
-      "any": [{"pattern": "pkill $$$"}, {"pattern": "killall $$$"}],
-      "inside": {"kind": "command_substitution", "stopBy": "end"}
-    }
+    "any": [{"pattern": "pkill $$$"}, {"pattern": "killall $$$"}],
+    "inside": {"kind": "command_substitution", "stopBy": "end"}
   },
   "action": "deny",
   "catch": [
@@ -110,7 +106,7 @@ command" is decided by what really surrounds it.
 {
   "id": "npm-publish-unguarded",
   "title": "npm publish outside an if",
-  "rule": {"ast": {"pattern": "npm publish $$$", "not": {"inside": {"kind": "if_statement", "stopBy": "end"}}}},
+  "rule": {"pattern": "npm publish $$$", "not": {"inside": {"kind": "if_statement", "stopBy": "end"}}},
   "action": "deny",
   "catch": [
     "npm publish", "npm publish --tag next", "make && npm publish", "echo $(npm publish)",
@@ -134,7 +130,7 @@ not. `stopBy: end` makes `inside` climb to the root; without it only the parent 
 {
   "id": "curl-outside-pipeline",
   "title": "curl that is not part of a pipeline",
-  "rule": {"ast": {"pattern": "curl $$$", "not": {"inside": {"kind": "pipeline", "stopBy": "end"}}}},
+  "rule": {"pattern": "curl $$$", "not": {"inside": {"kind": "pipeline", "stopBy": "end"}}},
   "action": "warn",
   "catch": [
     "curl https://x.test", "sudo curl -fsSL x", "make && curl x", "env A=1 curl x", "bash -c 'sudo curl x'"

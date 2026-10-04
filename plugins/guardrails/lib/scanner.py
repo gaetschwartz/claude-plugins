@@ -27,8 +27,6 @@ MAX_VARIANTS = 2048
 MAX_VARIANT_BYTES = 512 << 10
 MAX_COMBINATIONS = 64
 SHELLS = ("bash", "sh", "zsh", "dash", "ksh", "script")
-WRAPPERS = ("sudo", "doas", "env", "timeout", "nice", "nohup", "time", "command", "exec", "builtin", "stdbuf", "setsid",
-            "ionice", "xargs", "watch")
 CONTEXT_KINDS = frozenset({"pipeline", "command_substitution", "process_substitution"})
 ARGUMENT_KINDS = frozenset({"raw_string", "string", "word", "number", "concatenation", "simple_expansion", "expansion",
                             "command_substitution", "arithmetic_expansion", "process_substitution"})
@@ -56,6 +54,7 @@ class Unit(NamedTuple):
     origin: Origin
     depth: int
     restricted: bool
+    via_wrapper: bool = False
 
 
 class Hit(NamedTuple):
@@ -258,9 +257,9 @@ def statement_variants(text: str, spans: Sequence[Span]) -> Iterator[str]:
 class Scanner:
     """One evaluation: the rules and what has been found so far."""
 
-    def __init__(self, rules: dict[str, Config], regexes: dict[str, Config] | None = None) -> None:
+    def __init__(self, rules: dict[str, Config], direct_only: frozenset[str] = frozenset()) -> None:
         self.active = dict(rules)
-        self.regexes = dict(regexes or {})
+        self.direct_only = direct_only
         self.invalid: dict[str, str] = {}
         self.found: dict[str, Hit] = {}
         self.spent: defaultdict[str, int] = defaultdict(int)
@@ -289,7 +288,7 @@ class Scanner:
     def judge(self, unit: Unit, root: SgNode) -> None:
         for rid in list(self.active):
             known = self.found.get(rid)
-            if known is not None and known.kind is Kind.DIRECT:
+            if (known is not None and known.kind is Kind.DIRECT) or (unit.via_wrapper and rid in self.direct_only):
                 continue
             first_only = unit.origin is not Origin.COMMAND and not unit.restricted
             began = time.perf_counter_ns()
@@ -304,41 +303,23 @@ class Scanner:
                 if kind is Kind.DIRECT:
                     break
 
-    def judge_regexes(self, root: SgNode) -> None:
-        """`match.regex` reads the raw text of the command as written: a hit there is always direct."""
-        for rid, config in self.regexes.items():
-            began = time.perf_counter_ns()
-            try:
-                hit = root.find(config)
-            except Exception as exc:  # noqa: BLE001
-                self.invalid[rid] = "match.regex is not valid Rust regex syntax: " + clean_error(str(exc))
-                continue
-            finally:
-                self.spent[rid] += time.perf_counter_ns() - began
-            if hit is not None:
-                where = hit.range()
-                self.found[rid] = Hit(rid, Kind.DIRECT, where.start.index, where.end.index)
-
     def run(self, command: str) -> Scan:
         """Scan the command, then its variants and scripts level by level. Hits found before a cap is reached stand."""
 
-        def visit(unit: Unit, root: SgNode) -> None:
-            if unit.depth == 0 and unit.origin is Origin.COMMAND:
-                self.judge_regexes(root)
-            self.judge(unit, root)
-
         began = time.perf_counter_ns()
-        limit = walk(command, True, visit)
+        limit = walk(command, True, self.judge, bool(self.direct_only))
         parse_ns = time.perf_counter_ns() - began - sum(self.spent.values())
         return Scan(tuple(self.found.values()), dict(self.invalid), limit,
                     {rid: ns // 1000 for rid, ns in self.spent.items()}, max(parse_ns, 0) // 1000)
 
 
-def walk(command: str, with_variants: bool, visit: Callable[[Unit, SgNode], None]) -> Limit | None:
+def walk(command: str, with_variants: bool, visit: Callable[[Unit, SgNode], None],
+         split_via_wrapper: bool = False) -> Limit | None:
     """Visit the command, then its shell-string scripts (and wrapper variants) breadth first; the bound that stopped the
-    walk, if any."""
+    walk, if any. A unit reached through a wrapper variant is `via_wrapper`; with split_via_wrapper the same text
+    reached without one is visited again, for the rules that skip such units."""
     queue = deque([Unit(command, Origin.COMMAND, 0, False)])
-    seen = {(command, False, False)}
+    seen = {(command, False, False, False)}
     scripts = variants = script_bytes = variant_bytes = 0
     while queue:
         unit = queue.popleft()
@@ -347,15 +328,15 @@ def walk(command: str, with_variants: bool, visit: Callable[[Unit, SgNode], None
         found: Iterator[Unit] = iter(())
         if with_variants and unit.origin is not Origin.VARIANT:
             try:
-                spans = wrapper_spans(root, WRAPPERS)
+                spans = wrapper_spans(root, rulebuilder.WRAPPERS)
             except TooManyVariants:
                 return Limit.VARIANTS
-            found = (Unit(text, Origin.VARIANT, unit.depth, unit.restricted)
+            found = (Unit(text, Origin.VARIANT, unit.depth, unit.restricted, True)
                      for text in variants_of(unit.text, spans) if text != unit.text)
-        found = itertools.chain(found, (Unit(text, Origin.SCRIPT, unit.depth + 1, only)
+        found = itertools.chain(found, (Unit(text, Origin.SCRIPT, unit.depth + 1, only, unit.via_wrapper)
                                         for text, only in scripts_in(root, unit.restricted)))
         for new in found:
-            key = (new.text, new.restricted, new.origin is Origin.VARIANT)
+            key = (new.text, new.restricted, new.origin is Origin.VARIANT, split_via_wrapper and new.via_wrapper)
             if key in seen:
                 continue
             if new.origin is Origin.VARIANT:
@@ -375,13 +356,12 @@ def walk(command: str, with_variants: bool, visit: Callable[[Unit, SgNode], None
     return None
 
 
-def compile_errors(configs: dict[str, Config], regexes: dict[str, Config] | None = None) -> dict[str, str]:
-    """The reason per rule id none of whose configs compiles, or whose regex does not."""
-    scanner = Scanner(configs, regexes)
+def compile_errors(configs: dict[str, Config]) -> dict[str, str]:
+    """The reason per rule id whose config does not compile."""
+    scanner = Scanner(configs)
     root = SgRoot("true", "bash").root()
     for rid in list(scanner.active):
         scanner.matches(rid, root, True)
-    scanner.judge_regexes(root)
     return scanner.invalid
 
 

@@ -11,7 +11,7 @@ import matching
 import store
 
 K = "pk" + "ill"
-STRINGS: dict[str, Any] = {"match": {"program": "strings"}, "message": "Read the docs.", "retry": "same-command",
+STRINGS: dict[str, Any] = {"match": {"command": "strings"}, "message": "Read the docs.", "retry": "same-command",
                            "modes": ["reverse-engineering"]}
 MODES: dict[str, Any] = {"reverse-engineering": {"description": "RE", "agentMayEnable": True}}
 
@@ -48,7 +48,7 @@ class Hook(AstIsolated):
     def test_a_rule_with_an_unknown_field_is_skipped_with_a_warning_naming_it_and_the_others_run(self) -> None:
         old_preset_rule = {"match": {"builtin": "grep-recursive"}, "message": "use rg", "action": "deny"}
         for rid, rule in {"grep-rg": old_preset_rule, "tooled": {**STRINGS, "tool": "Bash"},
-                          "nested": {"match": {"program": "x", "flavour": 1}, "message": "m"}}.items():
+                          "nested": {"match": {"command": "x", "flavour": 1}, "message": "m"}}.items():
             self.put(self.gpath, {"rules": {"no-strings": dict(STRINGS), rid: rule}, "modes": dict(MODES)})
             with self.subTest(rid):
                 first = self.hook("strings x", session=f"u-{rid}")
@@ -102,7 +102,7 @@ class Hook(AstIsolated):
         self.assertNotIn("re-run it unchanged", reason(self.hook("strings a")))
 
     def test_warn_once_per_session_without_permission_decision(self) -> None:
-        self.put(self.gpath, {"rules": {"k9": {"match": {"program": "kill", "args": "-9"},
+        self.put(self.gpath, {"rules": {"k9": {"match": {"command": "kill", "args": "-9"},
                                                "message": "SIGTERM first", "action": "warn"}}})
         out = self.hook("kill -9 1")
         assert out is not None
@@ -115,7 +115,7 @@ class Hook(AstIsolated):
 
     def test_warn_rides_along_with_deny(self) -> None:
         state = self.get(self.gpath)
-        state["rules"]["k9"] = {"match": {"program": "kill", "args": "-9"}, "message": "SIGTERM first",
+        state["rules"]["k9"] = {"match": {"command": "kill", "args": "-9"}, "message": "SIGTERM first",
                                 "action": "warn"}
         self.put(self.gpath, state)
         text = reason(self.hook("strings a; kill -9 1"))
@@ -147,7 +147,7 @@ class Hook(AstIsolated):
 
     def test_project_rule_applies(self) -> None:
         self.put(self.gpath, {})
-        self.put(self.ppath, {"rules": {"nm": {"match": {"program": "nm"}, "message": "no nm"}}})
+        self.put(self.ppath, {"rules": {"nm": {"match": {"command": "nm"}, "message": "no nm"}}})
         self.assertEqual(decision(self.hook("nm libfoo.a")), "deny")
 
     def test_project_mode_activation(self) -> None:
@@ -170,8 +170,8 @@ class Hook(AstIsolated):
 
     def test_message_short_after_first_display_and_dedupe(self) -> None:
         sheet = {"message": "SHEET for {which:zz-none|zz-other}", "messageShort": "terse", "retry": "same-command"}
-        self.put(self.gpath, {"rules": {"find-fd": {**sheet, "match": {"program": "find"}},
-                                        "grep-rg": {**sheet, "match": {"ast": GREP_RECURSIVE}}}})
+        self.put(self.gpath, {"rules": {"find-fd": {**sheet, "match": {"command": "find"}},
+                                        "grep-rg": {**sheet, "match": GREP_RECURSIVE}}})
         first = reason(self.hook("find . | xargs grep -r x"))
         self.assertEqual(first.count("SHEET for zz-none"), 1)
         self.assertIn("[guardrails:find-fd, grep-rg]", first)
@@ -194,7 +194,7 @@ class Hook(AstIsolated):
         self.assertIn("seenAt", state["sessions"]["s1"])
 
 
-PKILL: dict[str, Any] = {"match": {"program": "pkill"}, "message": "No pkill.", "action": "deny"}
+PKILL: dict[str, Any] = {"match": {"command": "pkill"}, "message": "No pkill.", "action": "deny"}
 
 
 class ManagedHook(AstIsolated):
@@ -220,7 +220,7 @@ class ManagedHook(AstIsolated):
 
     def test_project_cannot_disable_or_loosen_managed_rule(self) -> None:
         self.put(self.ppath, {"rules": {"no-pkill": {"enabled": False, "action": "warn", "retry": "same-command",
-                                                     "modes": ["x"], "match": {"program": "nm"}}}})
+                                                     "modes": ["x"], "match": {"command": "nm"}}}})
         for _ in range(2):
             self.assertEqual(decision(self.hook("pkill node")), "deny")
         self.assertIsNone(self.hook("nm a.out"))
@@ -345,7 +345,7 @@ class ManagedHook(AstIsolated):
 
 class Layering(AstIsolated):
     def test_a_wrappers_key_is_skipped_with_a_warning_naming_it_in_the_hook_and_in_status(self) -> None:
-        self.put(self.mpath, {"wrappers": {"mywrap": {}}, "rules": {"no-kill": {"match": {"program": K}, "message": "No."}}})
+        self.put(self.mpath, {"wrappers": {"mywrap": {}}, "rules": {"no-kill": {"match": {"command": K}, "message": "No."}}})
         self.put(self.gpath, {"wrappers": {"g": {}}})
         self.put(self.ppath, {"wrappers": {"p": {}}})
         out = self.hook(f"mywrap -x {K} x")
@@ -359,8 +359,8 @@ class Layering(AstIsolated):
 class MonitorCoverage(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
-        self.put(self.mpath, {"rules": {"no-strings": {"match": {"program": "strings"}, "message": "No strings."},
-                                        "soft": {"match": {"program": "nm"}, "message": "Prefer otool.",
+        self.put(self.mpath, {"rules": {"no-strings": {"match": {"command": "strings"}, "message": "No strings."},
+                                        "soft": {"match": {"command": "nm"}, "message": "Prefer otool.",
                                                  "action": "warn"}}})
 
     def test_a_managed_rule_denies_a_monitor_command(self) -> None:
@@ -383,14 +383,14 @@ class MonitorCoverage(AstIsolated):
         self.assertIn("Prefer otool.", first["hookSpecificOutput"]["additionalContext"])
         self.assertIsNone(self.hook("nm b.out", tool="Monitor"))
         self.assertIsNotNone(self.hook("nm b.out", session="other", tool="Monitor"))
-        self.put(self.gpath, {"rules": {"r": {"match": {"program": "sed"}, "message": "No sed.",
+        self.put(self.gpath, {"rules": {"r": {"match": {"command": "sed"}, "message": "No sed.",
                                                "retry": "same-command"}}})
         self.assertEqual(decision(self.hook("sed -i x", "rr", tool="Monitor")), "deny")
         self.assertIsNone(self.hook("sed -i x", "rr", tool="Monitor"))
         self.assertEqual(decision(self.hook("sed -i y", "rr", tool="Monitor")), "deny")
 
     def test_a_monitor_acknowledgement_is_shared_with_bash(self) -> None:
-        self.put(self.gpath, {"rules": {"r": {"match": {"program": "sed"}, "message": "No sed.",
+        self.put(self.gpath, {"rules": {"r": {"match": {"command": "sed"}, "message": "No sed.",
                                                "retry": "same-command"}}})
         self.assertEqual(decision(self.hook("sed -i x", "sh", tool="Bash")), "deny")
         self.assertIsNone(self.hook("sed -i x", "sh", tool="Monitor"))

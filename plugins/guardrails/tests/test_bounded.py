@@ -72,10 +72,10 @@ class Pathological(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         self.put(self.gpath, {"rules": {
-            "no-kill": {"match": {"program": K}, "message": "No kill."},
-            "rx": {"match": {"regex": r"never-present-\d+"}, "message": "No rx."},
-            "nested": {"match": {"ast": {"pattern": f"{K} $$$", "inside": {"kind": "command_substitution",
-                                                                           "stopBy": "end"}}}, "message": "No nest."}}})
+            "no-kill": {"match": {"command": K}, "message": "No kill."},
+            "rx": {"match": {"kind": "program", "regex": r"never-present-\d+"}, "message": "No rx."},
+            "nested": {"match": {"pattern": f"{K} $$$", "inside": {"kind": "command_substitution",
+                                                                           "stopBy": "end"}}, "message": "No nest."}}})
 
     def test_a_command_the_parser_cannot_finish_is_denied_at_the_deadline(self) -> None:
         with mock.patch.object(matching, "DEADLINE_SECONDS", 0.5):
@@ -102,7 +102,7 @@ class Crashes(AstIsolated):
 
     def setUp(self) -> None:
         super().setUp()
-        self.put(self.gpath, {"rules": {"no-kill": {"match": {"program": K}, "message": "No kill."}}})
+        self.put(self.gpath, {"rules": {"no-kill": {"match": {"command": K}, "message": "No kill."}}})
         broken = mock.patch.object(engine, "report_broken", mock.Mock())
         self.reported = broken.start()
         self.addCleanup(broken.stop)

@@ -48,17 +48,20 @@ plain chat what to explain instead.)
 
    A heredoc invocation is not pre-approved by `allowed-tools`, so it may prompt; that is expected.
 
-   With only a command, find the rules whose `program` or `regex` could apply and run it once per rule id.
+   With only a command, find the rules whose `match` could apply (a `command` atom naming it, a `pattern` starting
+   with it, a `regex`) and run it once per rule id.
 4. Answer with the rule card: paste the `rule test` output VERBATIM, unchanged, no paraphrase, no added prose inside
    it. Never write a script or compute rows, spacing, verdicts or counts yourself; every ✗ or ✓ comes from the CLI.
 5. After a blank line add the bold-label lines from the Explain section of the presentation reference (`Happens`,
    `Loosen`, `Lower layers`, and `Cause` only when the question was why something was or was not caught), with no
    command spans or verdicts of your own. State the cause when the matching reference explains it (its "Why a rule may
-   not fire" list and the limits of `program` / `args` / wrappers); do not hedge and do not say "possibly". For a rule with
-   `match.ast`, run `guardrails rule ast '<cmd>'` to show the tree and the shell-string units. If the engine was
+   not fire" list, the limits of the `command` atom and its `args`, wrappers and `"wrappers": false`); do not hedge and
+   do not say "possibly". For a rule with relations, run `guardrails rule ast '<cmd>'` to show the tree and the
+   shell-string units. If the engine was
    unavailable the row is listed under **Not evaluated**: `cat ${CLAUDE_PLUGIN_ROOT}/references/runtime.md` for what that
    means and tell the user to run `guardrails engine status`.
-6. When the fix for a pipeline case is a rule change, name `match.ast` (or `match.regex`) as the fix and leave the change to the user
+6. When the fix for a pipeline case is a rule change, name the relation (`inside` a `pipeline`, `follows` a `command`) or a
+   whole-text regex as the fix and leave the change to the user
    (`guardrails:edit`). The card's `Verified` line and `Note` come from `rule test`, which checks only the matcher:
    take mode, retry and warn-versus-deny behaviour from `status` and the reference.
 7. To explain why a construct was or was not caught, or what a fix would look like, `cat` the guide

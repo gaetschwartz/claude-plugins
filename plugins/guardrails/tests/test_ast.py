@@ -23,13 +23,13 @@ NESTED: dict[str, Any] = {"pattern": f"{PG} $$$", "inside": {"any": NEST, "stopB
 XARGS_KILL: dict[str, Any] = {"pattern": f"xargs {KILL} $$$", "inside": {"kind": "pipeline"}}
 
 
-def rule_of(ast: dict[str, Any], **extra: Any) -> policy.Rule:
-    return policy.Rule.from_json({"match": {"ast": ast, **extra}, "message": "m"})
+def rule_of(match: dict[str, Any]) -> policy.Rule:
+    return policy.Rule.from_json({"match": match, "message": "m"})
 
 
 class Kinds(AstIsolated):
-    def kinds(self, ast: dict[str, Any], commands: list[str], **extra: Any) -> dict[str, str | None]:
-        rule = rule_of(ast, **extra)
+    def kinds(self, match: dict[str, Any], commands: list[str]) -> dict[str, str | None]:
+        rule = rule_of(match)
         return {c: matching.evaluate(c, {"r": rule}).kinds["r"] for c in commands}
 
     def test_command_patterns_are_also_tried_behind_wrappers_and_inside_shell_strings(self) -> None:
@@ -76,16 +76,16 @@ class RuleSize(AstIsolated):
     """No rule, however large or numerous, can push the others off the engine."""
 
     HUGE: ClassVar[dict[str, Any]] = {"kind": "command", "regex": "x" * 600000}
-    DENY_SUBST: ClassVar[dict[str, Any]] = {"match": {"ast": {"kind": "command_substitution"}},
+    DENY_SUBST: ClassVar[dict[str, Any]] = {"match": {"kind": "command_substitution"},
                                             "message": "No substitutions."}
 
     def test_one_oversized_project_rule_cannot_disable_the_others(self) -> None:
         self.put(self.gpath, {"rules": {"subst": self.DENY_SUBST}})
-        self.put(self.ppath, {"rules": {"huge": {"match": {"ast": self.HUGE}, "message": "m", "action": "warn"}}})
+        self.put(self.ppath, {"rules": {"huge": {"match": self.HUGE, "message": "m", "action": "warn"}}})
         first = self.hook("echo $(ls)", session="a")
         assert first is not None
         self.assertEqual(first["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertIn("rule huge is invalid ('match.ast' is", first["systemMessage"])
+        self.assertIn("rule huge is invalid ('match' is", first["systemMessage"])
         self.assertNotIn("Argument list too long", json.dumps(first))
         again = self.hook("echo $(ls)", session="a")
         assert again is not None
@@ -93,28 +93,28 @@ class RuleSize(AstIsolated):
         self.assertNotIn("systemMessage", again)
 
     def test_the_cli_refuses_an_oversized_rule_with_exit_2(self) -> None:
-        rule = json.dumps({"match": {"ast": self.HUGE}, "message": "m"})
+        rule = json.dumps({"match": self.HUGE, "message": "m"})
         for argv in (("rule", "add", "r", "--json", rule), ("rule", "test", "--json", rule, "x")):
             code, _, err = self.cli(*argv)
             self.assertEqual(code, 2, argv)
             self.assertIn("over the 16 KiB limit", err)
         self.assertFalse(self.gpath.exists())
-        self.put(self.ppath, {"rules": {"huge": {"match": {"ast": self.HUGE}, "message": "m"}}})
-        self.assertIn("rule huge: 'match.ast' is", self.cli("status", "--problems")[1])
+        self.put(self.ppath, {"rules": {"huge": {"match": self.HUGE, "message": "m"}}})
+        self.assertIn("rule huge: 'match' is", self.cli("status", "--problems")[1])
 
 BAD_ASTS: dict[str, dict[str, Any]] = {
-    "an unknown key": {"bogus": 1}, "a wrong type": {"kind": 5}, "an empty relation": {"inside": "x"},
+    "a wrong type": {"kind": 5}, "an empty relation": {"inside": "x"},
     "a bad stopBy": {"inside": {"kind": "command"}, "stopBy": "sideways"}, "a bad pattern": {"pattern": {"selector": "x"}},
     "no matcher": {"stopBy": "end"}, "an unknown kind": {"kind": "no_such_kind"}, "a bad list": {"any": [1]},
 }
 
 
 class Validation(AstIsolated):
-    """ast-grep itself judges a match.ast rule: a bad one is refused when added and skipped when loaded."""
+    """ast-grep itself judges a match: a bad one is refused when added and skipped when loaded."""
 
     def test_a_bad_ast_rule_is_refused_at_add_time_with_ast_greps_message(self) -> None:
         for name, ast in BAD_ASTS.items():
-            rule = json.dumps({"match": {"ast": ast}, "message": "m"})
+            rule = json.dumps({"match": ast, "message": "m"})
             for argv in (("rule", "add", "r", "--json", rule), ("rule", "test", "--json", rule, "x")):
                 with self.subTest(name, verb=argv[1]):
                     code, _, err = self.cli(*argv)
@@ -125,23 +125,24 @@ class Validation(AstIsolated):
 
     def test_a_bad_ast_rule_in_state_is_skipped_with_a_warning_and_the_others_run(self) -> None:
         for n, (name, ast) in enumerate(BAD_ASTS.items()):
-            self.put(self.gpath, {"rules": {"bad": {"match": {"ast": ast}, "message": "m"},
-                                            "good": {"match": {"program": "pkill"}, "message": "No."}}})
+            self.put(self.gpath, {"rules": {"bad": {"match": ast, "message": "m"},
+                                            "good": {"match": {"command": "pkill"}, "message": "No."}}})
             with self.subTest(name):
                 out = self.hook("pkill x", session=f"v{n}")
                 assert out is not None
                 self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
                 self.assertIn("rule bad does not compile", out["systemMessage"])
 
-    def test_the_shape_of_match_ast_and_its_size_are_checked_before_ast_grep_sees_it(self) -> None:
-        for ast in ({}, [], "x", {"kind": "command", "regex": "x" * 20000}):
-            with self.subTest(ast=str(ast)[:20]), self.assertRaises(policy.Invalid):
-                policy.Rule.from_json({"match": {"ast": ast}, "message": "m"})
-        policy.Rule.from_json({"match": {"ast": {"pattern": "a $$$", "inside": {"kind": "pipeline"}}}, "message": "m"})
+    def test_the_shape_of_match_its_keys_and_its_size_are_checked_before_ast_grep_sees_it(self) -> None:
+        for match in ({}, [], "x", {"kind": "command", "regex": "x" * 20000}, {"bogus": 1},
+                      {"any": [{"has": {"kind": "word", "flavour": 1}}]}):
+            with self.subTest(match=str(match)[:20]), self.assertRaises(policy.Invalid):
+                policy.Rule.from_json({"match": match, "message": "m"})
+        policy.Rule.from_json({"match": {"pattern": "a $$$", "inside": {"kind": "pipeline"}}, "message": "m"})
 
 
 class Cli(AstIsolated):
-    RULE: ClassVar[dict[str, Any]] = {"match": {"ast": {"pattern": "pkill $$$"}}, "message": "no pkill"}
+    RULE: ClassVar[dict[str, Any]] = {"match": {"pattern": "pkill $$$"}, "message": "no pkill"}
 
     def test_rule_test_reports_real_verdicts_and_marks_wrapped(self) -> None:
         code, out, _ = self.cli("rule", "test", "--json", json.dumps(self.RULE), "pkill x", "sudo pkill x",
@@ -154,29 +155,28 @@ class Cli(AstIsolated):
         self.assertTrue(rows["sudo pkill x"].endswith("· wrapped"))
         self.assertTrue(rows["a | pkill b"].endswith("· wrapped"))
         self.assertFalse(rows["pkill x"].endswith("· wrapped"))
-        self.assertIn('**Match** ast = `{"pattern":"pkill $$$"}`', out)
+        self.assertIn('**Match** `{"pattern":"pkill $$$"}`', out)
         self.assertIn("**Raw** `pkill $$$`", out)
 
-    def test_raw_prefers_regex_and_joins_patterns(self) -> None:
-        both = {"match": {"ast": {"any": [{"pattern": "a $$$"}, {"pattern": "b $$$"}]}}, "message": "m"}
+    def test_raw_joins_patterns_and_else_shows_the_regexes(self) -> None:
+        both = {"match": {"any": [{"pattern": "a $$$"}, {"pattern": "b $$$"}]}, "message": "m"}
         out = self.cli("rule", "test", "--json", json.dumps(both), "a x")[1]
         self.assertIn("**Raw** `a $$$ | b $$$`", out)
-        with_regex = {"match": {**both["match"], "regex": "zzz"}, "message": "m"}
-        out = self.cli("rule", "test", "--json", json.dumps(with_regex), "a x")[1]
-        self.assertIn("**Raw** `zzz`", out)
-        self.assertIn("ast = ", out)
-        self.assertIn("regex = `zzz`", out)
+        for match, raw in (({"kind": "program", "regex": "zzz"}, "zzz"), ({"command": "kill", "args": "-9"}, "-9")):
+            out = self.cli("rule", "test", "--json", json.dumps({"match": match, "message": "m"}), "a x")[1]
+            self.assertIn(f"**Raw** `{raw}`", out)
+            self.assertIn(f"**Match** `{json.dumps(match, separators=(',', ':'))}`", out)
 
     def test_a_set_that_does_not_compile_exits_2_and_changes_nothing(self) -> None:
         self.assertEqual(self.cli("rule", "add", "r", "--json", json.dumps(self.RULE))[0], 0)
-        code, _, err = self.cli("rule", "set", "r", "--json", '{"ast": {"regex": "("}}')
+        code, _, err = self.cli("rule", "set", "r", "--json", '{"match": {"kind": "program", "regex": "(", "kind": "word"}}')
         self.assertEqual(code, 2)
         self.assertIn("does not compile", err)
-        code, _, err = self.cli("rule", "set", "r", "--json", '{"ast": {"bogus": 1}}')
+        code, _, err = self.cli("rule", "set", "r", "--json", '{"match": {"bogus": 1}}')
         self.assertEqual(code, 2)
-        self.assertIn("unknown field `bogus`", err)
-        self.assertEqual(self.cli("rule", "set", "r", "--json", '{"ast": {"pattern": "killall $$$"}}')[0], 0)
-        self.assertEqual(self.get(self.gpath)["rules"]["r"]["match"]["ast"], {"pattern": "killall $$$"})
+        self.assertIn("unknown field match.bogus", err)
+        self.assertEqual(self.cli("rule", "set", "r", "--json", '{"match": {"pattern": "killall $$$"}}')[0], 0)
+        self.assertEqual(self.get(self.gpath)["rules"]["r"]["match"], {"pattern": "killall $$$"})
 
     def test_status_describes_and_checks_ast_rules(self) -> None:
         self.assertEqual(self.cli("rule", "add", "r", "--json", json.dumps(self.RULE))[0], 0)
@@ -184,7 +184,7 @@ class Cli(AstIsolated):
         self.assertIn("`r` deny · global · enabled", out)
         self.assertNotIn("**Problems**", out)
         state = self.get(self.gpath)
-        state["rules"]["r"]["match"]["ast"] = {"kind": "nope"}
+        state["rules"]["r"]["match"] = {"kind": "nope"}
         self.put(self.gpath, state)
         out = self.cli("status")[1]
         self.assertIn("rule r: does not compile", out)
@@ -215,8 +215,8 @@ class Hook(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         self.put(self.gpath, {"rules": {
-            "by-name": {"match": {"ast": BY_NAME}, "message": "No kill by name."},
-            "nested": {"match": {"ast": NESTED}, "message": "No nested search.", "action": "warn"},
+            "by-name": {"match": BY_NAME, "message": "No kill by name."},
+            "nested": {"match": NESTED, "message": "No nested search.", "action": "warn"},
         }})
 
     def test_denies_in_contexts_and_shell_strings(self) -> None:
@@ -261,16 +261,16 @@ class Hook(AstIsolated):
         self.assertEqual(inside_lock, [False])
 
     def test_a_regex_rule_that_rust_cannot_compile_is_skipped_and_named_beside_good_ones(self) -> None:
-        self.put(self.gpath, {"rules": {"bad": {"match": {"regex": "(?=a)b"}, "message": "m"},
-                                        "by-name": {"match": {"ast": BY_NAME}, "message": "No."}}})
+        self.put(self.gpath, {"rules": {"bad": {"match": {"kind": "program", "regex": "(?=a)b"}, "message": "m"},
+                                        "by-name": {"match": BY_NAME, "message": "No."}}})
         out = self.hook("pkill x")
         assert out is not None
         self.assertIn("deny", json.dumps(out))
-        self.assertIn("rule bad does not compile (match.regex is not valid Rust regex syntax", out["systemMessage"])
+        self.assertIn("rule bad does not compile (error: look-around", out["systemMessage"])
 
     def test_a_catastrophic_regex_is_linear_and_still_judged(self) -> None:
-        self.put(self.gpath, {"rules": {"slow": {"match": {"regex": "(a+)+$"}, "message": "No."},
-                                        "by-name": {"match": {"program": "foo"}, "message": "No foo."}}})
+        self.put(self.gpath, {"rules": {"slow": {"match": {"kind": "program", "regex": "(a+)+$"}, "message": "No."},
+                                        "by-name": {"match": {"command": "foo"}, "message": "No foo."}}})
         out = self.hook("foo x " + "a" * 5000 + "b")
         assert out is not None
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
@@ -281,7 +281,7 @@ class Hook(AstIsolated):
 
     def test_no_regex_rule_runs_on_python_re_in_the_hook_process(self) -> None:
 
-        self.put(self.gpath, {"rules": {"pipe": {"match": {"regex": r"curl [^|]*\| *sh"}, "message": "No."}}})
+        self.put(self.gpath, {"rules": {"pipe": {"match": {"kind": "program", "regex": r"curl [^|]*\| *sh"}, "message": "No."}}})
         with mock.patch.object(re, "search", side_effect=AssertionError("python re used")):
             out = self.hook("curl x | sh")
         assert out is not None
@@ -289,13 +289,12 @@ class Hook(AstIsolated):
 
     def test_rule_add_and_test_refuse_regex_syntax_rust_does_not_have(self) -> None:
         for pattern in (r"(a)\1", "(?=a)", "(?<!a)b", "(", "a{1000}{1000}"):
-            rule = json.dumps({"match": {"regex": pattern}, "message": "m"})
+            rule = json.dumps({"match": {"kind": "program", "regex": pattern}, "message": "m"})
             for argv in (("rule", "add", "r", "--json", rule), ("rule", "test", "--json", rule, "x")):
                 with self.subTest(pattern=pattern, verb=argv[1]):
                     code, _, err = self.cli(*argv)
                     self.assertEqual(code, 2)
                     self.assertIn("does not compile", err)
-                    self.assertIn("match.regex is not valid Rust regex syntax", err)
         self.assertNotIn("r", self.get(self.gpath)["rules"])
-        self.assertEqual(self.cli("rule", "add", "ok", "--json", json.dumps({"match": {"regex": r"\bfoo\b"},
+        self.assertEqual(self.cli("rule", "add", "ok", "--json", json.dumps({"match": {"kind": "program", "regex": r"\bfoo\b"},
                                                                           "message": "m"}))[0], 0)

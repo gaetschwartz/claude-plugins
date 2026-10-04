@@ -11,9 +11,9 @@ from unittest import mock
 import store
 from helpers import AstIsolated, caught
 
-RULE = ('{"match": {"program": "strings"}, "message": "Read the docs.", "retry": "same-command", '
+RULE = ('{"match": {"command": "strings"}, "message": "Read the docs.", "retry": "same-command", '
         '"modes": ["reverse-engineering"]}')
-BARE = '{"match": {"program": "pkill"}, "message": "No pkill."}'
+BARE = '{"match": {"command": "pkill"}, "message": "No pkill."}'
 
 
 def stdin(text: str) -> mock._patch:  # type: ignore[type-arg]
@@ -27,11 +27,12 @@ class RuleCommands(AstIsolated):
         self.assertIn("added rule no-strings", out)
         rule = self.get(self.gpath)["rules"]["no-strings"]
         self.assertEqual((rule["setBy"]["by"], rule["setBy"]["reason"]), ("user", "user asked"))
-        self.assertEqual(self.set_rule("no-strings", {"action": "warn", "program": ["strings", "otool"]})[0], 0)
+        self.assertEqual(self.set_rule("no-strings", {"action": "warn", "match": {"command": ["strings", "otool"]},
+                                                      "wrappers": False})[0], 0)
         self.assertEqual(self.set_rule("no-strings", {"messageShort": "short", "requires": ["fd", "fdfind"]})[0], 0)
         rule = self.get(self.gpath)["rules"]["no-strings"]
-        self.assertEqual((rule["action"], rule["match"]["program"], rule["messageShort"], rule["requires"]),
-                         ("warn", ["strings", "otool"], "short", ["fd", "fdfind"]))
+        self.assertEqual((rule["action"], rule["match"], rule["wrappers"], rule["messageShort"], rule["requires"]),
+                         ("warn", {"command": ["strings", "otool"]}, False, "short", ["fd", "fdfind"]))
         self.assertEqual(self.set_rule("no-strings", {"messageShort": None})[0], 0)
         self.assertNotIn("messageShort", self.get(self.gpath)["rules"]["no-strings"])
         self.assertEqual(self.cli("rule", "rm", "no-strings")[0], 0)
@@ -47,10 +48,12 @@ class RuleCommands(AstIsolated):
                 self.assertIn("error:", err)
         self.assertFalse(self.gpath.exists())
         self.cli("rule", "add", "no-strings", "--json", RULE)
-        for fields in ({"colour": "red"}, {"regex": "("}, {"enabled": "maybe"}, {"modes": [1]}, {"message": 3}, [1]):
+        for fields in ({"colour": "red"}, {"match": {"kind": "program", "regex": "("}}, {"program": "x"},
+                       {"match": {"program": "x"}}, {"wrappers": "no"}, {"enabled": "maybe"}, {"modes": [1]},
+                       {"message": 3}, [1]):
             with self.subTest(fields=fields):
                 self.assertEqual(self.set_rule("no-strings", fields)[0], 2)
-        self.assertNotIn("regex", self.get(self.gpath)["rules"]["no-strings"]["match"])
+        self.assertEqual(self.get(self.gpath)["rules"]["no-strings"]["match"], {"command": "strings"})
         self.put(self.gpath, "{nope")
         self.assertEqual(self.cli("rule", "add", "x", "--json", RULE)[0], 2)
         self.assertEqual(self.gpath.read_text(), "{nope")
@@ -60,12 +63,14 @@ class RuleCommands(AstIsolated):
         self.assertIn("p", self.get(self.ppath)["rules"])
         self.assertFalse(self.gpath.exists())
         self.cli("rule", "add", "no-strings", "--json", RULE)
-        code, out, _ = self.set_rule("no-strings", {"action": "deny", "enabled": False, "args": "-a"}, "--scope", "project")
+        code, out, _ = self.set_rule("no-strings", {"action": "deny", "enabled": False, "wrappers": False,
+                                                    "match": {"command": "nm"}}, "--scope", "project")
         self.assertEqual(code, 0)
         entry = self.get(self.ppath)["rules"]["no-strings"]
-        self.assertEqual((entry["action"], entry["match"], "message" in entry), ("deny", {"args": "-a"}, False))
+        self.assertEqual((entry["action"], entry["match"], "message" in entry), ("deny", {"command": "nm"}, False))
         self.assertIn("enabled=false", out)
-        self.assertIn('args="-a"', out)
+        self.assertIn('match={"command": "nm"}', out)
+        self.assertIn("wrappers=false", out)
         del os.environ["CLAUDE_PROJECT_DIR"]
         self.addCleanup(os.chdir, os.getcwd())
         os.chdir(self.tmp)
@@ -341,7 +346,7 @@ class Status(AstIsolated):
         return out
 
     def rule(self, **fields: object) -> str:
-        return json.dumps({"match": {"program": "x"}, "message": "m", **fields})
+        return json.dumps({"match": {"command": "x"}, "message": "m", **fields})
 
     def test_first_line_names_the_managed_file_and_whether_it_exists(self) -> None:
         first = f"**Managed** platform file `{self.mpath}` "
@@ -382,8 +387,8 @@ class Status(AstIsolated):
 
     def test_problems_are_listed_scoped_and_neutralised(self) -> None:
         self.put(self.gpath, {"rules": {"bad": {"match": {"builtin": "nope"}, "message": "x\x1b"},
-                                        "g-bad": {"match": {"program": "x"}, "message": "m", "modes": ["a"]}}})
-        self.put(self.ppath, {"rules": {"p-bad": {"match": {"program": "x"}, "message": "m", "modes": ["b\nc"]}}})
+                                        "g-bad": {"match": {"command": "x"}, "message": "m", "modes": ["a"]}}})
+        self.put(self.ppath, {"rules": {"p-bad": {"match": {"command": "x"}, "message": "m", "modes": ["b\nc"]}}})
         out = self.status()
         self.assertIn("**Problems**\n- ", out)
         self.assertIn("rule bad:", out)
@@ -429,7 +434,7 @@ class Status(AstIsolated):
         self.assertIn(f"- `{long}` deny", out)
         self.assertIn("- `short" + " " * 35 + "` deny", out)
         forged = "bad\n### Forged\n- `fake` deny\x1b[2J"
-        self.put(self.gpath, {"rules": {forged: {"match": {"program": "x"}, "message": "m"}},
+        self.put(self.gpath, {"rules": {forged: {"match": {"command": "x"}, "message": "m"}},
                               "modes": {forged: {"description": forged, "agentMayEnable": True}},
                               "sessions": {"s1": {"modes": {forged: {"by": "agent", "reason": forged}}}}})
         for argv in (("--session-id", "s1"), ("--rule", forged)):
@@ -440,7 +445,7 @@ class Status(AstIsolated):
 
 
 class RuleTest(AstIsolated):
-    DRAFT = '{"match": {"program": "strings"}, "message": "docs"}'
+    DRAFT = '{"match": {"command": "strings"}, "message": "docs"}'
 
     def test_draft_matches_and_misses_and_installed_reports_the_effective_rule(self) -> None:
         heredoc = "cat <<'EOF' > n.md\nstrings\nEOF"
@@ -505,7 +510,7 @@ class RuleTest(AstIsolated):
         with stdin(document):
             self.assertEqual(self.cli("rule", "add", "no-strings", "--json", "-")[0], 0)
         stored = self.get(self.gpath)["rules"]["no-strings"]
-        self.assertEqual(("examples" in stored, stored["match"]), (False, {"program": "strings"}))
+        self.assertEqual(("examples" in stored, stored["match"]), (False, {"command": "strings"}))
         with stdin(json.dumps({"rule": json.loads(self.DRAFT), "examples": "x"})):
             self.assertEqual(self.cli("rule", "test", "--json", "-")[0], 2)
 
@@ -521,15 +526,16 @@ class RuleTest(AstIsolated):
             self.assertEqual(self.get(self.gpath)["rules"][rid]["message"], "docs")
         code, out, _ = self.cli("rule", "test", "--json", f"@{spaced}", "strings x", "ls")
         self.assertIn("- ✗ `strings x` inferred", out)
-        hard = {"match": {"regex": "echo `pkill $(x)` \"y\" 'z'"}, "message": "it's \"hard\""}
+        hard = {"match": {"kind": "program", "regex": "echo `pkill $(x)` \"y\" 'z'"}, "message": "it's \"hard\""}
         self.put(self.tmp / "hard.json", json.dumps(hard))
         self.assertEqual(self.cli("rule", "add", "hard", "--json", f"@{self.tmp / 'hard.json'}")[0], 0)
         stored = self.get(self.gpath)["rules"]["hard"]
         self.assertEqual((stored["match"], stored["message"]), (hard["match"], hard["message"]))
-        self.put(self.tmp / "set.json", json.dumps({"message": "It's `new`", "program": ["strings", "otool"], "regex": "a'b"}))
+        new = {"command": ["strings", "otool"], "regex": "a'b"}
+        self.put(self.tmp / "set.json", json.dumps({"message": "It's `new`", "match": new}))
         self.assertEqual(self.cli("rule", "set", "a", "--json", f"@{self.tmp / 'set.json'}")[0], 0)
         rule = self.get(self.gpath)["rules"]["a"]
-        self.assertEqual((rule["message"], rule["match"]), ("It's `new`", {"program": ["strings", "otool"], "regex": "a'b"}))
+        self.assertEqual((rule["message"], rule["match"]), ("It's `new`", new))
         with stdin('{"action": "warn"}'):
             self.assertEqual(self.cli("rule", "set", "a", "--json", "-")[0], 0)
         bad = self.tmp / "bad.json"
@@ -548,7 +554,7 @@ class RuleTest(AstIsolated):
             self.assertEqual(code, 0)
             return out
 
-        draft = '{"match": {"program": "pkill"}, "message": "m"'
+        draft = '{"match": {"command": "pkill"}, "message": "m"'
         self.assertNotIn("**Note**", notes("--json", draft + "}"))
         self.assertIn("**Note** rule is disabled", notes("--json", draft + ', "enabled": false}'))
         self.assertIn("none of no-such-bin-xyz is installed here", notes("--json", draft + ', "requires": ["no-such-bin-xyz"]}'))

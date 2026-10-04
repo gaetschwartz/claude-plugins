@@ -41,7 +41,7 @@ class Paths(Isolated):
         link = self.tmp / "home-link"
         link.symlink_to(home)
         os.environ["CLAUDE_PLUGIN_DATA"] = str(data)
-        rule = '{"match": {"program": "x"}, "message": "m"}'
+        rule = '{"match": {"command": "x"}, "message": "m"}'
         for project in (home, link):
             os.environ["CLAUDE_PROJECT_DIR"] = str(project)
             self.assertIsNone(store.project_state_path())
@@ -122,7 +122,7 @@ class Prune(unittest.TestCase):
 
 class CorruptTables(Isolated):
     def test_a_malformed_table_stops_a_write_and_names_the_file_and_key(self) -> None:
-        rule = '{"match": {"program": "x"}, "message": "m"}'
+        rule = '{"match": {"command": "x"}, "message": "m"}'
         for key, verb in (("rules", ("rule", "add", "r", "--json", rule)), ("modes", ("mode", "declare", "m")),
                           ("sessions", ("mode", "on", "m", "--session-id", "s"))):
             with self.subTest(key=key):
@@ -138,7 +138,7 @@ class CorruptTables(Isolated):
 
 
 class ManagedPath(Isolated):
-    RULE: ClassVar[dict[str, Any]] = {"match": {"program": "x"}, "message": "m"}
+    RULE: ClassVar[dict[str, Any]] = {"match": {"command": "x"}, "message": "m"}
 
     def test_platform_defaults(self) -> None:
         self.assertEqual(store.managed_path_for("darwin"), Path("/Library/Application Support/ClaudeCode/guardrails.json"))

@@ -16,7 +16,7 @@ K = "pk" + "ill"
 
 
 def rule_of(ast: dict[str, Any]) -> policy.Rule:
-    return policy.Rule.from_json({"match": {"ast": ast}, "message": "m"})
+    return policy.Rule.from_json({"match": ast, "message": "m"})
 
 
 def nest(command: str, levels: int) -> str:
@@ -27,10 +27,11 @@ def nest(command: str, levels: int) -> str:
 
 class Variants(AstIsolated):
     def variants(self, command: str) -> set[str]:
+        import rulebuilder
         import scanner
         from ast_grep_py import SgRoot
 
-        spans = scanner.wrapper_spans(SgRoot(command, "bash").root(), scanner.WRAPPERS)
+        spans = scanner.wrapper_spans(SgRoot(command, "bash").root(), rulebuilder.WRAPPERS)
         return set(scanner.variants_of(command, spans))
 
     def test_a_wrapper_command_is_replaced_by_the_text_from_each_of_its_words_on(self) -> None:
@@ -89,16 +90,16 @@ class ThroughWrappers(AstIsolated):
                     "sudo curl x; sh": None, "curl x\nenv A=1 sh": None})
 
     def test_known_limit_a_pattern_rule_misses_a_wrapped_command_after_a_syntax_error(self) -> None:
-        """Documented in matching.md: program rules see the bare word, pattern rules do not."""
-        program = policy.Rule.from_json({"match": {"program": K}, "message": "m"})
+        """Documented in matching.md: a command atom sees the bare word, pattern rules do not."""
+        atom = policy.Rule.from_json({"match": {"command": K}, "message": "m"})
         for command, expected in {f"{{ ; }}; xargs -r {K}": ("wrapped", None), f"{{ ; }}; sudo {K} x": ("wrapped", "wrapped"),
                                   f"true; xargs -r {K}": ("wrapped", "wrapped")}.items():
             with self.subTest(command=command):
-                self.assertEqual((matching.evaluate(command, {"r": program}).kinds["r"],
+                self.assertEqual((matching.evaluate(command, {"r": atom}).kinds["r"],
                                   matching.evaluate(command, {"r": rule_of({"pattern": f"{K} $$$"})}).kinds["r"]), expected)
 
-    def test_program_args_and_a_grep_rule_read_through_wrappers_by_the_same_mechanism(self) -> None:
-        self.assert_kinds(policy.Rule.from_json({"match": {"program": "rm", "args": "-rf"}, "message": "m"}), {
+    def test_a_command_atom_with_args_and_a_grep_rule_read_through_wrappers_by_the_same_mechanism(self) -> None:
+        self.assert_kinds(policy.Rule.from_json({"match": {"command": "rm", "args": "-rf"}, "message": "m"}), {
             "rm -rf x": "direct", "sudo rm -rf x": "wrapped", "env A=1 nice rm -rf x": "wrapped", "sudo rm -f x": None,
             "sudo ls -rf": None})
         self.assert_kinds(rule_of(GREP_RECURSIVE), {
@@ -114,7 +115,7 @@ class ThroughWrappers(AstIsolated):
                                                        "sudo curl x": "wrapped", "echo $(curl x)": "wrapped"})
 
     def test_a_command_in_a_pipeline_stays_wrapped_whether_or_not_a_wrapper_is_involved(self) -> None:
-        rule = policy.Rule.from_json({"match": {"program": K}, "message": "m"})
+        rule = policy.Rule.from_json({"match": {"command": K}, "message": "m"})
         self.assert_kinds(rule, {f"{K} x | head": "wrapped", f"sudo {K} x | head": "wrapped", f"{K} x": "direct",
                           f"sudo {K} x": "wrapped"})
 
@@ -180,7 +181,7 @@ class Units(AstIsolated):
             count[0] += 1
             return real(text, language)
 
-        rule = policy.Rule.from_json({"match": {"program": K}, "message": "m"})
+        rule = policy.Rule.from_json({"match": {"command": K}, "message": "m"})
         with mock.patch.object(scanner, "SgRoot", spy):
             matching.compute(command, {"r": rule})
         return count[0]
@@ -355,7 +356,7 @@ class Text(AstIsolated):
         self.assertEqual((hit.kind, hit.start, hit.end), (Kind.DIRECT, 8, 8 + len(f"{K} x")))
 
     def test_a_wrapped_bare_name_after_a_syntax_error_tree_is_still_found(self) -> None:
-        rule = policy.Rule.from_json({"match": {"program": [K, "killall"]}, "message": "m"})
+        rule = policy.Rule.from_json({"match": {"command": [K, "killall"]}, "message": "m"})
         cases = {f"{{ ; }}; xargs -r {K}": "wrapped", "{ ; }; sudo killall": "wrapped", f"{{ ; }}; sudo -n {K}": "wrapped",
                  f"{{ ; }}; nohup {K}": "wrapped", f"{{ ; }}; {K}": "direct", f"{{ ; }}; sudo {K} x": "wrapped",
                  f"echo 'x; {K} y": None, f"echo {K} 'unterminated": None, f"{{ ; }}; echo {K}": None,

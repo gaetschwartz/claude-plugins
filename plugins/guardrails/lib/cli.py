@@ -24,8 +24,9 @@ from policy import Invalid, view
 from verdict import Evaluation
 
 PRESETS_DIR = store.HERE.parent / "presets"
-SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description",
-            "program", "args", "regex", "ast", "requires")
+SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description", "match", "wrappers",
+            "requires")
+MATCHING = ("match", "wrappers", "requires")
 SCOPES = ("global", "project", "managed")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
@@ -376,16 +377,12 @@ def cmd_rule_add(args: Args) -> int:
 
 
 def apply_fields(rule: dict[str, Any], fields: dict[str, Any]) -> None:
-    """Set each field (null removes it); match keys go under 'match'."""
-    match = dict(view(rule, "match"))
+    """Set each field (null removes it); `match` is replaced whole."""
     for key, value in fields.items():
-        holder = match if key in policy.MATCH_KEYS else rule
         if value is None:
-            holder.pop(key, None)
+            rule.pop(key, None)
         else:
-            holder[key] = value
-    if any(key in policy.MATCH_KEYS for key in fields):
-        rule["match"] = match
+            rule[key] = value
 
 
 def ineffective(fields: dict[str, Any], base: policy.Rule) -> list[str]:
@@ -398,7 +395,7 @@ def ineffective(fields: dict[str, Any], base: policy.Rule) -> list[str]:
             added = [m for m in value if m not in base.modes] if isinstance(value, list) else []
             if added:
                 notes.append(f"modes {','.join(map(str, added))} (a project can only remove suspending modes)")
-        elif key in policy.MATCH_KEYS or key == "requires":
+        elif key in MATCHING:
             notes.append(f"{shown} (a project cannot change what a global rule matches)")
     return notes
 
@@ -538,11 +535,11 @@ def outcome_of(ev: Evaluation, rid: str) -> render.Outcome:
 
 
 def cannot_evaluate_note(ev: Evaluation) -> str:
-    """Why this rule's program/args/regex/ast part could not be judged, when it could not."""
+    """Why this rule's match could not be judged, when it could not."""
     if ev.refusal:
-        return f"cannot evaluate the parsing part of this rule: {ev.refusal}; the hook denies such a command"
-    return (f"cannot evaluate the parsing part of this rule (program, args, regex, match.ast): the engine failed "
-            f"({ev.failure}); the hook allows the command and warns the session")
+        return f"cannot evaluate this rule's match: {ev.refusal}; the hook denies such a command"
+    return (f"cannot evaluate this rule's match: the engine failed ({ev.failure}); the hook allows the command and "
+            "warns the session")
 
 
 def cmd_rule_test(args: Args) -> int:
@@ -849,7 +846,8 @@ def build_parser() -> argparse.ArgumentParser:
     rm.add_argument("id")
     test = rule.add_parser("test", parents=[common], help="dry-run a rule against sample commands")
     source = test.add_mutually_exclusive_group(required=True)
-    source.add_argument("--json", help="a draft rule as a JSON object, @<file> or - for stdin")
+    source.add_argument("--json", help="a draft rule as a JSON object, @<file> or - for stdin; its match is one "
+                        "ast-grep rule that may use the command, assignment and wrapper atoms")
     source.add_argument("--id", help="an installed rule's id")
     test.add_argument("commands", nargs="*", metavar="CMD")
     test.add_argument("--examples", help='JSON list of {"cmd", "source", "expect"} objects, @<file> or - for stdin')
@@ -883,8 +881,8 @@ def build_parser() -> argparse.ArgumentParser:
     install.add_argument("name")
     install.add_argument("--only", help="comma-separated rule ids to install")
 
-    engine = verbs.add_parser("engine", help="the managed runtime (uv, Python, ast-grep-py) behind rules "
-                              "and match.ast; installed automatically, so this is for diagnosis (not a "
+    engine = verbs.add_parser("engine", help="the managed runtime (uv, Python, ast-grep-py) that matches "
+                              "rules; installed automatically, so this is for diagnosis (not a "
                               "configuration change, so --as-user does not apply)").add_subparsers(dest="op",
                                                                                                      required=True)
     engine.add_parser("status", help="the runtime's pins, platform, paths, state and last install failure")

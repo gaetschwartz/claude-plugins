@@ -9,9 +9,8 @@ from enum import StrEnum
 from typing import Any, NamedTuple, Self
 
 MAX_AST_BYTES = 16384  # bounds nesting too: ast-grep overflows its stack past about 4000 levels
-MATCH_KEYS = ("program", "args", "regex", "ast")
-RULE_KEYS = ("match", "message", "messageShort", "action", "retry", "enabled", "modes", "requires", "description",
-             "setBy", "id")
+RULE_KEYS = ("match", "wrappers", "message", "messageShort", "action", "retry", "enabled", "modes", "requires",
+             "description", "setBy", "id")
 UNKNOWN_FIELD_HINT = ("this version does not know it; reinstall the preset that added it (`guardrails preset install "
                       "<name>`) or remove the field")
 LAYERS = ("managed", "global", "project")
@@ -60,37 +59,17 @@ def json_modes(raw: object) -> list[str]:
     return [m for m in modes if isinstance(m, str)] if isinstance(modes, list) else []
 
 
-class Match(NamedTuple):
-    program: tuple[str, ...] = ()
-    args: str | None = None
-    regex: str | None = None
-    ast: dict[str, Any] | None = None
+def match_of(raw: object) -> dict[str, Any]:
+    import rulebuilder
 
-    @classmethod
-    def from_json(cls, raw: object) -> Self:
-        if isinstance(raw, dict) and (unknown := set(raw) - set(MATCH_KEYS)):
-            raise Invalid(f"unknown field match.{min(unknown)}: {UNKNOWN_FIELD_HINT}")
-        if not isinstance(raw, dict) or not any(raw.get(k) for k in ("program", "regex", "ast")):
-            raise Invalid("'match' needs at least one of 'program', 'regex', 'ast'")
-        program = raw.get("program")
-        names = [program] if isinstance(program, str) else program
-        if program is not None and not (isinstance(names, list) and names
-                                        and all(command_name(n) for n in names)):
-            raise Invalid("'match.program' must be a command name or a list of them (no spaces or '/')")
-        ast = raw.get("ast")
-        if "ast" in raw:
-            if not isinstance(ast, dict) or not ast:
-                raise Invalid("'match.ast' must be a non-empty object")
-            if (size := ast_size(ast)) > MAX_AST_BYTES:
-                raise Invalid(f"'match.ast' is {size} bytes, over the {MAX_AST_BYTES // 1024} KiB limit; split it into rules")
-        for key in ("args", "regex"):
-            if key in raw and not isinstance(raw[key], str):
-                raise Invalid(f"'match.{key}' must be a string")
-        return cls(tuple(names or ()), raw.get("args"), raw.get("regex"), ast)
+    match = rulebuilder.checked(raw)
+    if (size := ast_size(match)) > MAX_AST_BYTES:
+        raise Invalid(f"'match' is {size} bytes, over the {MAX_AST_BYTES // 1024} KiB limit; split it into rules")
+    return match
 
 
 class Rule(NamedTuple):
-    match: Match
+    match: dict[str, Any]
     message: str
     action: Action = Action.DENY
     retry: Retry = Retry.NONE
@@ -99,6 +78,7 @@ class Rule(NamedTuple):
     requires: tuple[str, ...] = ()
     message_short: str | None = None
     description: str | None = None
+    wrappers: bool = True
 
     @classmethod
     def from_json(cls, raw: object) -> Self:
@@ -111,7 +91,7 @@ class Rule(NamedTuple):
             raise Invalid("'message' is required")
         if "messageShort" in raw and not isinstance(raw["messageShort"], str):
             raise Invalid("'messageShort' must be a string")
-        match = Match.from_json(raw.get("match"))
+        match = match_of(raw.get("match"))
         try:
             action, retry = Action(raw.get("action", "deny")), Retry(raw.get("retry", "none"))
         except ValueError:
@@ -119,11 +99,12 @@ class Rule(NamedTuple):
                           f"{', '.join(Retry)}") from None
         modes = text_list(raw.get("modes", []), "modes")
         requires = text_list(raw["requires"], "requires", required=True) if "requires" in raw else ()
-        if "enabled" in raw and not isinstance(raw["enabled"], bool):
-            raise Invalid("'enabled' must be true or false")
+        for key in ("enabled", "wrappers"):
+            if key in raw and not isinstance(raw[key], bool):
+                raise Invalid(f"'{key}' must be true or false")
         description = raw.get("description")
         return cls(match, message, action, retry, raw.get("enabled", True), modes, requires, raw.get("messageShort"),
-                   description if isinstance(description, str) else None)
+                   description if isinstance(description, str) else None, raw.get("wrappers", True))
 
 
 class Mode(NamedTuple):
@@ -199,25 +180,10 @@ def ast_size(ast: object) -> int:
     return len(json.dumps(ast))
 
 
-def ast_patterns(node: object) -> list[str]:
-    """Every pattern string in an ast rule, in document order."""
-    out: list[str] = []
-    if isinstance(node, dict):
-        for key, value in node.items():
-            if key == "pattern":
-                out.append(value if isinstance(value, str) else str(view(value, "context")))
-            else:
-                out += ast_patterns(value)
-    elif isinstance(node, list):
-        for item in node:
-            out += ast_patterns(item)
-    return out
-
-
 def merge_rule(base: Rule, override: Mapping[str, Any], reword: bool = True) -> Rule:
     """Layer a lower-precedence entry onto a rule from a higher layer; only tightening changes apply.
 
-    An override can never change what the rule matches: 'match' and 'requires' are ignored, and an
+    An override can never change what the rule matches: 'match', 'wrappers' and 'requires' are ignored, and an
     override whose texts are malformed leaves the base rule unchanged. With reword=False the texts
     are ignored too.
     """

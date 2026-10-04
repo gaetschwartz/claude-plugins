@@ -2,7 +2,7 @@
  "rules": {
   "no-kill-by-name": {
    "match": {
-    "program": [
+    "command": [
      "pkill",
      "killall"
     ]
@@ -13,16 +13,14 @@
   },
   "no-pgrep-substitution": {
    "match": {
-    "ast": {
-     "pattern": "pgrep $$$",
-     "inside": {
-      "any": [
-       {
-        "kind": "command_substitution"
-       }
-      ],
-      "stopBy": "end"
-     }
+    "pattern": "pgrep $$$",
+    "inside": {
+     "any": [
+      {
+       "kind": "command_substitution"
+      }
+     ],
+     "stopBy": "end"
     }
    },
    "action": "deny",
@@ -31,12 +29,10 @@
   },
   "no-pgrep-pipeline": {
    "match": {
-    "ast": {
-     "pattern": "pgrep $$$",
-     "inside": {
-      "kind": "pipeline",
-      "stopBy": "end"
-     }
+    "pattern": "pgrep $$$",
+    "inside": {
+     "kind": "pipeline",
+     "stopBy": "end"
     }
    },
    "action": "deny",
@@ -45,59 +41,57 @@
   },
   "no-pgrep-status": {
    "match": {
-    "ast": {
-     "any": [
-      {
-       "pattern": "pgrep $$$",
-       "inside": {
-        "kind": "list"
-       },
+    "any": [
+     {
+      "pattern": "pgrep $$$",
+      "inside": {
+       "kind": "list"
+      },
+      "precedes": {
+       "regex": "^(&&|\\|\\|)$"
+      }
+     },
+     {
+      "pattern": "pgrep $$$",
+      "inside": {
+       "kind": "list",
        "precedes": {
         "regex": "^(&&|\\|\\|)$"
-       }
-      },
-      {
-       "pattern": "pgrep $$$",
-       "inside": {
-        "kind": "list",
-        "precedes": {
-         "regex": "^(&&|\\|\\|)$"
-        },
-        "stopBy": "end"
-       }
-      },
-      {
-       "pattern": "pgrep $$$",
-       "inside": {
-        "kind": "negated_command",
-        "stopBy": "end"
-       }
-      },
-      {
-       "pattern": "pgrep $$$",
-       "inside": {
-        "kind": "if_statement",
-        "field": "condition",
-        "stopBy": "end"
-       }
-      },
-      {
-       "pattern": "pgrep $$$",
-       "inside": {
-        "kind": "while_statement",
-        "field": "condition",
-        "stopBy": "end"
-       }
-      },
-      {
-       "pattern": "watch $$$",
-       "has": {
-        "regex": "\\bpgrep\\b",
-        "stopBy": "end"
-       }
+       },
+       "stopBy": "end"
       }
-     ]
-    }
+     },
+     {
+      "pattern": "pgrep $$$",
+      "inside": {
+       "kind": "negated_command",
+       "stopBy": "end"
+      }
+     },
+     {
+      "pattern": "pgrep $$$",
+      "inside": {
+       "kind": "if_statement",
+       "field": "condition",
+       "stopBy": "end"
+      }
+     },
+     {
+      "pattern": "pgrep $$$",
+      "inside": {
+       "kind": "while_statement",
+       "field": "condition",
+       "stopBy": "end"
+      }
+     },
+     {
+      "pattern": "watch $$$",
+      "has": {
+       "regex": "\\bpgrep\\b",
+       "stopBy": "end"
+      }
+     }
+    ]
    },
    "action": "deny",
    "description": "Never use pgrep's exit status (&&, ||, !, if, while, until, watch).",
@@ -105,16 +99,14 @@
   },
   "no-kill-lookup-substitution": {
    "match": {
-    "ast": {
-     "pattern": "kill $$$",
+    "pattern": "kill $$$",
+    "has": {
+     "kind": "command_substitution",
+     "stopBy": "end",
      "has": {
-      "kind": "command_substitution",
-      "stopBy": "end",
-      "has": {
-       "kind": "command_name",
-       "regex": "^(ps|pidof|lsof)$",
-       "stopBy": "end"
-      }
+      "kind": "command_name",
+      "regex": "^(ps|pidof|lsof)$",
+      "stopBy": "end"
      }
     }
    },
@@ -124,20 +116,18 @@
   },
   "no-kill-lookup-xargs": {
    "match": {
-    "ast": {
+    "kind": "command",
+    "regex": "^xargs\\b.*\\bkill\\b",
+    "inside": {
+     "kind": "pipeline"
+    },
+    "follows": {
      "kind": "command",
-     "regex": "^xargs\\b.*\\bkill\\b",
-     "inside": {
-      "kind": "pipeline"
+     "has": {
+      "field": "name",
+      "regex": "^(ps|pidof|lsof)$"
      },
-     "follows": {
-      "kind": "command",
-      "has": {
-       "field": "name",
-       "regex": "^(ps|pidof|lsof)$"
-      },
-      "stopBy": "end"
-     }
+     "stopBy": "end"
     }
    },
    "action": "deny",
@@ -146,19 +136,17 @@
   },
   "warn-pgrep-in-loop": {
    "match": {
-    "ast": {
-     "pattern": "pgrep $$$",
-     "inside": {
-      "any": [
-       {
-        "kind": "while_statement"
-       },
-       {
-        "kind": "for_statement"
-       }
-      ],
-      "stopBy": "end"
-     }
+    "pattern": "pgrep $$$",
+    "inside": {
+     "any": [
+      {
+       "kind": "while_statement"
+      },
+      {
+       "kind": "for_statement"
+      }
+     ],
+     "stopBy": "end"
     }
    },
    "action": "warn",
@@ -167,12 +155,10 @@
   },
   "warn-pgrep-full-cmdline": {
    "match": {
-    "ast": {
-     "pattern": "pgrep $$$",
-     "has": {
-      "kind": "word",
-      "regex": "^(--full|-[a-zA-Z]*f[a-zA-Z]*)$"
-     }
+    "pattern": "pgrep $$$",
+    "has": {
+     "kind": "word",
+     "regex": "^(--full|-[a-zA-Z]*f[a-zA-Z]*)$"
     }
    },
    "action": "warn",
