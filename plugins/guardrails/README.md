@@ -109,7 +109,7 @@ is a configuration change and needs the user's explicit request (`--as-user`).
 |---|---|
 | `docs-first` | `no-strings` (deny, retry), `binary-spelunking` (otool/nm/objdump, warn); mode `reverse-engineering` |
 | `process-safety` | `no-pkill` (pkill/killall, deny, retry), `kill-9` (warn); mode `incident` |
-| `modern-cli` | `find-fd`, `grep-rg` (deny, retry, fd/rg cheat sheet), `cargo-nextest` (`cargo test` except `--doc`), `du-dust` (deny, retry); each only when its tool is installed |
+| `modern-cli` | `find-fd`, `grep-rg`, `cargo-nextest` (`cargo test` except `--doc`), `du-dust`: one-line warnings that nudge toward the faster tool, never blocking, each only when its tool is installed |
 | `shell-hygiene` | `pipe-status` (a pipeline's status read from a trailing `tail`/`head`/…, deny), `tail-follow` (foreground `tail -f`, deny), `ps-grep-self-match` (`ps \| grep` without a guard, warn) |
 
 ## CLI

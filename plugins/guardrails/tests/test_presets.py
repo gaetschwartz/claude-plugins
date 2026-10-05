@@ -23,20 +23,21 @@ class Presets(AstIsolated):
                     for mode in policy.json_modes(rule):
                         self.assertIn(mode, preset.get("modes", {}))
 
-    def test_modern_cli_sheets_name_the_installed_binary(self) -> None:
+    def test_modern_cli_rules_are_one_line_warnings(self) -> None:
         rules = cli.load_preset("modern-cli")["rules"]
         self.assertEqual(rules["find-fd"]["when"], {"bin": ["fd", "fdfind"]})
         self.assertEqual(rules["grep-rg"]["when"], {"bin": "rg"})
         self.assertEqual(rules["grep-rg"]["match"]["all"][0], {"command": ["grep", "egrep", "fgrep"]})
-        fd_texts = [rules["find-fd"]["message"], rules["find-fd"]["messageShort"],
-                    *(case["text"] for case in rules["find-fd"]["messages"])]
-        for text in fd_texts:
-            self.assertIn("{found} -h", text)
+        self.assertIn("{found}", rules["find-fd"]["message"])
+        self.assertEqual(sorted(rules), ["cargo-nextest", "du-dust", "find-fd", "grep-rg"])
         for rid, rule in rules.items():
-            for text in (rule["message"], rule["messageShort"], *(c["text"] for c in rule.get("messages", []))):
-                with self.subTest(rule=rid):
-                    self.assertNotIn("{which:", text)
-                    self.assertNotRegex(text.replace("{found}", "").replace("{{", "").replace("}}", ""), "[{}]")
+            with self.subTest(rule=rid):
+                self.assertEqual(rule["action"], "warn")
+                for key in ("retry", "messages", "messageShort"):
+                    self.assertNotIn(key, rule)
+                self.assertNotIn("\n", rule["message"])
+                self.assertLess(len(rule["message"]), 200)
+                self.assertNotRegex(rule["message"].replace("{found}", ""), "[{}]")
 
     def test_install_global_and_idempotent(self) -> None:
         code, out, _ = self.cli("preset", "install", "docs-first")
@@ -90,11 +91,12 @@ class Presets(AstIsolated):
             (folder / name).chmod(0o755)
         return str(folder)
 
-    def denial(self, command: str) -> str | None:
+    def warning(self, command: str) -> str | None:
         out = self.hook(command, session=f"s-{command}-{os.environ['PATH']}")
         if out is None:
             return None
-        return out["hookSpecificOutput"]["permissionDecisionReason"]
+        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
+        return out["hookSpecificOutput"]["additionalContext"]
 
     def test_modern_cli_catches_and_passes_with_the_binary_it_finds(self) -> None:
         self.cli("preset", "install", "modern-cli")
@@ -105,34 +107,30 @@ class Presets(AstIsolated):
             os.environ["PATH"] = self.stub_path(*names)
             for command, rid in catches.items():
                 with self.subTest(path=names, command=command):
-                    text = self.denial(command)
+                    text = self.warning(command)
                     assert text is not None
                     self.assertIn(f"[guardrails:{rid}]", plain(text))
                     if rid == "find-fd":
-                        self.assertIn(f"`{fd_name} -h`", text)
+                        self.assertIn(f"Prefer `{fd_name}` over `find`", text)
                         self.assertNotIn("{found}", text)
                         other = "fdfind" if fd_name == "fd" else "fd "
                         self.assertNotIn(f"`{other}", text)
             for command in passes:
                 with self.subTest(path=names, command=command):
-                    self.assertIsNone(self.denial(command))
+                    self.assertIsNone(self.warning(command))
         os.environ["PATH"] = self.stub_path("fdfind")
-        self.assertIsNotNone(self.denial("find . -name y"))
-        self.assertIsNone(self.denial("grep -r y ."))
+        self.assertIn("fdfind", self.warning("find . -name y") or "")
+        self.assertIsNone(self.warning("grep -r y ."))
 
-    def test_modern_cli_find_exec_gets_its_own_advice(self) -> None:
+    def test_modern_cli_warning_is_one_line_and_shown_once_per_session(self) -> None:
         self.cli("preset", "install", "modern-cli")
         os.environ["PATH"] = self.stub_path("fd")
-        for command in ("find . -name '*.o' -delete", "find . -type f -exec chmod 644 {} \\;", "sudo find / -execdir ls {} +"):
-            with self.subTest(command=command):
-                text = self.denial(command)
-                assert text is not None
-                self.assertIn("-x cmd {}   per file", text)
-                self.assertNotIn("cheat sheet", text)
-        text = self.denial("find . -name x")
-        assert text is not None
-        self.assertIn("── fd cheat sheet", text)
-        self.assertIn("find . -exec cmd {} \\;", text)
+        first = self.hook("find . -name x", session="once")
+        assert first is not None
+        self.assertNotIn("permissionDecision", first["hookSpecificOutput"])
+        self.assertEqual(first["hookSpecificOutput"]["additionalContext"].count("\n"), 0)
+        self.assertIsNone(self.hook("find . -name x", session="once"))
+        self.assertIsNotNone(self.hook("find . -name x", session="other"))
 
 
 def rule_of(preset: str, rid: str) -> policy.Rule:
@@ -159,21 +157,14 @@ class Examples(AstIsolated):
         self.assertIsNotNone(evaluation.kinds["r"], command)
         return engine.texts_of(rule, evaluation.details.get("r")).full
 
-    def test_cargo_nextest_cases_and_text(self) -> None:
-        plain_text = self.says("modern-cli", "cargo-nextest", "cargo test -p foo my_test")
-        self.assertIn("cargo nextest run", plain_text)
-        self.assertIn("cargo test --doc", plain_text)
-        for command in ("cargo test -- --nocapture", "cargo test -p foo x -- --nocapture --test-threads=1"):
-            self.assertIn("--no-capture", self.says("modern-cli", "cargo-nextest", command))
-        self.assertNotIn("becomes `cargo nextest run -p foo", plain_text)
-
-    def test_du_dust_cases(self) -> None:
-        self.assertIn("dust -d 0 PATH", self.says("modern-cli", "du-dust", "du -sh /tmp"))
-        self.assertIn("dust -d N PATH", self.says("modern-cli", "du-dust", "du --max-depth=1 /tmp"))
-        self.assertIn("dust -d N PATH", self.says("modern-cli", "du-dust", "du -h -d 1 /tmp"))
-        default = self.says("modern-cli", "du-dust", "du -h /tmp")
-        self.assertIn("dust -n 20 PATH", default)
-        self.assertIn("repeat the same command", default)
+    def test_modern_cli_messages_name_the_replacement(self) -> None:
+        expect = {"cargo-nextest": ("cargo test -p foo my_test", ("cargo nextest run", "cargo test --doc")),
+                  "du-dust": ("du -sh /tmp", ("dust -d 1 PATH",))}
+        for rid, (command, needles) in expect.items():
+            text = self.says("modern-cli", rid, command)
+            for needle in needles:
+                with self.subTest(rule=rid):
+                    self.assertIn(needle, text)
 
     def test_pipe_status_cases(self) -> None:
         self.assertIn("pipestatus[1]", self.says("shell-hygiene", "pipe-status", "make | tail; echo $?"))
@@ -239,14 +230,21 @@ class Installed(AstIsolated):
             (folder / name).chmod(0o755)
         return str(folder)
 
+    def warned(self, command: str) -> str | None:
+        out = self.hook(command, session=f"w-{command}-{os.environ['PATH']}")
+        if out is None:
+            return None
+        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
+        return out["hookSpecificOutput"]["additionalContext"]
+
     def test_nextest_and_dust_rules_need_their_tools(self) -> None:
         self.cli("preset", "install", "modern-cli")
         os.environ["PATH"] = self.stub_path("fd")
         self.assertIsNone(self.denied("cargo test"))
         self.assertIsNone(self.denied("du -sh ."))
         os.environ["PATH"] = self.stub_path("cargo-nextest", "dust")
-        self.assertIn("[guardrails:cargo-nextest]", plain(self.denied("cargo test -p x") or ""))
-        self.assertIn("[guardrails:du-dust]", plain(self.denied("du -sh .") or ""))
-        self.assertIsNone(self.denied("cargo test --doc"))
-        self.assertIsNotNone(self.denied("du -sk ."))
-        self.assertIsNone(self.denied("du -sk ."))
+        self.assertIn("[guardrails:cargo-nextest]", plain(self.warned("cargo test -p x") or ""))
+        self.assertIn("[guardrails:du-dust]", plain(self.warned("du -sh .") or ""))
+        self.assertIsNone(self.warned("cargo test --doc"))
+        self.assertIsNotNone(self.warned("du -sk ."))
+        self.assertIsNone(self.warned("du -sk ."))

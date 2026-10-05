@@ -40,7 +40,7 @@ questions only when the user did not pass `-y`.
    this project (`--scope project`, written to `.claude/guardrails.json`, which the repository can commit). Managed (machine-wide, needs root) is offered only when the user asks for it or passed `-s managed`.
 2. Suggest presets:
 
-   - general development: `docs-first`, `process-safety`, `shell-hygiene`, `modern-cli` (its rules only act when fd / rg / cargo-nextest / dust are installed)
+   - general development: `docs-first`, `process-safety`, `shell-hygiene`, `modern-cli` (one-line warnings, never blocks, that only act when fd / rg / cargo-nextest / dust are installed)
    - reverse-engineering: `docs-first` with its `reverse-engineering` mode, which could be persistently on for this project
    - infrastructure / ops: `process-safety` (its `incident` mode relaxes it while firefighting)
 
