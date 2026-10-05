@@ -8,7 +8,7 @@
           "kind": "pipeline",
           "stopBy": "end"
         },
-        "pattern": "pgrep $$$"
+        "command": "pgrep"
       },
       {
         "inside": {
@@ -19,7 +19,7 @@
           ],
           "stopBy": "end"
         },
-        "pattern": "pgrep $$$"
+        "command": "pgrep"
       },
       {
         "has": {
@@ -31,7 +31,7 @@
           "kind": "command_substitution",
           "stopBy": "end"
         },
-        "pattern": "kill $$$"
+        "command": "kill"
       },
       {
         "follows": {
@@ -49,27 +49,27 @@
         "regex": "^xargs\\b.*\\bkill\\b"
       },
       {
-        "command": "kill",
-        "not": {
-          "has": {
-            "regex": "^-(0|l|L)$"
-          }
-        },
-        "has": {
-          "any": [
-            {
-              "kind": "simple_expansion",
-              "regex": "^\\$[A-Za-z_]"
-            },
-            {
-              "kind": "expansion",
-              "regex": "^\\$\\{[A-Za-z_]"
-            }
-          ],
-          "stopBy": "end"
-        },
         "any": [
           {
+            "command": "kill",
+            "not": {
+              "has": {
+                "regex": "^-(0|l|L)$"
+              }
+            },
+            "has": {
+              "any": [
+                {
+                  "kind": "simple_expansion",
+                  "regex": "^\\$[A-Za-z_]"
+                },
+                {
+                  "kind": "expansion",
+                  "regex": "^\\$\\{[A-Za-z_]"
+                }
+              ],
+              "stopBy": "end"
+            },
             "follows": {
               "kind": "variable_assignment",
               "has": {
@@ -119,6 +119,25 @@
             }
           },
           {
+            "command": "kill",
+            "not": {
+              "has": {
+                "regex": "^-(0|l|L)$"
+              }
+            },
+            "has": {
+              "any": [
+                {
+                  "kind": "simple_expansion",
+                  "regex": "^\\$[A-Za-z_]"
+                },
+                {
+                  "kind": "expansion",
+                  "regex": "^\\$\\{[A-Za-z_]"
+                }
+              ],
+              "stopBy": "end"
+            },
             "inside": {
               "follows": {
                 "kind": "variable_assignment",

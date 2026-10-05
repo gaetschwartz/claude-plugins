@@ -158,10 +158,11 @@ def transparent(node: dict[str, Any], out: dict[str, Any], atoms: Sequence[Any],
     the statement sits (precedes, follows, inside, nthChild) being judged from the wrapper. It matches the wrapper
     when `statement` (the command is looked for among siblings or children), else the command."""
     moved, kept = split_positions(node, out, where)
-    inner: dict[str, Any] = {**kept, "all": [*atoms, *kept.get("all", [])]}
     if statement:
+        inner: dict[str, Any] = {**kept, "all": [*atoms, *kept.get("all", [])]}
         return {"any": [core, {"kind": redirects.WRAPPER, **moved, "has": {"field": "body", "all": [inner]}}]}
-    return {"any": [core, {**inner, "inside": {"kind": redirects.WRAPPER, **moved}}]}
+    placed: dict[str, Any] = {"any": [moved, {"inside": {"kind": redirects.WRAPPER, **moved}}]}
+    return {**kept, "all": [*atoms, *kept.get("all", []), placed]}
 
 
 def expanded(node: object, where: str = "match", at: str = "node") -> Any:

@@ -19,7 +19,7 @@ import verdict
 from verdict import Kind
 
 K = "pk" + "ill"
-BY_NAME: dict[str, Any] = {"any": [{"pattern": f"{K} $$$"}, {"pattern": "killall $$$"}]}
+BY_NAME: dict[str, Any] = {"command": [K, "killall"]}
 
 
 def deny_text(out: dict[str, Any] | None) -> str:

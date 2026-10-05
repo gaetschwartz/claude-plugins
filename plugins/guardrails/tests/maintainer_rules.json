@@ -13,7 +13,7 @@
   },
   "no-pgrep-substitution": {
    "match": {
-    "pattern": "pgrep $$$",
+    "command": "pgrep",
     "inside": {
      "any": [
       {
@@ -29,7 +29,7 @@
   },
   "no-pgrep-pipeline": {
    "match": {
-    "pattern": "pgrep $$$",
+    "command": "pgrep",
     "inside": {
      "kind": "pipeline",
      "stopBy": "end"
@@ -43,7 +43,7 @@
    "match": {
     "any": [
      {
-      "pattern": "pgrep $$$",
+      "command": "pgrep",
       "inside": {
        "kind": "list"
       },
@@ -52,9 +52,11 @@
       }
      },
      {
-      "pattern": "pgrep $$$",
+      "command": "pgrep",
       "inside": {
-       "kind": "list",
+       "statement": {
+        "kind": "list"
+       },
        "precedes": {
         "regex": "^(&&|\\|\\|)$"
        },
@@ -62,14 +64,14 @@
       }
      },
      {
-      "pattern": "pgrep $$$",
+      "command": "pgrep",
       "inside": {
        "kind": "negated_command",
        "stopBy": "end"
       }
      },
      {
-      "pattern": "pgrep $$$",
+      "command": "pgrep",
       "inside": {
        "kind": "if_statement",
        "field": "condition",
@@ -77,7 +79,7 @@
       }
      },
      {
-      "pattern": "pgrep $$$",
+      "command": "pgrep",
       "inside": {
        "kind": "while_statement",
        "field": "condition",
@@ -85,7 +87,7 @@
       }
      },
      {
-      "pattern": "watch $$$",
+      "command": "watch",
       "has": {
        "regex": "\\bpgrep\\b",
        "stopBy": "end"
@@ -99,7 +101,7 @@
   },
   "no-kill-lookup-substitution": {
    "match": {
-    "pattern": "kill $$$",
+    "command": "kill",
     "has": {
      "kind": "command_substitution",
      "stopBy": "end",
@@ -136,7 +138,7 @@
   },
   "warn-pgrep-in-loop": {
    "match": {
-    "pattern": "pgrep $$$",
+    "command": "pgrep",
     "inside": {
      "any": [
       {
@@ -155,7 +157,7 @@
   },
   "warn-pgrep-full-cmdline": {
    "match": {
-    "pattern": "pgrep $$$",
+    "command": "pgrep",
     "has": {
      "kind": "word",
      "regex": "^(--full|-[a-zA-Z]*f[a-zA-Z]*)$"
@@ -231,7 +233,12 @@
     "until pgrep -q x; do sleep 1; done",
     "until ! pgrep x; do sleep 1; done",
     "watch pgrep x",
-    "watch -n1 'pgrep x'"
+    "watch -n1 'pgrep x'",
+    "pgrep -f X >/dev/null || echo gone",
+    "pgrep -x X 2>/dev/null && echo up",
+    "a && pgrep x >/dev/null || b",
+    "pgrep -q x &>/dev/null && echo y",
+    "for i in 1 2; do pgrep -f x >/dev/null || { echo ended; break; }; done"
    ],
    "pass": [
     "pgrep -xl a",
@@ -242,7 +249,9 @@
     "echo hi || pgrep -xl y",
     "a && b && pgrep -xl y",
     "if true; then pgrep -xl x; fi",
-    "while true; do pgrep -xl x; sleep 1; done"
+    "while true; do pgrep -xl x; sleep 1; done",
+    "pgrep -fl X >/dev/null 2>&1; echo done",
+    "pgrep -f X > out.txt; cat out.txt"
    ]
   },
   "no-kill-lookup-substitution": {
