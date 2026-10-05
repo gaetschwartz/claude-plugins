@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from helpers import AstIsolated, Isolated, caught
+from helpers import AstIsolated, caught, Isolated, plain
 
 import conditions
 import engine
@@ -306,8 +306,8 @@ class Hook(AstIsolated):
 
     def test_the_hook_says_the_case_and_captures(self) -> None:
         self.put(self.gpath, {"rules": {"rm": CASES}})
-        self.assertIn("[guardrails:rm] never the root: /", self.reason("rm -rf / x") or "")
-        self.assertIn("[guardrails:rm] wrapped rm of /tmp/a", self.reason("sudo rm -rf /tmp/a b") or "")
+        self.assertIn("[guardrails:rm] never the root: /", plain(self.reason("rm -rf / x") or ""))
+        self.assertIn("[guardrails:rm] wrapped rm of /tmp/a", plain(self.reason("sudo rm -rf /tmp/a b") or ""))
         first = self.reason("rm -rf /tmp/a b", session="s")
         second = self.reason("rm -rf /tmp/z q", session="s")
         self.assertIn("default for /tmp/a then b ({literal}) .", first or "")
@@ -318,10 +318,10 @@ class Hook(AstIsolated):
                                         "cargo": rule(match={"command": "make"}, when={"file": "Cargo.toml"},
                                                       message="use cargo")}})
         self.assertIsNone(self.reason("tail -f log"))
-        self.assertIn("[guardrails:mon]", self.reason("tail -f log", tool="Monitor") or "")
+        self.assertIn("[guardrails:mon]", plain(self.reason("tail -f log", tool="Monitor") or ""))
         self.assertIsNone(self.reason("make all"))
         (self.proj / "Cargo.toml").write_text("")
-        self.assertIn("[guardrails:cargo] use cargo", self.reason("make all", session="later") or "")
+        self.assertIn("[guardrails:cargo] use cargo", plain(self.reason("make all", session="later") or ""))
 
     def test_found_names_the_binary_on_path(self) -> None:
         sheet = rule(match={"command": "find"}, when={"bin": ["zz-fd", "zz-fdfind"]}, message="use {found} -e py")
@@ -337,8 +337,8 @@ class Hook(AstIsolated):
         self.put(self.gpath, {"rules": {"old": rule(requires=["strings"]), "ok": rule(match={"command": "nm"})}})
         out = self.hook("strings x; nm y")
         assert out is not None
-        self.assertIn("[guardrails:ok]", out["hookSpecificOutput"]["permissionDecisionReason"])
-        self.assertNotIn("[guardrails:old]", out["hookSpecificOutput"]["permissionDecisionReason"])
+        self.assertIn("[guardrails:ok]", plain(out["hookSpecificOutput"]["permissionDecisionReason"]))
+        self.assertNotIn("[guardrails:old]", plain(out["hookSpecificOutput"]["permissionDecisionReason"]))
         self.assertIn("rule old is invalid ('requires' was replaced by 'when'", out["systemMessage"])
         problems = self.cli("status", "--problems")[1]
         self.assertIn("rule old: 'requires' was replaced by 'when'", problems)

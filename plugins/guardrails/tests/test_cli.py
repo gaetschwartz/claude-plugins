@@ -434,7 +434,7 @@ class Status(AstIsolated):
         out = self.status()
         self.assertIn(f"- `{long}` deny", out)
         self.assertIn("- `short" + " " * 35 + "` deny", out)
-        forged = "bad\n### Forged\n- `fake` deny\x1b[2J"
+        forged = "bad\n**Forged**\n- `fake` deny\x1b[2J"
         self.put(self.gpath, {"rules": {forged: {"match": {"command": "x"}, "message": "m"}},
                               "modes": {forged: {"description": forged, "agentMayEnable": True}}})
         self.put(self.spath, {"sessions": {"s1": {"modes": {forged: {"by": "agent", "reason": forged}}}}})
@@ -442,7 +442,7 @@ class Status(AstIsolated):
             out = self.status(*argv)
             self.assertNotIn("\x1b", out)
             for line in out.splitlines():
-                self.assertFalse(line.startswith(("### Forged", "- `fake")), line)
+                self.assertFalse(line.startswith(("**Forged**", "- `fake")), line)
 
 
 class RuleTest(AstIsolated):

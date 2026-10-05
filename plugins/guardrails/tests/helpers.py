@@ -53,6 +53,11 @@ def caught(out: str) -> dict[str, bool]:
     return {row["cmd"]: row["glyph"] == "✗" for row in rows}
 
 
+def plain(text: str) -> str:
+    """Denial text without the rule hash after each id."""
+    return re.sub(r"#[0-9a-f]{8}(?=[\],]| \()", "", text)
+
+
 SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "XDG_CONFIG_HOME")
 
 

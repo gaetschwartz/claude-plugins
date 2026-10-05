@@ -2,7 +2,7 @@ from __future__ import annotations  # noqa: I001
 
 import os
 
-from helpers import AstIsolated
+from helpers import AstIsolated, plain
 
 import cli
 import policy
@@ -104,7 +104,7 @@ class Presets(AstIsolated):
                 with self.subTest(path=names, command=command):
                     text = self.denial(command)
                     assert text is not None
-                    self.assertIn(f"[guardrails:{rid}]", text)
+                    self.assertIn(f"[guardrails:{rid}]", plain(text))
                     if rid == "find-fd":
                         self.assertIn(f"`{fd_name} -h`", text)
                         self.assertNotIn("{found}", text)

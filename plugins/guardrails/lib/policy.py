@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import hashlib
 import json
 from collections.abc import Mapping
 from enum import StrEnum
@@ -195,6 +196,15 @@ def ast_size(ast: object) -> int:
     return len(json.dumps(ast))
 
 
+def rule_hash(rule: Rule) -> str:
+    """Eight hex digits identifying everything about an effective rule that shapes a denial (never its bookkeeping)."""
+    shaping = {"match": rule.match, "wrappers": rule.wrappers, "when": rule.when, "action": rule.action.value,
+               "retry": rule.retry.value, "message": rule.message, "messageShort": rule.message_short,
+               "messages": [{"when": c.when, "text": c.text, "messageShort": c.message_short} for c in rule.messages]}
+    canonical = json.dumps(shaping, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
+    return hashlib.sha256(canonical.encode()).hexdigest()[:8]
+
+
 def merge_rule(base: Rule, override: Mapping[str, Any], reword: bool = True) -> Rule:
     """Layer a lower-precedence entry onto a rule from a higher layer; only tightening changes apply.
 
@@ -262,6 +272,8 @@ def effective(managed: object, global_config: object, project_config: object) ->
 
     def add(rid: str, raw: Mapping[str, Any]) -> None:
         try:
+            if "#" in rid:
+                raise Invalid(f"rule id {rid!r} must not contain '#': it separates the id from the rule hash in denials")
             rules[rid] = Rule.from_json(raw)
         except Invalid as exc:
             problems[rid] = str(exc)

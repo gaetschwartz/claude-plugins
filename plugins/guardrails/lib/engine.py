@@ -109,7 +109,8 @@ def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode],
                 text = short
             elif remember(session.shown, key):
                 changed = True
-        groups.setdefault(text, []).append(f"{rid} (managed)" if rid in managed_ids else rid)
+        label = f"{rid}#{policy.rule_hash(rule)}"
+        groups.setdefault(text, []).append(f"{label} (managed)" if rid in managed_ids else label)
         tails.setdefault(text, hints(rule, modes, session_id))
     paragraphs = [f"[guardrails:{', '.join(ids)}] {text}{tails[text]}" for text, ids in groups.items()]
     return "\n\n".join(paragraphs), changed

@@ -207,7 +207,10 @@ itself start without a tool call and are not covered.
 - `modes`: the rule is skipped while any listed mode is active. A mode is active when switched on persistently (global,
   project, or managed) or for this session. An agent may switch on a session mode only when it is declared with
   `agentMayEnable` (and a rule suspended by an agent-enabled mode is reported to the user).
-- The deny text starts with `[guardrails:<id>]`, or `<id> (managed)` for a managed rule.
+- The deny text starts with `[guardrails:<id>#<hash>]` (`<id>#<hash> (managed)` for a managed rule). The hash is eight
+  hex digits of the effective rule as enforced: `match`, `wrappers`, `when`, `action`, `retry`, `message`, `messageShort`
+  and `messages` (so rewording changes it), never `description`, `enabled`, `modes` or who set it. A rule id cannot
+  contain `#`. Warn texts carry the same marker.
 
 ## Conditions: `when`
 

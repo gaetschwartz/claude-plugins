@@ -37,7 +37,7 @@ plain chat what to explain instead.)
 
 1. The references above are already loaded; use them, do not guess.
 2. Run `guardrails status` to see the effective rules, origins, active modes and problems.
-   A deny message names the rule as `[guardrails:<id>]`, or `<id> (managed)`.
+   A deny message names the rule as `[guardrails:<id>#<hash>]`, or `<id>#<hash> (managed)`; the id is what you pass on.
 3. Decide the commands that answer the question: the one in question (from `-c`; source `yours`), its wrapped and
    look-alike forms (source `inferred`). Set `expect` only when the caller said what should happen. With an id run
    `guardrails rule test --id <id> --examples -` with the examples list on stdin:

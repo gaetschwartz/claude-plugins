@@ -5,7 +5,7 @@ import os
 import unittest
 from typing import Any
 
-from helpers import GREP_RECURSIVE, HOOKS, AstIsolated, RealRuntime
+from helpers import AstIsolated, GREP_RECURSIVE, HOOKS, plain, RealRuntime
 
 import matching
 import store
@@ -71,7 +71,7 @@ class Hook(AstIsolated):
         out = self.hook("strings /bin/ls")
         self.assertEqual(decision(out), "deny")
         text = reason(out)
-        self.assertIn("[guardrails:no-strings] Read the docs.", text)
+        self.assertIn("[guardrails:no-strings] Read the docs.", plain(text))
         self.assertIn("re-run it unchanged", text)
         self.assertIn("'reverse-engineering'", text)
         self.assertIn("guardrails:mode", text)
@@ -109,7 +109,7 @@ class Hook(AstIsolated):
         hs = out["hookSpecificOutput"]
         self.assertNotIn("permissionDecision", hs)
         self.assertEqual(hs["hookEventName"], "PreToolUse")
-        self.assertIn("[guardrails:k9] SIGTERM first", hs["additionalContext"])
+        self.assertIn("[guardrails:k9] SIGTERM first", plain(hs["additionalContext"]))
         self.assertIsNone(self.hook("kill -9 2"))
         self.assertEqual(decision(self.hook("kill -9 2", session="s2")), "warn")
 
@@ -174,7 +174,7 @@ class Hook(AstIsolated):
                                         "grep-rg": {**sheet, "match": GREP_RECURSIVE}}})
         first = reason(self.hook("find . | xargs grep -r x"))
         self.assertEqual(first.count("SHEET for {x}"), 1)
-        self.assertIn("[guardrails:find-fd, grep-rg]", first)
+        self.assertIn("[guardrails:find-fd, grep-rg]", plain(first))
         second = reason(self.hook("find /tmp"))
         self.assertIn("terse", second)
         self.assertNotIn("SHEET", second)
@@ -230,14 +230,14 @@ class ManagedHook(AstIsolated):
     def test_managed_rule_denies_with_origin_label(self) -> None:
         out = self.hook("pkill node")
         self.assertEqual(decision(out), "deny")
-        self.assertIn("[guardrails:no-pkill (managed)] No pkill.", reason(out))
+        self.assertIn("[guardrails:no-pkill (managed)] No pkill.", plain(reason(out)))
         self.assertIsNone(self.hook("echo hi"))
 
     def test_only_managed_rules_are_labelled(self) -> None:
         self.put(self.gpath, {"rules": {"no-strings": dict(STRINGS)}, "modes": dict(MODES)})
         text = reason(self.hook("strings a; pkill x"))
-        self.assertIn("[guardrails:no-strings] Read the docs.", text)
-        self.assertIn("[guardrails:no-pkill (managed)] No pkill.", text)
+        self.assertIn("[guardrails:no-strings] Read the docs.", plain(text))
+        self.assertIn("[guardrails:no-pkill (managed)] No pkill.", plain(text))
 
     def test_project_cannot_disable_or_loosen_managed_rule(self) -> None:
         self.put(self.ppath, {"rules": {"no-pkill": {"enabled": False, "action": "warn", "retry": "same-command",
@@ -296,7 +296,7 @@ class ManagedHook(AstIsolated):
         self.put(self.gpath, {"rules": {"mine": {**PKILL, "modes": ["ops"]}},
                               "modes": {"ops": {"active": True}}})
         self.assertEqual(decision(self.hook("pkill node")), "deny")
-        text = reason(self.hook("pkill node"))
+        text = plain(reason(self.hook("pkill node")))
         self.assertIn("no-pkill (managed)", text)
         self.assertNotIn("mine", text)
 
@@ -389,7 +389,7 @@ class MonitorCoverage(AstIsolated):
     def test_a_managed_rule_denies_a_monitor_command(self) -> None:
         out = self.hook("strings /bin/ls", tool="Monitor")
         self.assertEqual(decision(out), "deny")
-        self.assertIn("[guardrails:no-strings (managed)]", reason(out))
+        self.assertIn("[guardrails:no-strings (managed)]", plain(reason(out)))
 
     def test_a_monitor_call_with_only_ws_is_ignored(self) -> None:
         for tool_input in ({"ws": "ws://localhost:1/x"}, {}, None, [], {"command": ""}, {"command": 3}):

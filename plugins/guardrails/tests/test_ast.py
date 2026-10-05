@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from unittest import mock
 
-from helpers import AstIsolated, caught
+from helpers import AstIsolated, caught, plain
 
 import matching
 import policy
@@ -224,7 +224,7 @@ class Hook(AstIsolated):
             out = self.hook(command, session=f"s{n}")
             assert out is not None, command
             self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny", command)
-            self.assertIn("[guardrails:by-name]", out["hookSpecificOutput"]["permissionDecisionReason"])
+            self.assertIn("[guardrails:by-name]", plain(out["hookSpecificOutput"]["permissionDecisionReason"]))
 
     def test_heredoc_and_quotes_are_not_false_positives(self) -> None:
         for n, command in enumerate(["cat <<'EOF' > notes.md\npkill x\nEOF", "echo 'use pkill here'", "man pkill"]):
@@ -274,10 +274,10 @@ class Hook(AstIsolated):
         out = self.hook("foo x " + "a" * 5000 + "b")
         assert out is not None
         self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertNotIn("[guardrails:slow]", out["hookSpecificOutput"]["permissionDecisionReason"])
+        self.assertNotIn("[guardrails:slow]", plain(out["hookSpecificOutput"]["permissionDecisionReason"]))
         out = self.hook("ls " + "a" * 5000, "s2")
         assert out is not None
-        self.assertIn("[guardrails:slow]", out["hookSpecificOutput"]["permissionDecisionReason"])
+        self.assertIn("[guardrails:slow]", plain(out["hookSpecificOutput"]["permissionDecisionReason"]))
 
     def test_no_regex_rule_runs_on_python_re_in_the_hook_process(self) -> None:
 
