@@ -33,6 +33,7 @@ Take the first rung that separates your examples. Each rung down costs precision
 |---|---|---|
 | `command` | the command name alone decides | `{"command": "pkill"}` |
 | `command` + `args` | one command's own words decide (regex over its text) | `{"command": "docker", "args": "\\bsystem prune\\b"}` |
+| `statement`, `redirect`, `discards` | a redirect decides, or a sibling relation must see through one | [ast/redirects.md](ast/redirects.md) |
 | relations | structure decides: nesting, pipelines, order, a flag on one command among several, a wrapper or shell itself | [ast/index.md](ast/index.md) |
 | whole-text regex | only raw text can say it, across nodes the tree cannot relate | `{"kind": "program", "regex": "..."}` |
 

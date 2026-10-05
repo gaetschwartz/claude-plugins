@@ -6,7 +6,7 @@ ast-grep rules built from a guardrails rule), `lib/scanner.py` (parse units, wra
 The runtime, its trust model and what happens when the engine fails are in [runtime.md](runtime.md).
 
 ast-grep does all the lexing and parsing, in process through the `ast-grep-py` library: guardrails writes no shell parser.
-A rule's `match` is one ast-grep rule object, plus three guardrails atoms (`command`, `assignment`, `wrapper`) that are
+A rule's `match` is one ast-grep rule object, plus six guardrails atoms (`command`, `assignment`, `wrapper`, `statement`, `redirect`, `discards`) that are
 expanded into plain ast-grep rules when the rule is compiled. It is matched on the tree-sitter Bash parse of the command
 as written, of its wrapper variants and of each shell string, in a bounded checker.
 
@@ -53,6 +53,38 @@ tested or loaded, exit 2):
 - `{"wrapper": true}` or `{"wrapper": ["sudo", "env"]}`: a `command` named by one of the fixed wrapper words (below), or
   only the listed ones, spelled as `command` allows. Use it for a rule about the wrapper itself ("no `sudo curl | sh`");
   a rule about the wrapped command needs no wrapper atom, because wrappers are looked through.
+- `{"statement": <rule>}`: the statement of a node that matches the rule: the enclosing `redirected_statement` when the
+  node is its body, else the node itself. Keys next to it, `follows` / `precedes` / `inside` / `has` included, are judged
+  from that statement. It is how a relation sees a node that a redirect wrapped, any kind of node: `{"statement":
+  {"kind": "pipeline"}, "precedes": {"regex": "^(&&|\\|\\|)$"}}` is a pipeline followed by `&&` or `||` with or without
+  a redirect after it. The statement can be the wrapper itself, so a bare `{"statement": ...}` reports the wrapper.
+- `{"redirect": {"fd": 2, "op": ">>", "to": "/dev/null"}}`: one redirect node, `fd`, `op` and `to` all optional, none
+  given is any redirect (a heredoc or here-string too). `fd` is `0`, `1`, `2`, any other descriptor number, or `"&"`
+  for both streams at once; `1` also takes `&>` and `>&file`, `2` takes `&>` and `>&file`, and an omitted descriptor
+  is the default one of the operator (`>f` is `1`, `<f` is `0`). `op` is one of `>` `>>` `>|` `<` `<&` `<&-` `>&` `>&-`
+  `&>` `&>>`. `to` is a string (exact, quotes around it allowed) or `{"regex": "..."}` on the target as written.
+  Redirects are children of the wrapper, not of the command: look for them with `has` from the statement,
+  `{"statement": {"command": "cargo"}, "has": {"redirect": {"fd": 2, "to": "/dev/null"}}}`.
+- `{"discards": "stdout" | "stderr" | "all"}`: a redirect wrapper whose redirects, applied left to right as the shell
+  does, leave that stream at `/dev/null`. `>/dev/null 2>&1` discards both, `2>&1 >/dev/null` only stdout (stderr went
+  to the old stdout, which is still visible), `2>/dev/null 1>&2` both. A chain of `N>&M` copies is followed three
+  levels deep; redirects of a heredoc (`<<EOF >/dev/null`) are not seen. It compiles to a static ast-grep rule, so the
+  order is encoded with sibling relations between the redirect nodes. Put it next to `statement`, which gives the wrapper:
+  `{"statement": {"command": "cargo"}, "discards": "all"}`.
+
+### Redirects wrap statements
+
+A command with a redirect is a `redirected_statement`: its `body` is the command and the redirects are its other
+children, so the command's own siblings (`&&`, `||`, `;`, the other stages) are the wrapper's, not the command's. A
+`command` atom is therefore redirect-transparent for `precedes` and `follows`: next to either of them it also matches
+a command that is the body of a wrapper, with `precedes`, `follows`, `inside`, `nthChild` and any `not` / `any` / `all`
+made only of those judged from the wrapper, and `has` and the name and `args` conditions kept on the command. A command
+atom that is itself the rule of a `precedes` / `follows` (or of a `has` that carries them) matches the sibling whether
+or not it is wrapped. Write the atom and its relations in the same object: `{"all": [{"command": "x"}, {"precedes":
+...}]}` is two objects and stays literal. `{"command": "pgrep", "inside": {"kind": "list"}}` alone is not widened: use
+`statement` when you want a position without a sibling relation. The redirect wraps what the parser attaches it to,
+which is the whole list or pipeline before it (`a && b >f` wraps `a && b`, `a | b 2>&1 | c` wraps `a | b`): run
+`guardrails rule ast` when the shape matters, and use `stopBy: end` when a relation must cross such a wrapper.
 
 ### `wrappers`: not through wrappers
 

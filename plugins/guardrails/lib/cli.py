@@ -931,7 +931,7 @@ def build_parser() -> argparse.ArgumentParser:
     test = rule.add_parser("test", parents=[common], help="dry-run a rule against sample commands")
     source = test.add_mutually_exclusive_group(required=True)
     source.add_argument("--json", help="a draft rule as a JSON object, @<file> or - for stdin; its match is one "
-                        "ast-grep rule that may use the command, assignment and wrapper atoms")
+                        "ast-grep rule that may use the command, assignment, wrapper, statement, redirect and discards atoms")
     source.add_argument("--id", help="an installed rule's id")
     test.add_argument("commands", nargs="*", metavar="CMD")
     test.add_argument("--examples", help='JSON list of {"cmd", "source", "expect"} objects, @<file> or - for stdin')

@@ -42,7 +42,9 @@ Read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md` (matcher ladder, tree, 
 in full unless the rule is a bare `command` atom (with or without `args`). In short: one behavior per rule (split on
 "and"); the narrowest matcher that separates the examples (`match` is one rule, its keys ANDed, `any` for "either"); for
 a rule with relations run `guardrails rule ast '<a command it must catch>'` and use the
-kinds it prints, never guessed ones; at least 3 commands that must be caught (one wrapped: `sudo X`, `bash -c 'X'`, a pipe
+kinds it prints, never guessed ones; a redirect (`>/dev/null`, `2>&1`) wraps a command in a `redirected_statement`, which a
+`command` atom next to `precedes` / `follows` looks through and the `statement`, `redirect` and `discards` atoms say
+the rest (`references/ast/redirects.md`); at least 3 commands that must be caught (one wrapped: `sudo X`, `bash -c 'X'`, a pipe
 or `$( )`) and at least 3 that must pass (a look-alike, `man X`, `echo "X"`, a heredoc mentioning X); tighten to zero
 mismatches; a `message` that names the alternative. When the alternative is a tool that may be missing or installed
 under another name, add `"when": {"bin": [...]}` and write `{found}` for its name; when the advice differs by command

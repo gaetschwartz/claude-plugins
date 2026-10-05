@@ -10,6 +10,7 @@ from collections.abc import Sequence
 from typing import TYPE_CHECKING, Any
 
 import policy
+import redirects
 
 if TYPE_CHECKING:
     from ast_grep_py import Config, Rule, SgNode
@@ -20,8 +21,12 @@ ASSIGNMENT_OR_REDIRECT = ("variable_assignment", "file_redirect", "herestring_re
 ASSIGNMENTS = 3
 WRAPPERS = ("sudo", "doas", "env", "timeout", "nice", "nohup", "time", "command", "exec", "builtin", "stdbuf", "setsid",
             "ionice", "xargs", "watch")
-ATOMS = ("command", "wrapper", "assignment")
+ATOMS = ("command", "wrapper", "assignment", "statement", "redirect", "discards")
 NESTED = ("not", "all", "any", "stopBy", "inside", "has", "follows", "precedes")
+SIBLINGS = ("precedes", "follows")
+POSITIONS = (*SIBLINGS, "inside", "nthChild")
+PARAMS = ("stopBy", "field")
+SAME_NODE = ("not", "all", "any")
 GRAMMAR_KEYS = frozenset({"pattern", "kind", "regex", "nthChild", "range", "field", *NESTED})
 VARIABLE = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 REMOVED = {
@@ -101,28 +106,100 @@ def atom(key: str, node: dict[str, Any], where: str) -> Rule:
             raise policy.Invalid(f"'{where}.wrapper' must be true or a non-empty list of wrapper names "
                                  f"({', '.join(WRAPPERS)})")
         return named(names, None)
+    if key == "statement":
+        if not isinstance(value, dict) or not value:
+            raise policy.Invalid(f"'{where}.statement' must be a non-empty rule object")
+        return redirects.statement(expanded(value, f"{where}.statement"))
+    if key == "redirect":
+        return redirects.redirect(value, where)
+    if key == "discards":
+        return redirects.discards(value, where)
     return assignment(value, f"{where}.assignment")
 
 
-def expanded(node: object, where: str = "match") -> Any:
+def stance(rule: object) -> set[str]:
+    """What the rule asks of its own node: "position" (relations to siblings and ancestors) and "content"."""
+    if isinstance(rule, list):
+        return set().union(*(stance(item) for item in rule))
+    if not isinstance(rule, dict):
+        return {"content"}
+    found: set[str] = set()
+    for key, value in rule.items():
+        if key in PARAMS:
+            continue
+        if key in POSITIONS:
+            found.add("position")
+        elif key in SAME_NODE:
+            found |= stance(value)
+        else:
+            found.add("content")
+    return found
+
+
+def split_positions(node: dict[str, Any], out: dict[str, Any], where: str) -> tuple[dict[str, Any], dict[str, Any]]:
+    """The expanded keys that are about where the statement sits, and the rest, which are about the command."""
+    moved: dict[str, Any] = {}
+    kept: dict[str, Any] = {}
+    for key, value in out.items():
+        kind = stance(node[key]) if key in SAME_NODE else {"position"} if key in POSITIONS else {"content"}
+        if kind == {"position"}:
+            moved[key] = value
+        elif "position" in kind:
+            raise policy.Invalid(f"'{where}.{key}' mixes relations (precedes, follows, inside, nthChild) with other "
+                                 f"conditions next to a 'command': split it into two objects")
+        else:
+            kept[key] = value
+    return moved, kept
+
+
+def transparent(node: dict[str, Any], out: dict[str, Any], atoms: Sequence[Any], core: dict[str, Any], where: str,
+                statement: bool) -> dict[str, Any]:
+    """The rule for a `command` that is also matched as the body of a redirect wrapper, the relations that say where
+    the statement sits (precedes, follows, inside, nthChild) being judged from the wrapper. It matches the wrapper
+    when `statement` (the command is looked for among siblings or children), else the command."""
+    moved, kept = split_positions(node, out, where)
+    inner: dict[str, Any] = {**kept, "all": [*atoms, *kept.get("all", [])]}
+    if statement:
+        return {"any": [core, {"kind": redirects.WRAPPER, **moved, "has": {"field": "body", "all": [inner]}}]}
+    return {"any": [core, {**inner, "inside": {"kind": redirects.WRAPPER, **moved}}]}
+
+
+def expanded(node: object, where: str = "match", at: str = "node") -> Any:
     """The rule object with every atom replaced by the ast-grep rule it stands for; raises policy.Invalid on a key that
-    is neither ast-grep's nor an atom, or on a malformed atom."""
+    is neither ast-grep's nor an atom, or on a malformed atom. `at` is what the node is for its parent: "sibling" (the
+    target of precedes or follows), "child" (the target of has) or "node" (the same node, or an ancestor)."""
     if isinstance(node, list):
-        return [expanded(item, f"{where}[{i}]") for i, item in enumerate(node)]
+        return [expanded(item, f"{where}[{i}]", at) for i, item in enumerate(node)]
     if not isinstance(node, dict):
         return node
     if unknown := set(node) - GRAMMAR_KEYS - set(ATOMS) - {"args"}:
         raise policy.Invalid(f"unknown field {where}.{min(unknown)}: {policy.UNKNOWN_FIELD_HINT}")
     if "args" in node and "command" not in node:
         raise policy.Invalid(f"'{where}.args' only narrows a 'command' atom next to it")
-    out = {key: expanded(value, f"{where}.{key}") if key in NESTED else value
-           for key, value in node.items() if key not in ATOMS and key != "args"}
+    about_command = "command" not in node and "statement" not in node
+
+    def child(key: str) -> str:
+        if key in SIBLINGS:
+            return "sibling"
+        if key == "has":
+            return "child"
+        return at if key == "stopBy" or (key in SAME_NODE and about_command) else "node"
+
+    out = {key: expanded(value, f"{where}.{key}", child(key)) if key in NESTED else value
+           for key, value in node.items() if key not in ATOMS and key not in ("args", *PARAMS)}
+    params = {key: expanded(node[key], f"{where}.{key}", child(key)) if key in NESTED else node[key]
+              for key in PARAMS if key in node}
     atoms = [atom(key, node, where) for key in ATOMS if key in node]
-    if atoms:
-        if not isinstance(out.get("all", []), list):
-            raise policy.Invalid(f"'{where}.all' must be a list of rules")
-        out["all"] = [*atoms, *out.get("all", [])]
-    return out
+    if not isinstance(out.get("all", []), list):
+        raise policy.Invalid(f"'{where}.all' must be a list of rules")
+    core: dict[str, Any] = {**out, "all": [*atoms, *out.get("all", [])]} if atoms else dict(out)
+    if "command" in node:
+        beside = any(key in node for key in SIBLINGS)
+        if at == "sibling" or (at == "child" and beside):
+            return {**transparent(node, out, atoms, core, where, True), **params}
+        if beside:
+            return {**transparent(node, out, atoms, core, where, False), **params}
+    return {**core, **params}
 
 
 def checked(match: object) -> dict[str, Any]:

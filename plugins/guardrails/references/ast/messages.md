@@ -32,7 +32,7 @@ renders exactly that text.
 
 Cases are tried in order and the first whose `when` holds wins, so the `main` case beats the wrapped one for `bash -c
 'git push -f origin master'`. `matches` tests the node the rule matched (here the `git push` command) against one more
-rule, which may use the `command`, `assignment` and `wrapper` atoms like `match`; `wrapped` is the `wrapped` tag of
+rule, which may use the `command`, `assignment`, `wrapper`, `statement`, `redirect` and `discards` atoms like `match`; `wrapped` is the `wrapped` tag of
 `rule test`. A command no case fits gets the rule's own `message`.
 
 ## Captured words in the text
