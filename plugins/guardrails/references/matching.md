@@ -99,6 +99,11 @@ or not it is wrapped. Write the atom and its relations in the same object: `{"al
 which is the whole list or pipeline before it (`a && b >f` wraps `a && b`, `a | b 2>&1 | c` wraps `a | b`): run
 `guardrails rule ast` when the shape matters, and use `stopBy: end` when a relation must cross such a wrapper.
 
+Compatibility: since a `command` became redirect-transparent, a `command` next to `precedes` / `follows` whose `any` /
+`all` / `not` mixes relations (`precedes`, `follows`, `inside`, `nthChild`) with other conditions is refused when the
+rule is loaded ("mixes relations ... next to a 'command': split it into two objects"). A stored rule written before that
+must be split: the relations in one object, the conditions on the command in another.
+
 ### `wrappers`: not through wrappers
 
 A rule field next to `match` and `action`, default `true`. With `"wrappers": false` the wrapper variants are not
@@ -274,10 +279,10 @@ rule whose `when` does not hold costs nothing, writes no telemetry row, is `inac
 - `{"file": "Cargo.toml"}`: the path exists relative to the project root (`CLAUDE_PROJECT_DIR`, else the git
   top level). Relative only, no `..`; false outside a project.
 - `{"tool": "Bash"}` or `{"tool": "Monitor"}`: the tool that made the call. `status` and `rule test` judge a `when` as
-  for a Bash call.
+  for a Bash call unless given `--tool Monitor`.
 - `{"background": true}` or `{"background": false}`: whether the call asked to run in the background, the Bash tool's
   `run_in_background` input. A call without the field, and every Monitor call, is not in the background; `status` and
-  `rule test` judge a `when` as for a foreground call.
+  `rule test` judge a `when` as for a foreground call unless given `--background`.
 
 `when` replaced `requires`: `"requires": ["fd", "fdfind"]` is `"when": {"bin": ["fd", "fdfind"]}`. A rule that still
 has `requires` is invalid: `rule add` / `rule test` refuse it (exit 2), the hook skips it and names it once per session,
@@ -293,7 +298,8 @@ cases. A case's `when` takes every atom above plus two that read the hit (refuse
 before any command is read):
 
 - `{"matches": <rule>}`: the matched node also satisfies this rule, an ast-grep rule object that may use the
-  `command`, `assignment` and `wrapper` atoms and everything else `match` can (it is built the same way), tested with
+  `command`, `assignment`, `wrapper`, `statement`, `redirect` and `discards` atoms and everything else `match` can (it
+  is built the same way; a `capture` is refused, it would bind nothing), tested with
   ast-grep's own node matcher on that one node. Relations look from that node: `has` sees its children, `inside` its
   ancestors.
 - `{"wrapped": true}` or `false`: the hit is wrapped (the `wrapped` tag of `rule test`) or direct.
@@ -312,7 +318,8 @@ Placeholders in `message`, `messageShort` and a case's `text` / `messageShort`:
   `$$$ARGS` gives the captured words joined by one space. A capture the node did not bind (another branch of an `any`, a
   case's `matches`, which only tests) is empty. Each capture has its lines joined by one space, is cut at 200 characters,
   and a rule names at most 8. A placeholder that no `capture` and no pattern metavariable of the `match` names makes the
-  rule invalid ("placeholder {X} is never bound by the match").
+  rule invalid ("placeholder {X} is never bound by the match"). A pattern binds the `$NAME` it writes as a bare word or
+  inside double quotes; `'$NAME'`, `${NAME}`, `$_NAME`, heredoc text and anything under `not` bind nothing.
 - `{{` and `}}` are literal braces. Anything else in braces (`{x.y}`, `{x[0]}`, `{x!r}`, `{x:>5}`, `{}`, a lowercase
   name, an unbalanced brace) makes the rule invalid. Texts are split with Python's `string.Formatter` parser and only
   simple names are substituted; rule text is never run through `str.format`.

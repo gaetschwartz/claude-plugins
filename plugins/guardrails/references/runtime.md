@@ -91,8 +91,8 @@ There is no degraded parsing and no rule runs outside the engine; the hook allow
 - **A command the parser does not finish in 5 s is denied** ("command too complex to check"): everything that needs the
   parser, whole-text regex rules included, runs in a forked child killed at that deadline, because a native call into ast-grep holds
   the GIL and a hook that outlives its timeout lets the command through. A hit already found stands.
-- **A rule that does not compile** (a `match` ast-grep rejects, or a regex Rust cannot compile) is skipped and named once
-  per session. So is a rule with a field this version does not know, a malformed atom, or a `match` in the removed format
+- **A rule that does not compile** (a `match` ast-grep rejects) is skipped and named once
+  per session. So is a rule with a regex Rust cannot compile (checked when the rule is loaded, with its path), with a field this version does not know, a malformed atom, or a `match` in the removed format
   (`program`, `ast`, a lone `regex`): the warning and `status --problems` name the rule and what is wrong, with the new
   form for a removed key.
 - **A command over 256 KiB, nesting shell strings more than 8 deep, unpacking into more than 64 distinct strings or 256 KiB

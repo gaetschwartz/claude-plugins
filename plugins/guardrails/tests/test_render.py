@@ -81,9 +81,8 @@ class Card(AstIsolated):
         out = self.card(PKILL, GOLDEN_EXAMPLES, "--intent", "stop killing processes by name, suggest kill by PID",
                         "--id-name", "no-pkill")
         self.assertEqual(out.rstrip("\n"), doc_block("### no-pkill"))
-        rules = [render.RuleRow("find-fd", "deny", ["global"], "enabled",
-                                'when `{"bin":["fd","fdfind"]}` · 1 message case'),
-                 render.RuleRow("grep-rg", "deny", ["global"], "inactive here: its when does not hold",
+        rules = [render.RuleRow("find-fd", "warn", ["global"], "enabled", 'when `{"bin":["fd","fdfind"]}`'),
+                 render.RuleRow("grep-rg", "warn", ["global"], "inactive here: its when does not hold",
                                 'when `{"bin":"rg"}`'),
                  render.RuleRow("kill-9", "warn", ["managed"], "always enforced"),
                  render.RuleRow("no-pkill", "deny", ["global", "project"], "enabled"),

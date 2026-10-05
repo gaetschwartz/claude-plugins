@@ -54,6 +54,11 @@ lists: `{"inside": {"kind": "pipeline", "stopBy": {"not": {"kind": "list"}}}}`.
 Without `field` the capture binds the node itself (the whole command, `pkill node`); with it, the child of that field.
 The name is quoted as written, directory and quotes included.
 
+A `field` capture adds a condition: the node must have a child in that field, or the sub-rule cannot match at all (a
+`pipeline` has no `name`, so `{"capture": {"kind": "pipeline"}, "name": "N", "field": "name"}` never fires). Run
+`guardrails rule ast` to see which kinds have the field, or drop `field` to bind the node itself. A redirect wrapper has
+no `name` of its own and is read through its `body`.
+
 ## The same name in several branches
 
 ```rule-example

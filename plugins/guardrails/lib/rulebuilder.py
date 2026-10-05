@@ -1,6 +1,6 @@
-"""Typed ast-grep rules for a guardrails rule: its match with the command, assignment and wrapper atoms expanded and
-its single-command patterns made tolerant of how a command is spelled. All of it is data for ast-grep; nothing here
-reads shell syntax."""
+"""Typed ast-grep rules for a guardrails rule: its match with every atom (command, wrapper, assignment, statement,
+redirect, discards, capture) expanded and its single-command patterns made tolerant of how a command is spelled. All
+of it is data for ast-grep; nothing here reads shell syntax."""
 
 from __future__ import annotations
 

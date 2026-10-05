@@ -109,7 +109,7 @@ unavailable.
 
 ## Status: `guardrails status`
 
-    guardrails status [--scope global|project|managed] [--problems] [--rule <id>]
+    guardrails status [--scope global|project|managed] [--problems] [--rule <id>] [--tool Bash|Monitor] [--background]
 
 Output:
 
@@ -120,8 +120,8 @@ Output:
     ### Guardrails · 6 rules · hook on
 
     **Rules**
-    - `find-fd   ` deny · global · enabled · when `{"bin":["fd","fdfind"]}` · 1 message case
-    - `grep-rg   ` deny · global · inactive here: its when does not hold · when `{"bin":"rg"}`
+    - `find-fd   ` warn · global · enabled · when `{"bin":["fd","fdfind"]}`
+    - `grep-rg   ` warn · global · inactive here: its when does not hold · when `{"bin":"rg"}`
     - `kill-9    ` warn · managed · always enforced
     - `no-pkill  ` deny · global+project · enabled
     - `no-strings` deny · global · suspended by reverse-engineering

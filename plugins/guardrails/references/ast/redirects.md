@@ -74,7 +74,9 @@ The redirects are applied from left to right, as the shell does. `>/dev/null 2>&
 stderr to wherever stdout goes, so both are discarded. `2>&1 >/dev/null` copies stderr onto the terminal first, then
 discards only stdout: stderr is still visible, so it passes. `{"discards": "stdout"}` and `{"discards": "stderr"}`
 are the one-stream forms; `>/dev/null 2>&1 >out.log` leaves stdout in a file, so only stderr is discarded. The rule is
-static ast-grep: the order is a `follows` relation between the redirect nodes.
+static ast-grep: the order is a `follows` relation between the redirect nodes. Two limits: a chain of `N>&M` copies is
+followed three levels deep and no further, and a stream moved through another descriptor (`3>/dev/null 2>/dev/null
+1>&3`, which discards stdout via fd 3) is not followed: that command is not seen as discarding stdout.
 
 ## A redirect to a place
 
