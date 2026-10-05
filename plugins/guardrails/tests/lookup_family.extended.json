@@ -1,0 +1,387 @@
+{
+  "action": "deny",
+  "description": "Never act on a PID lookup (pgrep, ps, pidof, lsof) that is piped or captured instead of read first.",
+  "match": {
+    "any": [
+      {
+        "inside": {
+          "kind": "pipeline",
+          "stopBy": "end"
+        },
+        "pattern": "pgrep $$$"
+      },
+      {
+        "inside": {
+          "any": [
+            {
+              "kind": "command_substitution"
+            }
+          ],
+          "stopBy": "end"
+        },
+        "pattern": "pgrep $$$"
+      },
+      {
+        "has": {
+          "has": {
+            "kind": "command_name",
+            "regex": "^(ps|pidof|lsof)$",
+            "stopBy": "end"
+          },
+          "kind": "command_substitution",
+          "stopBy": "end"
+        },
+        "pattern": "kill $$$"
+      },
+      {
+        "follows": {
+          "has": {
+            "field": "name",
+            "regex": "^(ps|pidof|lsof)$"
+          },
+          "kind": "command",
+          "stopBy": "end"
+        },
+        "inside": {
+          "kind": "pipeline"
+        },
+        "kind": "command",
+        "regex": "^xargs\\b.*\\bkill\\b"
+      },
+      {
+        "command": "kill",
+        "not": {
+          "has": {
+            "regex": "^-(0|l|L)$"
+          }
+        },
+        "has": {
+          "any": [
+            {
+              "kind": "simple_expansion",
+              "regex": "^\\$[A-Za-z_]"
+            },
+            {
+              "kind": "expansion",
+              "regex": "^\\$\\{[A-Za-z_]"
+            }
+          ],
+          "stopBy": "end"
+        },
+        "any": [
+          {
+            "follows": {
+              "kind": "variable_assignment",
+              "has": {
+                "kind": "command_substitution",
+                "has": {
+                  "any": [
+                    {
+                      "command": [
+                        "pgrep",
+                        "pidof",
+                        "lsof"
+                      ]
+                    },
+                    {
+                      "command": "ps",
+                      "has": {
+                        "regex": "^-C"
+                      }
+                    },
+                    {
+                      "command": "ps",
+                      "not": {
+                        "has": {
+                          "regex": "^-[A-Za-z]*p[A-Za-z0-9]*$|^--pid(=.*)?$"
+                        }
+                      },
+                      "inside": {
+                        "kind": "pipeline"
+                      },
+                      "precedes": {
+                        "command": [
+                          "grep",
+                          "egrep",
+                          "fgrep",
+                          "rg",
+                          "awk",
+                          "sed"
+                        ],
+                        "stopBy": "end"
+                      }
+                    }
+                  ],
+                  "stopBy": "end"
+                }
+              },
+              "stopBy": "end"
+            }
+          },
+          {
+            "inside": {
+              "follows": {
+                "kind": "variable_assignment",
+                "has": {
+                  "kind": "command_substitution",
+                  "has": {
+                    "any": [
+                      {
+                        "command": [
+                          "pgrep",
+                          "pidof",
+                          "lsof"
+                        ]
+                      },
+                      {
+                        "command": "ps",
+                        "has": {
+                          "regex": "^-C"
+                        }
+                      },
+                      {
+                        "command": "ps",
+                        "not": {
+                          "has": {
+                            "regex": "^-[A-Za-z]*p[A-Za-z0-9]*$|^--pid(=.*)?$"
+                          }
+                        },
+                        "inside": {
+                          "kind": "pipeline"
+                        },
+                        "precedes": {
+                          "command": [
+                            "grep",
+                            "egrep",
+                            "fgrep",
+                            "rg",
+                            "awk",
+                            "sed"
+                          ],
+                          "stopBy": "end"
+                        }
+                      }
+                    ],
+                    "stopBy": "end"
+                  }
+                },
+                "stopBy": "end"
+              },
+              "stopBy": "end"
+            }
+          }
+        ]
+      },
+      {
+        "command": "kill",
+        "not": {
+          "has": {
+            "regex": "^-(0|l|L)$"
+          }
+        },
+        "inside": {
+          "kind": "for_statement",
+          "stopBy": "end",
+          "has": {
+            "kind": "command_substitution",
+            "has": {
+              "any": [
+                {
+                  "command": [
+                    "pgrep",
+                    "pidof",
+                    "lsof"
+                  ]
+                },
+                {
+                  "command": "ps",
+                  "has": {
+                    "regex": "^-C"
+                  }
+                },
+                {
+                  "command": "ps",
+                  "not": {
+                    "has": {
+                      "regex": "^-[A-Za-z]*p[A-Za-z0-9]*$|^--pid(=.*)?$"
+                    }
+                  },
+                  "inside": {
+                    "kind": "pipeline"
+                  },
+                  "precedes": {
+                    "command": [
+                      "grep",
+                      "egrep",
+                      "fgrep",
+                      "rg",
+                      "awk",
+                      "sed"
+                    ],
+                    "stopBy": "end"
+                  }
+                }
+              ],
+              "stopBy": "end"
+            }
+          }
+        }
+      },
+      {
+        "command": "kill",
+        "not": {
+          "has": {
+            "regex": "^-(0|l|L)$"
+          }
+        },
+        "inside": {
+          "kind": "while_statement",
+          "stopBy": "end",
+          "inside": {
+            "kind": "pipeline"
+          },
+          "follows": {
+            "any": [
+              {
+                "command": [
+                  "pgrep",
+                  "pidof",
+                  "lsof"
+                ]
+              },
+              {
+                "command": "ps",
+                "has": {
+                  "regex": "^-C"
+                }
+              },
+              {
+                "command": "ps",
+                "not": {
+                  "has": {
+                    "regex": "^-[A-Za-z]*p[A-Za-z0-9]*$|^--pid(=.*)?$"
+                  }
+                },
+                "inside": {
+                  "kind": "pipeline"
+                },
+                "precedes": {
+                  "command": [
+                    "grep",
+                    "egrep",
+                    "fgrep",
+                    "rg",
+                    "awk",
+                    "sed"
+                  ],
+                  "stopBy": "end"
+                }
+              }
+            ],
+            "stopBy": "end"
+          }
+        }
+      },
+      {
+        "command": [
+          "sh",
+          "bash",
+          "zsh",
+          "dash",
+          "ksh"
+        ],
+        "inside": {
+          "kind": "pipeline"
+        },
+        "follows": {
+          "kind": "command",
+          "regex": "\\bkill\\b",
+          "stopBy": "end",
+          "follows": {
+            "any": [
+              {
+                "command": [
+                  "pgrep",
+                  "pidof",
+                  "lsof"
+                ]
+              },
+              {
+                "command": "ps",
+                "has": {
+                  "regex": "^-C"
+                }
+              },
+              {
+                "command": "ps",
+                "not": {
+                  "has": {
+                    "regex": "^-[A-Za-z]*p[A-Za-z0-9]*$|^--pid(=.*)?$"
+                  }
+                },
+                "inside": {
+                  "kind": "pipeline"
+                },
+                "precedes": {
+                  "command": [
+                    "grep",
+                    "egrep",
+                    "fgrep",
+                    "rg",
+                    "awk",
+                    "sed"
+                  ],
+                  "stopBy": "end"
+                }
+              }
+            ],
+            "stopBy": "end"
+          }
+        }
+      }
+    ]
+  },
+  "message": "Do not pipe or capture a PID lookup (head, wc, tr, echo \"$(...)\"): with -f it can include your own shell, so lists and counts are off by one. Run it as its own command and read the output; for the newest or oldest PID use `pgrep -n` / `-o`. Put a bracket in the pattern (`'[x]pattern'`) so it cannot match itself.",
+  "messageShort": "No piped or captured PID lookups. Run it alone; `pgrep -n` / `-o` for the newest or oldest PID.",
+  "messages": [
+    {
+      "messageShort": "No lookup straight into kill. Run it alone, confirm the PID, then `kill <pid>`.",
+      "text": "Do not feed a PID lookup straight into kill or xargs kill: you would signal whatever it matched, possibly your own shell. Run the lookup as its own command (`pgrep -fl '[x]pattern'` or `pgrep -xl <name>`), confirm the PID, then `kill <pid>`.",
+      "when": {
+        "matches": {
+          "any": [
+            {
+              "has": {
+                "field": "name",
+                "regex": "^(kill|xargs)$"
+              }
+            },
+            {
+              "inside": {
+                "has": {
+                  "field": "name",
+                  "regex": "^(kill|xargs)$"
+                },
+                "kind": "command",
+                "stopBy": "end"
+              }
+            },
+            {
+              "inside": {
+                "has": {
+                  "has": {
+                    "field": "name",
+                    "regex": "^xargs$"
+                  },
+                  "kind": "command"
+                },
+                "kind": "pipeline",
+                "stopBy": "end"
+              }
+            }
+          ]
+        }
+      }
+    }
+  ]
+}
