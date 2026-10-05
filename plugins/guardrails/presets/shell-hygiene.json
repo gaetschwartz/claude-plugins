@@ -1,5 +1,5 @@
 {
-  "description": "Mistakes agents repeat with shell pipelines and long-running commands",
+  "description": "Mistakes agents repeat with shell pipelines",
   "rules": {
     "pipe-status": {
       "description": "A pipeline ending in a filter whose status is read as if it were the producer's",
@@ -301,31 +301,6 @@
       ],
       "messageShort": "Pipe status is `{LAST}`'s. `set -o pipefail`, or write to a file and check it."
     },
-    "tail-follow": {
-      "description": "tail -f in the foreground blocks the Bash tool",
-      "match": {
-        "command": "tail",
-        "has": {
-          "regex": "^-[A-Za-z0-9]*[fF][A-Za-z0-9]*$|^--follow(=.*)?$"
-        }
-      },
-      "when": {
-        "all": [
-          {
-            "tool": "Bash"
-          },
-          {
-            "not": {
-              "background": true
-            }
-          }
-        ]
-      },
-      "wrappers": false,
-      "action": "deny",
-      "message": "tail -f run in the foreground blocks the Bash tool until it times out, and nothing comes back meanwhile. Use a Monitor on it, or run the command in the background (run_in_background); for a one-off look use `tail -n 50 FILE`; to bound it use `timeout 30 tail -f FILE`.",
-      "messageShort": "A foreground tail -f blocks the Bash tool until it times out: use a Monitor or run_in_background, `tail -n 50 FILE` for a look, or `timeout 30 tail -f FILE`."
-    },
     "ps-grep-self-match": {
       "description": "ps piped into grep without a self-match guard",
       "match": {
@@ -514,26 +489,6 @@
         "echo a | tr a b | wc && echo ok"
       ]
     },
-    "tail-follow": {
-      "catch": [
-        "tail -f app.log",
-        "tail -F x.log",
-        "tail -n 50 -f x",
-        "tail --follow=name x",
-        "tail -fn0 x",
-        "cd /var/log && tail -f y",
-        "tail -f x | grep ERROR"
-      ],
-      "pass": [
-        "tail -n 50 app.log",
-        "timeout 30 tail -f app.log",
-        "tail -c 100 x",
-        "sudo timeout 5 tail -F x",
-        "echo tail -f x",
-        "man tail",
-        "head -f x"
-      ]
-    },
     "ps-grep-self-match": {
       "catch": [
         "ps aux | grep cargo",
@@ -562,7 +517,9 @@
         "ls | grep x",
         "ps -eo pid,etime,comm | grep cargo",
         "ps aux | awk '$11 ~ /cargo/ {print $2}'",
-        "ps aux 2>/dev/null | grep '[c]argo' | wc -l"
+        "ps aux 2>/dev/null | grep '[c]argo' | wc -l",
+        "ps -p 5 | grep x",
+        "ps -q 5 | grep x"
       ]
     }
   }

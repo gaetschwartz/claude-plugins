@@ -209,31 +209,13 @@ class Examples(AstIsolated):
 
     def test_ps_grep_is_a_warning_and_the_others_deny(self) -> None:
         actions = {rid: str(rule_of("shell-hygiene", rid).action) for rid in cli.load_preset("shell-hygiene")["rules"]}
-        self.assertEqual(actions, {"pipe-status": "deny", "tail-follow": "deny", "ps-grep-self-match": "warn"})
+        self.assertEqual(actions, {"pipe-status": "deny", "ps-grep-self-match": "warn"})
 
 
 class Installed(AstIsolated):
     def denied(self, command: str, tool: str = "Bash", tool_input: Any = None) -> str | None:
         out = self.hook(command, session=f"s-{tool}-{command}-{tool_input}", tool=tool, tool_input=tool_input)
         return None if out is None else out["hookSpecificOutput"]["permissionDecisionReason"]
-
-    def test_tail_follow_is_foreground_bash_only(self) -> None:
-        self.cli("preset", "install", "shell-hygiene")
-        text = self.denied("tail -f x.log")
-        assert text is not None
-        self.assertIn("[guardrails:tail-follow]", plain(text))
-        self.assertIn("timeout 30 tail -f FILE", text)
-        self.assertIsNone(self.denied("tail -f x.log", tool_input={"command": "tail -f x.log", "run_in_background": True}))
-        self.assertIsNotNone(self.denied("tail -f x.log", tool_input={"command": "tail -f x.log",
-                                                                       "run_in_background": False}))
-        self.assertIsNone(self.denied("tail -f x.log", tool="Monitor"))
-        self.assertIsNone(self.denied("timeout 30 tail -f x.log"))
-        self.assertIsNone(self.denied("tail -n 50 x.log"))
-
-    def test_tail_follow_wrapper_forms_are_not_matched(self) -> None:
-        self.cli("preset", "install", "shell-hygiene", "--only", "tail-follow")
-        self.assertIsNone(self.denied("sudo tail -f /var/log/x"))
-        self.assertIsNotNone(self.denied("bash -c 'tail -f /var/log/x'"))
 
     def test_pipe_status_denies_and_the_ps_warning_does_not_block(self) -> None:
         self.cli("preset", "install", "shell-hygiene")
