@@ -120,7 +120,8 @@ class Rule(NamedTuple):
         description = raw.get("description")
         rule = cls(match, message, action, retry, raw.get("enabled", True), modes, raw.get("messageShort"),
                    description if isinstance(description, str) else None, raw.get("wrappers", True), when, cases)
-        texts.check_texts(texts.rule_texts(rule), any(conditions.bin_atoms(when)), rulebuilder.bound_names(match))
+        texts.check_texts(texts.rule_texts(rule), any(conditions.bin_atoms(when)),
+                           lambda: rulebuilder.bound_names(match))
         return rule
 
 
@@ -225,7 +226,7 @@ def merge_rule(base: Rule, override: Mapping[str, Any], reword: bool = True) -> 
             return base
         try:
             messages.check_texts(messages.rule_texts(base._replace(**texts)), any(conditions.bin_atoms(base.when)),
-                                 rulebuilder.bound_names(base.match))
+                                 lambda: rulebuilder.bound_names(base.match))
         except Invalid:
             return base
         changes.update(texts)

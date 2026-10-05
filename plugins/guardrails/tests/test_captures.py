@@ -34,7 +34,15 @@ def raw_rule(match: dict[str, Any], message: str = "m", **extra: Any) -> dict[st
     return {"match": match, "message": message, **extra}
 
 
-class Expansion(Isolated):
+class Engine(AstIsolated):
+    def says(self, match: dict[str, Any], message: str, command: str, **extra: Any) -> str:
+        rule = policy.Rule.from_json(raw_rule(match, message, **extra))
+        evaluation = matching.evaluate(command, {"r": rule})
+        self.assertIsNotNone(evaluation.kinds["r"], command)
+        return engine.texts_of(rule, evaluation.details.get("r")).full
+
+
+class Expansion(Engine):
     def test_a_capture_is_its_sub_rule_and_a_bare_metavariable_on_the_same_node(self) -> None:
         self.assertEqual(rulebuilder.expanded(capture({"kind": "word"}, "LAST")),
                          {"all": [{"kind": "word"}, binding("LAST")]})
@@ -72,10 +80,63 @@ class Expansion(Isolated):
         with self.assertRaises(policy.Invalid):
             rulebuilder.expanded({**beside, "all": [capture({"inside": {"kind": "list"}, "regex": "a"})]})
 
+    def test_every_expanded_shape_binds_what_it_says_when_run(self) -> None:
+        flag, path = {"kind": "word", "regex": "^-"}, {"kind": "word", "regex": "^/"}
+        for match, message, expected in (
+            (capture({"command": "du"}, "A"), "{A}", "du -sh /x"),
+            (capture({"command": "du"}, "A", field=NAME), "{A}", "du"),
+            (capture({"command": "du", "has": capture(flag, "B")}, "A"), "{A}|{B}", "du -sh /x|-sh"),
+            ({"command": "du", "has": capture(path, "B")}, "{B}", "/x"),
+            ({**path, "inside": capture({"command": "du"}, "B")}, "{B}", "du -sh /x"),
+            ({**path, "follows": capture(flag, "B")}, "{B}", "-sh"),
+            ({**flag, "precedes": capture(path, "B")}, "{B}", "/x"),
+            ({"any": [capture({"command": "du"}, "B"), {"command": "df"}]}, "{B}", "du -sh /x"),
+            ({"all": [capture({"command": "du"}, "B"), {"has": flag}]}, "{B}", "du -sh /x"),
+            ({"statement": capture({"command": "du"}, "S")}, "{S}", "du -sh /x"),
+        ):
+            with self.subTest(match=match):
+                self.assertEqual(self.says(match, message, "du -sh /x"), expected)
+
+    def test_a_capture_around_a_command_with_siblings_binds_it_when_run_with_and_without_a_redirect(self) -> None:
+        match = {"kind": "program", "has": capture({"command": "make", "precedes": {"command": "tail"}}, "P")}
+        self.assertEqual(self.says(match, "{P}", "make\ntail"), "make")
+        self.assertEqual(self.says(match, "{P}", "make >o\ntail"), "make >o")
+        around = capture({"command": "make", "precedes": {"command": "tail"}}, "P", field=NAME)
+        self.assertEqual(self.says(around, "{P}", "make 2>&1 >o\ntail"), "make")
+
+
+class Binding(Engine):
+    def bound(self, match: dict[str, Any]) -> set[str]:
+        return set(rulebuilder.bound_names(match) or ())
+
     def test_the_names_a_match_binds_are_its_captures_and_its_metavariables(self) -> None:
         match = {"all": [capture({"kind": "word"}, "A"), {"pattern": "git push $REMOTE $$$REST"},
                          {"pattern": {"context": "echo $CTX", "selector": "command"}}]}
-        self.assertEqual(rulebuilder.bound_names(match), {"A", "REMOTE", "REST", "CTX"})
+        self.assertEqual(self.bound(match), {"A", "REMOTE", "REST", "CTX"})
+
+    def test_only_what_ast_grep_binds_counts(self) -> None:
+        for pattern, names in (("echo '$X'", set()), ('echo "$X"', {"X"}), ("echo ${Y}", set()), ("echo $_N", set()),
+                               ("git push $$$REST", {"REST"}), ("cat <<EOF\n$X\nEOF", set()), ("echo $$A", set()),
+                               ("echo a $A $B", {"A", "B"}), ("echo $lower", set()), ("echo $(ls $Z)", {"Z"})):
+            with self.subTest(pattern=pattern):
+                self.assertEqual(self.bound({"pattern": pattern}), names)
+
+    def test_the_engine_binds_what_the_parsed_pattern_names(self) -> None:
+        self.assertEqual(self.says({"pattern": 'echo "$X"'}, "[{X}]", 'echo "hi there"'), "[hi there]")
+        self.assertEqual(self.says({"pattern": "git push $$$REST"}, "[{REST}]", "git push -f origin"), "[-f origin]")
+
+    def test_a_pattern_under_not_binds_nothing(self) -> None:
+        self.assertEqual(self.bound({"command": "ls", "not": {"pattern": "ls $F"}}), set())
+        self.assertEqual(self.bound({"command": "ls", "not": {"any": [{"pattern": "ls $F"}]}, "pattern": "ls $G"}),
+                         {"G"})
+
+    def test_a_placeholder_that_only_a_literal_or_a_negated_pattern_names_is_refused(self) -> None:
+        for match, name in (({"pattern": "echo '$X'"}, "X"), ({"command": "ls", "not": {"pattern": "ls $F"}}, "F"),
+                            ({"pattern": "cat <<EOF\n$X\nEOF"}, "X"), ({"pattern": "echo ${Y}"}, "Y")):
+            with self.subTest(match=match), self.assertRaises(policy.Invalid) as raised:
+                policy.Rule.from_json(raw_rule(match, f"{{{name}}}"))
+            self.assertIn(f"placeholder {{{name}}} is never bound", str(raised.exception))
+        policy.Rule.from_json(raw_rule({"pattern": 'echo "$X"'}, "{X}"))
 
 
 class Validation(Isolated):
@@ -159,13 +220,7 @@ class Validation(Isolated):
         self.assertEqual(policy.effective_rules({}, base, {"rules": {"r": {"message": "{NOPE}"}}})["r"].message, "m")
 
 
-class Rendering(AstIsolated):
-    def says(self, match: dict[str, Any], message: str, command: str, **extra: Any) -> str:
-        rule = policy.Rule.from_json(raw_rule(match, message, **extra))
-        evaluation = matching.evaluate(command, {"r": rule})
-        self.assertIsNotNone(evaluation.kinds["r"], command)
-        return engine.texts_of(rule, evaluation.details.get("r")).full
-
+class Rendering(Engine):
     def test_the_last_stage_of_a_pipeline_of_two_three_and_four(self) -> None:
         for command, last in (("a | b", "b"), ("a | b | c", "c"), ("a | b | c | d", "d"), ("a | b | c > o 2>&1", "c"),
                               ("a | b -x >log", "b"), ("(a | b | c)", "c"), ("x && a | b | c", "c")):

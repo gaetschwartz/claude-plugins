@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 import string
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from typing import TYPE_CHECKING, Any
 
 import policy
@@ -25,7 +25,8 @@ ATOMS = ("command", "wrapper", "assignment", "statement", "redirect", "discards"
 CAPTURE_KEYS = frozenset({"capture", "name", "field"})
 CAPTURE_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 FIELD_NAME = re.compile(r"[a-z][a-z0-9_]*")
-METAVARIABLE = re.compile(r"\${1,3}([A-Z][A-Z0-9_]*)")
+METAVARIABLE: Rule = {"kind": "variable_name", "inside": {"kind": "simple_expansion"},
+                      "not": {"inside": {"kind": "heredoc_body", "stopBy": "end"}}}
 RELATIONS = ("not", "has", "inside", "follows", "precedes", "stopBy", "statement", "capture")
 NESTED = ("not", "all", "any", "stopBy", "inside", "has", "follows", "precedes")
 SIBLINGS = ("precedes", "follows")
@@ -228,21 +229,41 @@ def binds(node: object, where: str = "match", taken: frozenset[str] = frozenset(
     return frozenset(found)
 
 
-def metavariables(node: object) -> set[str]:
-    """The names of the metavariables written in the patterns of a rule."""
+def pattern_texts(node: object) -> Iterator[str]:
+    """The pattern texts of a rule that can bind a name: none from under `not`, whose match binds nothing."""
     if isinstance(node, list):
-        return set().union(*(metavariables(item) for item in node))
-    if not isinstance(node, dict):
-        return set()
-    found = set().union(*(metavariables(value) for key, value in node.items() if key != "pattern"))
-    pattern = node.get("pattern")
-    text = pattern.get("context") if isinstance(pattern, dict) else pattern
-    return found | set(METAVARIABLE.findall(text)) if isinstance(text, str) else found
+        for item in node:
+            yield from pattern_texts(item)
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            if key == "pattern":
+                text = value.get("context") if isinstance(value, dict) else value
+                if isinstance(text, str):
+                    yield text
+            elif key != "not":
+                yield from pattern_texts(value)
 
 
-def bound_names(match: dict[str, Any]) -> frozenset[str]:
-    """Every name a message placeholder can read from this match: its captures and its pattern metavariables."""
-    return binds(match) | metavariables(match)
+def metavariables(node: object) -> set[str]:
+    """The names the patterns of a rule bind, read from the pattern parsed as bash: a `$NAME` that is a simple
+    expansion outside a heredoc body (`'$X'`, `${X}` and `$_X` bind nothing)."""
+    from ast_grep_py import SgRoot
+
+    found: set[str] = set()
+    for text in pattern_texts(node):
+        for variable in SgRoot(text, "bash").root().find_all({"rule": METAVARIABLE}):
+            if CAPTURE_NAME.fullmatch(variable.text()):
+                found.add(variable.text())
+    return found
+
+
+def bound_names(match: dict[str, Any]) -> frozenset[str] | None:
+    """Every name a message placeholder can read from this match: its captures and its pattern metavariables. None
+    when the matching library is missing, so the patterns cannot be read."""
+    try:
+        return binds(match) | metavariables(match)
+    except ImportError:
+        return None
 
 
 def expanded(node: object, where: str = "match", at: str = "node") -> Any:

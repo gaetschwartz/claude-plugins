@@ -7,7 +7,7 @@ field names only; rule text never goes through `str.format`.
 from __future__ import annotations
 
 import string
-from collections.abc import Collection
+from collections.abc import Callable, Collection
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import policy
@@ -55,14 +55,18 @@ def fields(text: str, where: str) -> list[str]:
     return names
 
 
-def check_texts(texts: list[tuple[str, str]], has_bin: bool, bound: Collection[str]) -> None:
+def check_texts(texts: list[tuple[str, str]], has_bin: bool, bound: Callable[[], Collection[str] | None]) -> None:
     """Validate every template of one rule together: `{found}` needs a `bin` atom in the rule's `when`, and every
-    other placeholder must be one of the names the rule's match `bound`."""
+    other placeholder must be one of the names the rule's match `bound` (read once, and only when a text has one)."""
     captures: set[str] = set()
+    names: Collection[str] | None = None
+    read = False
     for where, text in texts:
         for name in fields(text, where):
             if name != FOUND:
-                if name not in bound:
+                if not read:
+                    names, read = bound(), True
+                if names is not None and name not in names:
                     raise policy.Invalid(f"'{where}': placeholder {{{name}}} is never bound by the match; bind it "
                                          f"with a capture atom or a ${name} metavariable in a pattern")
                 captures.add(name)
