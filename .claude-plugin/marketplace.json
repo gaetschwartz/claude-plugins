@@ -41,7 +41,7 @@
       "name": "guardrails",
       "category": "development",
       "source": "./plugins/guardrails",
-      "description": "Data-driven guardrails for agent Bash commands: deny or warn rules with per-command retry, session modes an agent may enable only when you say so, global and per-project state, and presets (docs-first, process-safety, modern-cli) installed by a setup skill."
+      "description": "Data-driven guardrails for agent Bash commands: deny or warn rules with per-command retry, session modes an agent may enable only when you say so, global and per-project state, and presets (docs-first, process-safety, modern-cli, shell-hygiene) installed by a setup skill."
     },
     {
       "name": "chezmoi",

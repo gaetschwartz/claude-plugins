@@ -13,7 +13,7 @@ import policy
 
 class Presets(AstIsolated):
     def test_all_presets_are_valid_and_self_contained(self) -> None:
-        self.assertEqual(cli.preset_names(), ["docs-first", "modern-cli", "process-safety"])
+        self.assertEqual(cli.preset_names(), ["docs-first", "modern-cli", "process-safety", "shell-hygiene"])
         for name in cli.preset_names():
             preset = cli.load_preset(name)
             self.assertTrue(preset.get("description"))
@@ -141,7 +141,7 @@ def rule_of(preset: str, rid: str) -> policy.Rule:
 
 class Examples(AstIsolated):
     def test_every_rule_of_the_tool_presets_has_catch_and_pass_examples_that_hold(self) -> None:
-        for name in ("modern-cli",):
+        for name in ("modern-cli", "shell-hygiene"):
             preset = cli.load_preset(name)
             self.assertEqual(sorted(preset["examples"]), sorted(preset["rules"]))
             for rid, example in preset["examples"].items():
@@ -175,11 +175,61 @@ class Examples(AstIsolated):
         self.assertIn("dust -n 20 PATH", default)
         self.assertIn("repeat the same command", default)
 
+    def test_pipe_status_cases(self) -> None:
+        self.assertIn("pipestatus[1]", self.says("shell-hygiene", "pipe-status", "make | tail; echo $?"))
+        self.assertIn("pipestatus[1]", self.says("shell-hygiene", "pipe-status", "make | tail > o 2>&1; echo $?"))
+        head = self.says("shell-hygiene", "pipe-status", "make | head -5 && echo ok")
+        self.assertIn("SIGPIPE", head)
+        self.assertNotIn("pipestatus", head)
+        default = self.says("shell-hygiene", "pipe-status", "make | tail -5 && echo ok")
+        self.assertIn("set -o pipefail", default)
+        self.assertNotIn("SIGPIPE", default)
+
+    def test_ps_grep_cases(self) -> None:
+        self.assertIn("off by about 2", self.says("shell-hygiene", "ps-grep-self-match", "ps aux | grep x | wc -l"))
+        self.assertIn("off by about 2", self.says("shell-hygiene", "ps-grep-self-match", "ps aux | grep -c x"))
+        for command in ("ps aux | grep x | awk '{print $2}'", "ps aux | grep x | cut -c1-9"):
+            self.assertIn("confirm the PID", self.says("shell-hygiene", "ps-grep-self-match", command))
+        shown = self.says("shell-hygiene", "ps-grep-self-match", "ps aux | grep x")
+        self.assertIn("grep -v grep", shown)
+        self.assertIn("pgrep -fl", shown)
+
+    def test_ps_grep_is_a_warning_and_the_others_deny(self) -> None:
+        actions = {rid: str(rule_of("shell-hygiene", rid).action) for rid in cli.load_preset("shell-hygiene")["rules"]}
+        self.assertEqual(actions, {"pipe-status": "deny", "tail-follow": "deny", "ps-grep-self-match": "warn"})
+
 
 class Installed(AstIsolated):
     def denied(self, command: str, tool: str = "Bash", tool_input: Any = None) -> str | None:
         out = self.hook(command, session=f"s-{tool}-{command}-{tool_input}", tool=tool, tool_input=tool_input)
         return None if out is None else out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def test_tail_follow_is_foreground_bash_only(self) -> None:
+        self.cli("preset", "install", "shell-hygiene")
+        text = self.denied("tail -f x.log")
+        assert text is not None
+        self.assertIn("[guardrails:tail-follow]", plain(text))
+        self.assertIn("timeout 30 tail -f FILE", text)
+        self.assertIsNone(self.denied("tail -f x.log", tool_input={"command": "tail -f x.log", "run_in_background": True}))
+        self.assertIsNotNone(self.denied("tail -f x.log", tool_input={"command": "tail -f x.log",
+                                                                       "run_in_background": False}))
+        self.assertIsNone(self.denied("tail -f x.log", tool="Monitor"))
+        self.assertIsNone(self.denied("timeout 30 tail -f x.log"))
+        self.assertIsNone(self.denied("tail -n 50 x.log"))
+
+    def test_tail_follow_wrapper_forms_are_not_matched(self) -> None:
+        self.cli("preset", "install", "shell-hygiene", "--only", "tail-follow")
+        self.assertIsNone(self.denied("sudo tail -f /var/log/x"))
+        self.assertIsNotNone(self.denied("bash -c 'tail -f /var/log/x'"))
+
+    def test_pipe_status_denies_and_the_ps_warning_does_not_block(self) -> None:
+        self.cli("preset", "install", "shell-hygiene")
+        self.assertIn("[guardrails:pipe-status]", plain(self.denied("make | tail -5 && echo ok") or ""))
+        self.assertIsNone(self.denied("set -o pipefail; make | tail -5 && echo ok"))
+        warned = self.hook("ps aux | grep cargo", session="warn")
+        assert warned is not None
+        self.assertIn("additionalContext", warned["hookSpecificOutput"])
+        self.assertNotIn("permissionDecision", warned["hookSpecificOutput"])
 
     def stub_path(self, *names: str) -> str:
         folder = self.tmp / ("bin-" + "-".join(names))

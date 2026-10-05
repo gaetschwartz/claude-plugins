@@ -1,0 +1,527 @@
+{
+  "description": "Mistakes agents repeat with shell pipelines and long-running commands",
+  "rules": {
+    "pipe-status": {
+      "description": "A pipeline ending in a filter whose status is read as if it were the producer's",
+      "match": {
+        "command": [
+          "head",
+          "tail",
+          "cat",
+          "wc",
+          "sort",
+          "cut",
+          "uniq",
+          "tr",
+          "sed",
+          "tee",
+          "column",
+          "nl",
+          "paste",
+          "rev",
+          "fold",
+          "less",
+          "more"
+        ],
+        "nthChild": {
+          "position": 1,
+          "reverse": true
+        },
+        "inside": {
+          "kind": "pipeline",
+          "all": [
+            {
+              "any": [
+                {
+                  "precedes": {
+                    "regex": "^(&&|\\|\\|)$"
+                  }
+                },
+                {
+                  "inside": {
+                    "kind": "list",
+                    "precedes": {
+                      "regex": "^(&&|\\|\\|)$"
+                    }
+                  }
+                },
+                {
+                  "inside": {
+                    "any": [
+                      {
+                        "kind": "if_statement"
+                      },
+                      {
+                        "kind": "while_statement"
+                      }
+                    ],
+                    "field": "condition"
+                  }
+                },
+                {
+                  "nthChild": 1,
+                  "inside": {
+                    "kind": "elif_clause"
+                  }
+                },
+                {
+                  "precedes": {
+                    "has": {
+                      "kind": "special_variable_name",
+                      "regex": "^\\?$",
+                      "stopBy": "end"
+                    },
+                    "stopBy": "end"
+                  }
+                },
+                {
+                  "nthChild": {
+                    "position": 1,
+                    "reverse": true
+                  },
+                  "inside": {
+                    "any": [
+                      {
+                        "kind": "subshell"
+                      },
+                      {
+                        "kind": "compound_statement"
+                      }
+                    ],
+                    "precedes": {
+                      "regex": "^(&&|\\|\\|)$"
+                    }
+                  }
+                },
+                {
+                  "has": {
+                    "kind": "negated_command"
+                  }
+                },
+                {
+                  "inside": {
+                    "kind": "redirected_statement",
+                    "any": [
+                      {
+                        "precedes": {
+                          "regex": "^(&&|\\|\\|)$"
+                        }
+                      },
+                      {
+                        "inside": {
+                          "kind": "list",
+                          "precedes": {
+                            "regex": "^(&&|\\|\\|)$"
+                          }
+                        }
+                      },
+                      {
+                        "inside": {
+                          "any": [
+                            {
+                              "kind": "if_statement"
+                            },
+                            {
+                              "kind": "while_statement"
+                            }
+                          ],
+                          "field": "condition"
+                        }
+                      },
+                      {
+                        "nthChild": 1,
+                        "inside": {
+                          "kind": "elif_clause"
+                        }
+                      },
+                      {
+                        "precedes": {
+                          "has": {
+                            "kind": "special_variable_name",
+                            "regex": "^\\?$",
+                            "stopBy": "end"
+                          },
+                          "stopBy": "end"
+                        }
+                      }
+                    ]
+                  }
+                }
+              ]
+            }
+          ],
+          "not": {
+            "any": [
+              {
+                "follows": {
+                  "any": [
+                    {
+                      "kind": "command",
+                      "regex": "^set(\\s+\\S+)*\\s+-[A-Za-z]*o\\s+pipefail(\\s|$)"
+                    },
+                    {
+                      "kind": "command",
+                      "regex": "(?i)^setopt(\\s+\\S+)*\\s+pipe_?fail(\\s|$)"
+                    }
+                  ],
+                  "stopBy": "end"
+                }
+              },
+              {
+                "inside": {
+                  "follows": {
+                    "any": [
+                      {
+                        "kind": "command",
+                        "regex": "^set(\\s+\\S+)*\\s+-[A-Za-z]*o\\s+pipefail(\\s|$)"
+                      },
+                      {
+                        "kind": "command",
+                        "regex": "(?i)^setopt(\\s+\\S+)*\\s+pipe_?fail(\\s|$)"
+                      }
+                    ],
+                    "stopBy": "end"
+                  },
+                  "stopBy": "end"
+                }
+              },
+              {
+                "inside": {
+                  "kind": "program",
+                  "regex": "PIPESTATUS|pipestatus",
+                  "stopBy": "end"
+                }
+              },
+              {
+                "has": {
+                  "kind": "command",
+                  "nthChild": 1,
+                  "any": [
+                    {
+                      "has": {
+                        "field": "name",
+                        "regex": "^(\\S*/)?(echo|printf|ls|cat|grep|egrep|fgrep|rg|fd|fdfind|find|jq|awk|sed|sort|wc|head|tail|tr|cut|stat|file|which|tree|date|pwd|env|printenv|ps|pgrep|du|df|dust|column|basename|dirname|realpath|readlink|seq|true)$"
+                      }
+                    },
+                    {
+                      "has": {
+                        "field": "name",
+                        "regex": "^git$"
+                      },
+                      "regex": "^git(\\s+-\\S+(\\s+\\S+)?)*\\s+(log|diff|show|status|branch|ls-files|rev-parse|remote|config|blame|tag|rev-list|shortlog|describe)(\\s|$)"
+                    }
+                  ]
+                }
+              }
+            ]
+          }
+        }
+      },
+      "action": "deny",
+      "message": "The status of a pipeline is the status of its LAST command: here `tail`/`head`/… succeeds even when the first command failed, so the `&&`, `||`, `if`, `!` or `$?` that reads it sees success for a failure.\nFix: run `set -o pipefail` first (bash and zsh; the pipeline then fails when any stage fails), or write the output to a file, check the status, then `tail`/`head` the file: `make > out.log 2>&1; rc=$?; tail -20 out.log; [ $rc -eq 0 ]`.",
+      "messages": [
+        {
+          "when": {
+            "matches": {
+              "any": [
+                {
+                  "inside": {
+                    "kind": "pipeline",
+                    "precedes": {
+                      "has": {
+                        "kind": "special_variable_name",
+                        "regex": "^\\?$",
+                        "stopBy": "end"
+                      },
+                      "stopBy": "end"
+                    }
+                  }
+                },
+                {
+                  "inside": {
+                    "kind": "pipeline",
+                    "inside": {
+                      "kind": "redirected_statement",
+                      "precedes": {
+                        "has": {
+                          "kind": "special_variable_name",
+                          "regex": "^\\?$",
+                          "stopBy": "end"
+                        },
+                        "stopBy": "end"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "text": "`$?` after a pipe is the status of the LAST command (`tail`, `head`, …), which succeeds even when the first command failed. zsh keeps every stage's status in `pipestatus` (1-indexed: `pipestatus[1]` is the first command), bash in `PIPESTATUS` (0-indexed: `PIPESTATUS[0]`); read it in the very next command, before anything else runs.\nOr run `set -o pipefail` first (bash and zsh), or write the output to a file, check the status, then `tail` the file.",
+          "messageShort": "`$?` after a pipe is the last command's status, which succeeds even when the first failed: zsh `pipestatus[1]` (1-indexed), bash `PIPESTATUS[0]`, or `set -o pipefail` first, or write to a file, check the status, then tail it."
+        },
+        {
+          "when": {
+            "matches": {
+              "command": "head"
+            }
+          },
+          "text": "The status of a pipeline is the status of its LAST command: `head` succeeds even when the first command failed, so the `&&`, `||`, `if`, `!` or `$?` that reads it sees success for a failure.\n`set -o pipefail` is not the fix here: when `head` closes the pipe early the producer dies of SIGPIPE (status 141), so the pipeline fails although nothing went wrong. Write the output to a file instead, check the status, then `head` the file: `make > out.log 2>&1; rc=$?; head -20 out.log; [ $rc -eq 0 ]`.",
+          "messageShort": "A pipeline's status is its last command's, so `head` hides a failure; `set -o pipefail` makes `head` closing the pipe fail the producer with SIGPIPE (141). Write to a file, check the status, then `head` the file."
+        }
+      ],
+      "messageShort": "A pipeline's status is its last command's (`tail`, `head`, …), which succeeds even when the first failed: `set -o pipefail` first, or write to a file, check the status, then tail the file."
+    },
+    "tail-follow": {
+      "description": "tail -f in the foreground blocks the Bash tool",
+      "match": {
+        "command": "tail",
+        "has": {
+          "regex": "^-[A-Za-z0-9]*[fF][A-Za-z0-9]*$|^--follow(=.*)?$"
+        }
+      },
+      "when": {
+        "all": [
+          {
+            "tool": "Bash"
+          },
+          {
+            "not": {
+              "background": true
+            }
+          }
+        ]
+      },
+      "wrappers": false,
+      "action": "deny",
+      "message": "tail -f run in the foreground blocks the Bash tool until it times out, and nothing comes back meanwhile. Use a Monitor on it, or run the command in the background (run_in_background); for a one-off look use `tail -n 50 FILE`; to bound it use `timeout 30 tail -f FILE`.",
+      "messageShort": "A foreground tail -f blocks the Bash tool until it times out: use a Monitor or run_in_background, `tail -n 50 FILE` for a look, or `timeout 30 tail -f FILE`."
+    },
+    "ps-grep-self-match": {
+      "description": "ps piped into grep without a self-match guard",
+      "match": {
+        "all": [
+          {
+            "any": [
+              {
+                "command": [
+                  "grep",
+                  "egrep",
+                  "fgrep",
+                  "rg"
+                ],
+                "not": {
+                  "has": {
+                    "regex": "^(-[A-Za-z]*v[A-Za-z]*|--invert-match)$"
+                  }
+                }
+              },
+              {
+                "command": "awk",
+                "args": "(^|\\s)[\"']/[^/]|\\$0\\s*~"
+              },
+              {
+                "command": "sed",
+                "args": "(^|\\s)(-n\\s+)?[\"'](\\d+,)?/[^/]"
+              }
+            ]
+          },
+          {
+            "inside": {
+              "kind": "pipeline",
+              "not": {
+                "has": {
+                  "any": [
+                    {
+                      "kind": "command",
+                      "regex": "\\[[A-Za-z0-9_.]\\]"
+                    },
+                    {
+                      "command": [
+                        "grep",
+                        "egrep",
+                        "fgrep",
+                        "rg"
+                      ],
+                      "args": "(^|\\s)(-[A-Za-z]*v[A-Za-z]*|--invert-match)\\s+[^|;&]*(grep|\\brg\\b)"
+                    }
+                  ],
+                  "stopBy": "end"
+                }
+              }
+            }
+          },
+          {
+            "follows": {
+              "command": "ps",
+              "not": {
+                "any": [
+                  {
+                    "has": {
+                      "regex": "^-[A-Za-z]*p[A-Za-z0-9]*$|^--pid(=.*)?$|^-q$"
+                    }
+                  },
+                  {
+                    "all": [
+                      {
+                        "regex": "(^|\\s)-[A-Za-z]*o"
+                      },
+                      {
+                        "not": {
+                          "regex": "args|command|cmd"
+                        }
+                      }
+                    ]
+                  }
+                ]
+              },
+              "stopBy": "end"
+            }
+          }
+        ]
+      },
+      "action": "warn",
+      "message": "`ps … | grep X` lists the grep itself and your own shell (the tool wraps each command in `zsh -c … eval '…'`, which contains the pattern too), so the output has two false lines.\nAdd `| grep -v grep` AFTER the match, or bracket the pattern (`grep '[c]argo'`: the bracketed pattern does not match its own command line), or use `pgrep -fl PATTERN` as its own command.",
+      "messages": [
+        {
+          "when": {
+            "matches": {
+              "any": [
+                {
+                  "has": {
+                    "regex": "^-[A-Za-z]*c[A-Za-z]*$"
+                  }
+                },
+                {
+                  "inside": {
+                    "kind": "pipeline",
+                    "has": {
+                      "command": "wc",
+                      "has": {
+                        "regex": "^-[A-Za-z]*l[A-Za-z]*$"
+                      }
+                    }
+                  }
+                }
+              ]
+            }
+          },
+          "text": "The count is off by about 2: `ps … | grep X` also counts the grep itself and your own shell (the tool wraps each command in `zsh -c … eval '…'`, which contains the pattern too).\nAdd `| grep -v grep` AFTER the match, or bracket the pattern (`grep '[c]argo'`), before counting.",
+          "messageShort": "`ps | grep X` also counts the grep itself and your own shell, so a count is off by about 2: `| grep -v grep` after the match, or bracket the pattern (`grep '[c]argo'`)."
+        },
+        {
+          "when": {
+            "matches": {
+              "inside": {
+                "kind": "pipeline",
+                "has": {
+                  "any": [
+                    {
+                      "command": "awk",
+                      "args": "\\$[12]\\b"
+                    },
+                    {
+                      "command": "cut"
+                    }
+                  ]
+                }
+              }
+            }
+          },
+          "text": "The PID you extract may be the grep's or your own shell's, not the process you meant: `ps … | grep X` also lists both (the tool wraps each command in `zsh -c … eval '…'`, which contains the pattern too). Read the output and confirm the PID (`ps -p PID -o command=`) before you use it.\nAdd `| grep -v grep` AFTER the match, or bracket the pattern (`grep '[c]argo'`), so only the real process is left.",
+          "messageShort": "The extracted PID may be the grep's or your shell's: confirm it (`ps -p PID -o command=`) before using it; `| grep -v grep` after the match or a bracketed pattern (`grep '[c]argo'`) leaves only the real process."
+        }
+      ],
+      "messageShort": "`ps | grep X` also lists the grep itself and your own shell: `| grep -v grep` after the match, a bracketed pattern (`grep '[c]argo'`), or `pgrep -fl PATTERN` on its own."
+    }
+  },
+  "modes": {},
+  "examples": {
+    "pipe-status": {
+      "catch": [
+        "make 2>&1 | tail -5 && echo ok",
+        "make | head -20 || echo failed",
+        "if make | tail -3; then echo ok; fi",
+        "while make | wc -l; do sleep 1; done",
+        "! make | tail",
+        "cargo build 2>&1 | tail -20; echo \"exit=$?\"",
+        "make | tail > out.log && echo ok",
+        "set +o pipefail; make | tail && echo ok",
+        "git push 2>&1 | tail -3 && echo pushed",
+        "bash -c 'make | tail && echo ok'",
+        "(make | tail) && echo ok"
+      ],
+      "pass": [
+        "make | tail",
+        "set -o pipefail; make | tail && echo ok",
+        "set -eo pipefail; if make | tail; then x; fi",
+        "setopt pipefail; make | tail && echo ok",
+        "make | tail && echo ok; echo ${PIPESTATUS[0]}",
+        "make | tail; echo ${pipestatus[1]}",
+        "make | grep error && echo found",
+        "make | rg error || echo none",
+        "make | jq . && echo ok",
+        "make | awk '{print $1}' && echo ok",
+        "ls | xargs -n1 echo && echo y",
+        "make | python3 -c 'x' && echo ok",
+        "if x; then make | tail; fi",
+        "for f in a b; do make $f | tail -3; done",
+        "make | tail; ls",
+        "make > out.log && tail out.log",
+        "ls | head -3 && echo ---",
+        "git log | head -5 && git status",
+        "grep -r x . | head && echo found",
+        "cat f | wc -l && echo done",
+        "bash -c 'set -o pipefail; make | tail && echo ok'"
+      ]
+    },
+    "tail-follow": {
+      "catch": [
+        "tail -f app.log",
+        "tail -F x.log",
+        "tail -n 50 -f x",
+        "tail --follow=name x",
+        "tail -fn0 x",
+        "cd /var/log && tail -f y",
+        "tail -f x | grep ERROR"
+      ],
+      "pass": [
+        "tail -n 50 app.log",
+        "timeout 30 tail -f app.log",
+        "tail -c 100 x",
+        "sudo timeout 5 tail -F x",
+        "echo tail -f x",
+        "man tail",
+        "head -f x"
+      ]
+    },
+    "ps-grep-self-match": {
+      "catch": [
+        "ps aux | grep cargo",
+        "ps -ef | grep -i node | wc -l",
+        "ps aux | grep vite | awk '{print $2}'",
+        "ps aux | rg cargo",
+        "ps aux | egrep 'a|b'",
+        "ps aux | awk '/cargo/ {print $2}'",
+        "ps aux | grep cargo | cut -c1-80",
+        "bash -c 'ps aux | grep cargo'",
+        "ps -eo pid,command | grep vite"
+      ],
+      "pass": [
+        "ps aux | grep '[c]argo'",
+        "ps aux | grep cargo | grep -v grep",
+        "ps aux | grep -v grep | grep cargo",
+        "ps aux | rg -v rg | rg cargo",
+        "ps -p 123 -o comm= | grep node",
+        "ps aux | head -5",
+        "ps aux | awk '{print $2}'",
+        "pgrep -fl cargo",
+        "ps aux > ps.txt",
+        "echo ps aux | grep x | cat",
+        "ps aux | grep -E '[c]argo|[v]ite'",
+        "ls | grep x",
+        "ps -eo pid,etime,comm | grep cargo",
+        "ps aux | awk '$11 ~ /cargo/ {print $2}'"
+      ]
+    }
+  }
+}
