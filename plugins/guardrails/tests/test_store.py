@@ -1,31 +1,49 @@
 from __future__ import annotations  # noqa: I001
 
 import datetime
+import json
 import os
 import stat
 import subprocess
 import unittest
 from pathlib import Path
 from typing import Any, ClassVar
+from unittest import mock
 
 from helpers import Isolated
 
 import store
 
 UTC = datetime.UTC
+RULE = '{"match": {"command": "strings"}, "message": "No strings."}'
+APP = Path("dev.gaetans.guardrails") / "claude-plugin" / "config.json"
 
 
 class Paths(Isolated):
-    def test_global_uses_plugin_data(self) -> None:
-        self.assertEqual(store.global_state_path(), self.gpath)
+    def test_global_config_lives_under_an_absolute_xdg_config_home(self) -> None:
+        self.assertEqual(store.global_config_path(), self.tmp / "xdg" / APP)
+        self.assertEqual(store.global_config_path(), self.gpath)
 
-    def test_global_without_plugin_data_uses_derived_id(self) -> None:
+    def test_a_relative_or_empty_xdg_config_home_is_ignored_for_home_dot_config(self) -> None:
+        for value in ("relative/xdg", "./xdg", "", None):
+            with self.subTest(value=value):
+                if value is None:
+                    del os.environ["XDG_CONFIG_HOME"]
+                else:
+                    os.environ["XDG_CONFIG_HOME"] = value
+                self.assertEqual(store.global_config_path(), self.home / ".config" / APP)
+
+    def test_state_lives_in_the_plugin_data_dir_or_its_default(self) -> None:
+        self.assertEqual(store.state_path(), self.spath)
+        self.assertEqual(store.config_lock_path(), self.data / "config.lock")
         del os.environ["CLAUDE_PLUGIN_DATA"]
-        expected = Path.home() / ".claude" / "plugins" / "data" / "guardrails-gaetans-claude-plugins" / "state.json"
-        self.assertEqual(store.global_state_path(), expected)
+        expected = self.home / ".claude" / "plugins" / "data" / "guardrails-gaetans-claude-plugins"
+        self.assertEqual((store.state_path(), store.config_lock_path()),
+                         (expected / "state.json", expected / "config.lock"))
 
-    def test_project_path_from_env(self) -> None:
-        self.assertEqual(store.project_state_path(), self.ppath)
+    def test_project_config_from_env(self) -> None:
+        self.assertEqual(store.project_config_path(store.project_root()), self.proj / ".claude" / "guardrails.json")
+        self.assertEqual(store.project_config_path(store.project_root()), self.ppath)
 
     def test_project_root_from_git(self) -> None:
         del os.environ["CLAUDE_PROJECT_DIR"]
@@ -33,30 +51,40 @@ class Paths(Isolated):
         (repo / "sub").mkdir(parents=True)
         subprocess.run(["git", "init", "-q", str(repo)], check=True)
         self.assertEqual(store.project_root(repo / "sub"), repo)
+        self.assertEqual(store.project_config_path(store.project_root(repo / "sub")),
+                         repo / ".claude" / "guardrails.json")
 
-    def test_a_project_whose_state_file_is_the_global_one_is_no_project(self) -> None:
-        home = self.tmp / "home"
-        data = home / ".claude" / "plugins" / "data" / "guardrails-gaetans-claude-plugins"
-        data.mkdir(parents=True)
+    def test_a_project_at_the_home_directory_is_no_project(self) -> None:
         link = self.tmp / "home-link"
-        link.symlink_to(home)
-        os.environ["CLAUDE_PLUGIN_DATA"] = str(data)
-        rule = '{"match": {"command": "x"}, "message": "m"}'
-        for project in (home, link):
-            os.environ["CLAUDE_PROJECT_DIR"] = str(project)
-            self.assertIsNone(store.project_state_path())
-            self.assertEqual(self.cli("rule", "add", "r", "--json", rule)[0], 0)
-            self.assertEqual(self.cli("rule", "add", "r", "--json", rule, "--scope", "project")[0], 2)
-            status = self.cli("status")[1]
-            self.assertIn("`r` deny · global · enabled", status)
-            self.assertNotIn("global+project", status)
+        link.symlink_to(self.home)
+        self.put(self.home / ".claude" / "guardrails.json", {"rules": {"home": {"match": {"command": "nm"}, "message": "m"}}})
+        for project in (self.home, link):
+            with self.subTest(project=str(project)):
+                os.environ["CLAUDE_PROJECT_DIR"] = str(project)
+                self.assertIsNone(store.project_config_path(store.project_root()))
+                self.assertEqual(self.cli("rule", "add", "r", "--json", RULE)[0], 0)
+                code, _, err = self.cli("rule", "add", "r", "--json", RULE, "--scope", "project")
+                self.assertEqual(code, 2)
+                self.assertIn("home directory", err)
+                status = self.cli("status")[1]
+                self.assertIn("**Project** none", status)
+                self.assertIn("`r` deny · global · enabled", status)
+                self.assertNotIn("`home`", status)
+                self.assertIsNone(self.hook("nm x", session=f"home-{project.name}"),
+                                  "the user's own ~/.claude/guardrails.json is not a project layer")
         os.environ["CLAUDE_PROJECT_DIR"] = str(self.proj)
-        self.assertEqual(store.project_state_path(), self.ppath)
+        self.assertEqual(store.project_config_path(store.project_root()), self.ppath)
+
+    def test_a_project_config_that_is_the_global_config_is_no_project(self) -> None:
+        link = self.tmp / "proj-link"
+        link.symlink_to(self.proj)
+        with mock.patch.object(store, "global_config_path", lambda: link / ".claude" / "guardrails.json"):
+            self.assertIsNone(store.project_config_path(store.project_root()))
 
     def test_no_project_outside_git_or_without_a_cwd(self) -> None:
         del os.environ["CLAUDE_PROJECT_DIR"]
         for cwd in (self.tmp, self.tmp / "gone"):
-            self.assertIsNone(store.project_state_path(cwd))
+            self.assertIsNone(store.project_config_path(store.project_root(cwd)))
 
 
 class LoadWrite(Isolated):
@@ -65,37 +93,133 @@ class LoadWrite(Isolated):
         self.assertEqual(store.load(None), {})
 
     def test_corrupt_or_non_object_raises_and_is_never_overwritten(self) -> None:
-        for content in ("{nope", "[]"):
-            with self.subTest(content=content):
-                self.put(self.gpath, content)
-                with self.assertRaises(store.StateError):
-                    store.load(self.gpath)
-                with self.assertRaises(store.StateError):
-                    store.mutate(self.gpath, lambda s: None)
-                self.assertEqual(self.gpath.read_text(), content)
+        for path, change in ((self.gpath, lambda: store.mutate_config(self.gpath, lambda c: None)),
+                             (self.spath, lambda: store.mutate_state(lambda s: None))):
+            for content in ("{nope", "[]"):
+                with self.subTest(path=path.name, content=content):
+                    self.put(path, content)
+                    with self.assertRaises(store.StoreError):
+                        store.load(path)
+                    with self.assertRaises(store.StoreError):
+                        change()
+                    self.assertEqual(path.read_text(), content)
 
-    def test_mutate_roundtrip_leaves_no_temp_files(self) -> None:
-        store.mutate(self.gpath, lambda s: s.update(rules={"x": {}}))
-        data = self.get(self.gpath)
-        self.assertEqual(data["rules"], {"x": {}})
-        self.assertIn("updatedAt", data)
-        self.assertEqual(sorted(p.name for p in self.data.iterdir()), ["state.json", "state.json.lock"])
+    def test_a_config_write_is_atomic_unstamped_and_locks_in_the_data_dir(self) -> None:
+        store.mutate_config(self.gpath, lambda c: c.update(rules={"x": {}}))
+        self.assertEqual(self.get(self.gpath), {"rules": {"x": {}}})
+        self.assertEqual(sorted(p.name for p in self.gpath.parent.iterdir()), ["config.json"])
+        self.assertEqual(sorted(p.name for p in self.data.iterdir()), ["config.lock"])
+        store.mutate_config(self.ppath, lambda c: c.update(enabled=False))
+        self.assertEqual(sorted(p.name for p in self.ppath.parent.iterdir()), ["guardrails.json"])
+        self.assertEqual(sorted(p.name for p in self.data.iterdir()), ["config.lock"])
+
+    def test_the_first_rule_add_creates_the_config_dir_and_a_private_file(self) -> None:
+        self.assertFalse((self.tmp / "xdg").exists())
+        self.assertEqual(self.cli("rule", "add", "r", "--json", RULE)[0], 0)
+        self.assertEqual(stat.S_IMODE(self.gpath.stat().st_mode), 0o600)
+        self.assertEqual(sorted(self.get(self.gpath)), ["rules"])
+        self.assertEqual(self.cli("rule", "add", "p", "--json", RULE, "--scope", "project")[0], 0)
+        self.assertEqual(stat.S_IMODE(self.ppath.stat().st_mode), 0o600)
 
     def test_exception_in_mutation_writes_nothing(self) -> None:
         self.put(self.gpath, {"rules": {}})
 
-        def boom(state: store.State) -> None:
-            state["rules"]["x"] = {}
+        def boom(config: store.Doc) -> None:
+            config["rules"]["x"] = {}
             raise RuntimeError("boom")
 
         with self.assertRaises(RuntimeError):
-            store.mutate(self.gpath, boom)
+            store.mutate_config(self.gpath, boom)
         self.assertEqual(self.get(self.gpath), {"rules": {}})
 
-    def test_write_prunes_sessions(self) -> None:
+    def test_a_state_write_stamps_and_prunes_sessions_under_its_own_lock(self) -> None:
         old = (datetime.datetime.now(UTC) - datetime.timedelta(days=30)).isoformat()
-        store.write(self.gpath, {"sessions": {"old": {"seenAt": old}}})
-        self.assertEqual(self.get(self.gpath)["sessions"], {})
+        fresh = store.now()
+        self.put(self.spath, {"sessions": {"old": {"seenAt": old}, "new": {"seenAt": fresh}}})
+        store.mutate_state(lambda s: None)
+        state = self.get(self.spath)
+        self.assertEqual(sorted(state), ["sessions", "updatedAt"])
+        self.assertEqual(state["sessions"], {"new": {"seenAt": fresh}})
+        self.assertEqual(sorted(p.name for p in self.data.iterdir()), ["state.json", "state.json.lock"])
+
+    def test_rule_and_mode_changes_write_config_never_state(self) -> None:
+        self.assertEqual(self.cli("rule", "add", "r", "--json", RULE)[0], 0)
+        self.assertEqual(self.cli("rule", "set", "r", "--json", '{"action": "warn"}')[0], 0)
+        self.assertEqual(self.cli("rule", "add", "p", "--json", RULE, "--scope", "project")[0], 0)
+        self.assertEqual(self.cli("mode", "declare", "m")[0], 0)
+        self.assertEqual(self.cli("mode", "on", "m", "--scope", "global")[0], 0)
+        self.assertEqual(self.cli("preset", "install", "process-safety")[0], 0)
+        self.assertEqual(self.cli("disable", "--scope", "project")[0], 0)
+        self.assertEqual(self.cli("rule", "rm", "p", "--scope", "project")[0], 0)
+        self.assertEqual(self.get(self.gpath)["rules"]["r"]["action"], "warn")
+        self.assertIn("setBy", self.get(self.gpath)["rules"]["r"])
+        self.assertEqual(self.get(self.ppath)["enabled"], False)
+        self.assertNotIn("updatedAt", self.get(self.gpath))
+        self.assertFalse(self.spath.exists())
+        self.assertEqual(self.cli("rule", "rm", "r")[0], 0)
+        self.assertNotIn("r", self.get(self.gpath)["rules"])
+        self.assertFalse(self.spath.exists())
+        self.assertEqual(self.cli("mode", "on", "m", "--session-id", "s1")[0], 0)
+        self.assertEqual(sorted(self.get(self.spath)), ["sessions", "updatedAt"])
+        self.assertNotIn("sessions", self.get(self.gpath))
+
+
+class MisplacedConfig(Isolated):
+    """Configuration left in the state file or in a project's old state file is reported loudly, never applied."""
+
+    def old_project_file(self) -> Path:
+        return self.proj / ".claude" / "plugins" / "data" / "guardrails-gaetans-claude-plugins" / "state.json"
+
+    def test_rules_left_in_the_state_file_are_named_once_per_session_and_in_status(self) -> None:
+        self.put(self.spath, {"rules": {"no-strings": json.loads(RULE)}, "modes": {}, "sessions": {}})
+        out = self.hook("strings x")
+        assert out is not None
+        self.assertNotIn("hookSpecificOutput", out, "rules left in the state file are not enforced")
+        for needle in (str(self.spath), "still holds rules, modes", "NOT applied", str(self.gpath)):
+            self.assertIn(needle, out["systemMessage"])
+        self.assertIsNone(self.hook("strings y"))
+        other = self.hook("ls", session="s2")
+        assert other is not None
+        self.assertIn("still holds rules", other["systemMessage"])
+        for argv in (("status", "--problems"), ("status", "--problems", "--scope", "global")):
+            problems = self.cli(*argv)[1]
+            self.assertIn(f"the state file {self.spath} still holds rules, modes", problems)
+            self.assertIn(f"Move it to {self.gpath}", problems)
+        self.assertEqual(self.cli("status", "--problems", "--scope", "project")[1].strip(), "No problems.")
+        self.assertIn("rules", self.get(self.spath), "the hook never strips the stray keys")
+
+    def test_the_problem_goes_away_once_the_rules_move_to_config(self) -> None:
+        self.put(self.spath, {"rules": {"no-strings": json.loads(RULE)}})
+        state = self.get(self.spath)
+        self.put(self.gpath, {"rules": state.pop("rules")})
+        self.put(self.spath, state)
+        self.assertEqual(self.cli("status", "--problems")[1].strip(), "No problems.")
+        out = self.hook("strings x")
+        assert out is not None
+        self.assertNotIn("systemMessage", out)
+        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+
+    def test_an_old_project_state_file_is_named_in_the_hook_and_in_status(self) -> None:
+        self.put(self.old_project_file(), {"rules": {"no-strings": json.loads(RULE)}})
+        out = self.hook("strings x")
+        assert out is not None
+        self.assertNotIn("hookSpecificOutput", out)
+        self.assertIn(f"the old project state file {self.old_project_file()} is no longer read", out["systemMessage"])
+        self.assertIn(str(self.ppath), out["systemMessage"])
+        problems = self.cli("status", "--problems", "--scope", "project")[1]
+        self.assertIn("old project state file", problems)
+        self.old_project_file().unlink()
+        self.assertEqual(self.cli("status", "--problems")[1].strip(), "No problems.")
+
+    def test_an_unreadable_state_file_is_reported_and_the_hook_still_enforces_without_writing_it(self) -> None:
+        self.put(self.gpath, {"rules": {"no-strings": {**json.loads(RULE), "retry": "same-command"}}})
+        self.put(self.spath, "{nope")
+        for _ in range(2):
+            out = self.hook("strings x")
+            assert out is not None
+            self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertEqual(self.spath.read_text(), "{nope")
+        self.assertIn("unreadable state file", self.cli("status", "--problems")[1])
 
 
 class Prune(unittest.TestCase):
@@ -126,15 +250,15 @@ class CorruptTables(Isolated):
         for key, verb in (("rules", ("rule", "add", "r", "--json", rule)), ("modes", ("mode", "declare", "m")),
                           ("sessions", ("mode", "on", "m", "--session-id", "s"))):
             with self.subTest(key=key):
-                state: dict[str, object] = {"modes": {"m": {"description": "d"}}}
-                state[key] = [1, 2]
-                self.put(self.gpath, state)
-                before = self.gpath.read_text()
+                path = self.spath if key == "sessions" else self.gpath
+                self.put(self.gpath, {"modes": {"m": {"description": "d"}}})
+                self.put(path, {**(self.get(path) if path.exists() else {}), key: [1, 2]})
+                before = path.read_text()
                 code, _, err = self.cli(*verb)
                 self.assertEqual(code, 2)
-                self.assertIn(str(self.gpath), err)
+                self.assertIn(str(path), err)
                 self.assertIn(f"'{key}' must be an object", err)
-                self.assertEqual(self.gpath.read_text(), before, "the file is untouched")
+                self.assertEqual(path.read_text(), before, "the file is untouched")
 
 
 class ManagedPath(Isolated):
@@ -166,7 +290,7 @@ class ManagedPath(Isolated):
         self.put(self.mpath, {"rules": {"x": self.RULE}})
         self.mpath.parent.chmod(0)
         self.addCleanup(self.mpath.parent.chmod, 0o755)
-        with self.assertRaises(store.StateError):
+        with self.assertRaises(store.StoreError):
             store.load(self.mpath)
         self.assertEqual((len(store.load_managed()[1]), store.presence(self.mpath)), (1, "unreadable"))
 
@@ -213,7 +337,7 @@ class ManagedWrite(Isolated):
         target = self.tmp / "victim"
         self.mpath.parent.mkdir()
         (self.tmp / "managed" / "guardrails.json.lock").symlink_to(target)
-        with self.assertRaises(OSError), store.locked(self.mpath):
+        with self.assertRaises(OSError), store.locked(self.tmp / "managed" / "guardrails.json.lock"):
             pass
         self.assertFalse(target.exists())
 

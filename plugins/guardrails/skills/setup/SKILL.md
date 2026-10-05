@@ -36,8 +36,8 @@ questions only when the user did not pass `-y`.
 ## Interview (no preset names)
 
 1. Ask (AskUserQuestion, multiSelect) what kind of work happens here: general development, reverse-engineering or
-   binary analysis, infrastructure / ops, other. Then the scope: every project (global) or only this project
-   (`--scope project`). Managed (machine-wide, needs root) is offered only when the user asks for it or passed `-s managed`.
+   binary analysis, infrastructure / ops, other. Then the scope: every project (global, the user's own config) or only
+   this project (`--scope project`, written to `.claude/guardrails.json`, which the repository can commit). Managed (machine-wide, needs root) is offered only when the user asks for it or passed `-s managed`.
 2. Suggest presets:
 
    - general development: `docs-first`, `process-safety`, `modern-cli` (its rules only act when fd / rg are installed)

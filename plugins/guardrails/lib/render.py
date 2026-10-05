@@ -71,7 +71,7 @@ class ModeRow:
 
 @dataclass
 class Status:
-    managed: str
+    files: list[str]
     hook_on: bool
     project_off: bool
     rules: list[RuleRow]
@@ -203,7 +203,7 @@ def padded_rows(names: list[str]) -> list[str]:
 
 
 def status_listing(status: Status) -> str:
-    lines = [status.managed, ""]
+    lines = [*status.files, ""]
     count = plural(len(status.rules), "rule")
     head = f"### Guardrails · {count} · hook {'on' if status.hook_on else 'off'}"
     if status.project_off:

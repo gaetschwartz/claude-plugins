@@ -34,11 +34,11 @@ class Hook(AstIsolated):
         self.put(self.gpath, {"rules": {"no-strings": dict(STRINGS)}, "modes": dict(MODES)})
 
     def with_session_mode(self, agent_may_enable: bool = True, **mode: Any) -> None:
-        state = self.get(self.gpath)
-        state["modes"]["reverse-engineering"]["agentMayEnable"] = agent_may_enable
+        config = self.get(self.gpath)
+        config["modes"]["reverse-engineering"]["agentMayEnable"] = agent_may_enable
+        self.put(self.gpath, config)
         record = {"by": "agent", "reason": "user: RE libfoo", **mode}
-        state["sessions"] = {"s1": {"seenAt": store.now(), "modes": {"reverse-engineering": record}}}
-        self.put(self.gpath, state)
+        self.put(self.spath, {"sessions": {"s1": {"seenAt": store.now(), "modes": {"reverse-engineering": record}}}})
 
     def test_no_rules_is_silent_and_writes_nothing(self) -> None:
         self.gpath.unlink()
@@ -154,7 +154,7 @@ class Hook(AstIsolated):
         self.put(self.ppath, {"modes": {"reverse-engineering": {"active": True}}})
         self.assertIsNone(self.hook("strings a"))
 
-    def test_corrupt_project_state_does_not_disable_global_rules(self) -> None:
+    def test_corrupt_project_config_does_not_disable_global_rules(self) -> None:
         self.put(self.ppath, "garbage")
         self.assertEqual(decision(self.hook("strings a")), "deny")
 
@@ -187,11 +187,32 @@ class Hook(AstIsolated):
 
     def test_session_state_written_and_config_preserved(self) -> None:
         self.hook("strings a")
-        state = self.get(self.gpath)
-        self.assertIn("no-strings", state["rules"])
-        self.assertEqual(state["modes"], MODES)
+        state = self.get(self.spath)
+        self.assertEqual(sorted(state), ["sessions", "updatedAt"])
         self.assertEqual(len(state["sessions"]["s1"]["acknowledged"]), 1)
         self.assertIn("seenAt", state["sessions"]["s1"])
+        self.assertEqual(self.get(self.gpath), {"rules": {"no-strings": dict(STRINGS)}, "modes": dict(MODES)})
+
+    def test_the_hook_never_writes_a_config_file(self) -> None:
+        self.put(self.gpath, {"rules": {"no-strings": dict(STRINGS),
+                                        "k9": {"match": {"command": "kill", "args": "-9"}, "message": "SIGTERM first",
+                                               "action": "warn"},
+                                        "bad": {"match": {"builtin": "x"}, "message": "m"}},
+                              "modes": dict(MODES)})
+        self.put(self.ppath, {"rules": {"nm": {"match": {"command": "nm"}, "message": "no nm"}}})
+        self.put(self.mpath, {"rules": {"no-pkill": dict(PKILL)}})
+        files = (self.gpath, self.ppath, self.mpath)
+        for path in files:
+            os.utime(path, ns=(1_000_000_000, 1_000_000_000))
+        before = {path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}
+        listing = {path: sorted(path.parent.iterdir()) for path in files}
+        outcomes = [decision(self.hook(command, session=session)) for command, session in
+                    (("strings a", "s1"), ("strings a", "s1"), ("kill -9 1", "s1"), ("kill -9 1", "s1"),
+                     ("nm x", "s2"), ("pkill x", "s3"), ("ls", "s4"))]
+        self.assertEqual(outcomes, ["deny", "allow", "warn", "allow", "deny", "deny", "notice"])
+        self.assertEqual({path: (path.read_bytes(), path.stat().st_mtime_ns) for path in files}, before)
+        self.assertEqual({path: sorted(path.parent.iterdir()) for path in files}, listing)
+        self.assertEqual(sorted(self.get(self.spath)["sessions"]), ["s1", "s2", "s3", "s4"])
 
 
 PKILL: dict[str, Any] = {"match": {"command": "pkill"}, "message": "No pkill.", "action": "deny"}
@@ -230,7 +251,7 @@ class ManagedHook(AstIsolated):
         self.assertEqual(decision(self.hook("pkill node")), "deny")
         self.assertIsNone(self.hook("strings a"))
 
-    def test_corrupt_global_state_still_enforces_managed_statelessly(self) -> None:
+    def test_corrupt_global_config_still_enforces_managed_statelessly(self) -> None:
         self.put(self.gpath, "{nope")
         self.assertEqual(decision(self.hook("pkill node")), "deny")
         self.assertEqual(self.gpath.read_text(), "{nope")
@@ -262,10 +283,12 @@ class ManagedHook(AstIsolated):
             ("a project cannot switch on a managed mode", locked, {}, mode(active=True), "deny"),
             ("a global activation of a managed mode counts", locked, mode(active=True), {}, "allow"),
         ]
-        for name, managed, global_state, project, expected in cases:
+        for name, managed, global_side, project, expected in cases:
             with self.subTest(case=name):
+                config = dict(global_side)
+                self.put(self.spath, {"sessions": config.pop("sessions", {})})
                 self.put(self.mpath, managed)
-                self.put(self.gpath, global_state)
+                self.put(self.gpath, config)
                 self.put(self.ppath, project)
                 self.assertEqual(decision(self.hook("pkill node")), expected)
 
@@ -323,8 +346,8 @@ class ManagedHook(AstIsolated):
 
     def test_managed_rule_naming_an_undeclared_mode_stays_enforced_and_is_reported(self) -> None:
         self.put(self.mpath, {"rules": {"no-pkill": {**PKILL, "modes": ["ghost"]}}})
-        self.put(self.gpath, {"modes": {"ghost": {"active": True}},
-                              "sessions": {"s1": {"seenAt": store.now(), "modes": {"ghost": {"by": "user"}}}}})
+        self.put(self.gpath, {"modes": {"ghost": {"active": True}}})
+        self.put(self.spath, {"sessions": {"s1": {"seenAt": store.now(), "modes": {"ghost": {"by": "user"}}}}})
         self.put(self.ppath, {"modes": {"ghost": {"active": True}}})
         out = self.hook("pkill node")
         assert out is not None
@@ -352,8 +375,8 @@ class Layering(AstIsolated):
         assert out is not None
         self.assertIsNone(out.get("hookSpecificOutput", {}).get("permissionDecision"))
         for layer in ("managed", "global", "project"):
-            self.assertIn(f"{layer} state has a 'wrappers' key", out["systemMessage"])
-            self.assertIn(f"{layer} state has a 'wrappers' key", self.cli("status", "--problems")[1])
+            self.assertIn(f"{layer} config has a 'wrappers' key", out["systemMessage"])
+            self.assertIn(f"{layer} config has a 'wrappers' key", self.cli("status", "--problems")[1])
 
 
 class MonitorCoverage(AstIsolated):

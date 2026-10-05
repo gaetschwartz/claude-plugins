@@ -65,19 +65,19 @@ def check_name(kind: str, name: str) -> None:
 
 
 def table(mapping: dict[str, Any], key: str) -> dict[str, Any]:
-    """mapping[key] as a dict, created in place when absent; a value of another type is a corrupt state file."""
+    """mapping[key] as a dict, created in place when absent; a value of another type is a corrupt file."""
     value = mapping.setdefault(key, {})
     if not isinstance(value, dict):
-        raise store.StateError(f"'{key}' must be an object, not {type(value).__name__}; fix the file by hand, the CLI "
-                               "never overwrites a corrupt state file")
+        raise store.StoreError(f"'{key}' must be an object, not {type(value).__name__}; fix the file by hand, the CLI "
+                               "never overwrites a corrupt file")
     return value
 
 
 def project_path() -> Path:
-    path = store.project_state_path()
+    path = store.project_config_path(store.project_root())
     if not path:
-        raise Invalid("no project state here: not inside a project (no CLAUDE_PROJECT_DIR and no git repository), or "
-                      "the project's state file is the global one (a project at the home directory)")
+        raise Invalid("no project config here: not inside a project (no CLAUDE_PROJECT_DIR and no git repository), or "
+                      "the project is the home directory, whose .claude directory is the user's own")
     return path
 
 
@@ -88,31 +88,42 @@ def resolve_scope(args: Args) -> str:
 def scope_path(scope: str) -> Path:
     if scope == "managed":
         return store.MANAGED_PATH
-    return project_path() if scope == "project" else store.global_state_path()
+    return project_path() if scope == "project" else store.global_config_path()
 
 
-def change_state(scope: str, path: Path, fn: Callable[[store.State], Any]) -> Any:
+def change_config(scope: str, path: Path, fn: Callable[[store.Doc], Any]) -> Any:
     if scope != "managed":
-        return store.mutate(path, fn)
+        return store.mutate_config(path, fn)
     os.umask(0o022)
     try:
-        return store.mutate(path, fn, public=True)
-    except store.StateError as exc:
-        raise store.StateError(f"{exc}; fix or remove the managed file by hand, the CLI never overwrites a corrupt "
-                               "state file") from exc
+        return store.mutate(path, fn, Path(f"{path}.lock"), public=True)
+    except store.StoreError as exc:
+        raise store.StoreError(f"{exc}; fix or remove the managed file by hand, the CLI never overwrites a corrupt "
+                               "file") from exc
 
 
-def managed_state() -> store.State:
+def managed_config() -> store.Doc:
     return store.load_managed()[0]
 
 
-def states() -> store.Layers:
-    """The managed, global and project state; an unreadable global or project file raises."""
-    return store.Layers(managed_state(), store.load(store.global_state_path()), store.load(store.project_state_path()))
+def configs() -> store.Layers:
+    """The managed, global and project config; an unreadable global or project file raises."""
+    return store.Layers(managed_config(), store.load(store.global_config_path()),
+                        store.load(store.project_config_path(store.project_root())))
+
+
+def session_of(args: Args) -> policy.Session:
+    """The session's record from the state file; an unreadable state file reads as a fresh session."""
+    sid = args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
+    try:
+        state = store.load(store.state_path()) if sid else {}
+    except store.StoreError:
+        state = {}
+    return policy.Session.from_json(view(view(state, "sessions"), sid) if sid else {})
 
 
 def managed_rule_ids() -> set[str]:
-    return set(policy.origins("rules", managed_state(), {}, {}))
+    return set(policy.origins("rules", managed_config(), {}, {}))
 
 
 def refuse_managed_rule(scope: str, rid: str, path: Path) -> None:
@@ -120,7 +131,7 @@ def refuse_managed_rule(scope: str, rid: str, path: Path) -> None:
         return
     try:
         own = rid in view(store.load(path), "rules")
-    except store.StateError:
+    except store.StoreError:
         own = False
     if not own:
         raise Refused(f"rule '{rid}' is a managed rule. Change it with --scope managed (needs sudo and the "
@@ -168,9 +179,9 @@ def check_stdin(*pairs: tuple[str | None, str]) -> None:
 
 @dataclass
 class Snapshot:
-    mstate: store.State
-    gstate: store.State
-    pstate: store.State
+    mconfig: store.Doc
+    gconfig: store.Doc
+    pconfig: store.Doc
     gpath: Path
     ppath: Path | None
     hook_on: bool
@@ -188,38 +199,49 @@ class Snapshot:
 
 
 def snapshot(args: Args) -> Snapshot:
-    mstate, problems = store.load_managed()
+    mconfig, problems = store.load_managed()
     layers: list[frozenset[str]] = [frozenset({"managed"})] * len(problems)
 
     def report(text: str, *where: str) -> None:
         problems.append(text)
         layers.append(frozenset(where))
 
-    def safe_load(path: Path | None, what: str) -> store.State:
+    def safe_load(path: Path | None, what: str) -> store.Doc:
         try:
             return store.load(path)
-        except store.StateError as exc:
+        except store.StoreError as exc:
             if what == "global":
                 consequence = ("global and project rules are not enforced, managed rules still are"
-                               if view(mstate, "rules") else "the hook fails open")
+                               if view(mconfig, "rules") else "the hook fails open")
             else:
                 consequence = "project rules are not enforced"
-            report(f"unreadable {what} state file ({consequence}) until it is fixed: {exc}", what)
+            report(f"unreadable {what} config file ({consequence}) until it is fixed: {exc}", what)
             return {}
 
-    gpath, ppath = store.global_state_path(), store.project_state_path()
-    gstate, pstate = safe_load(gpath, "global"), safe_load(ppath, "project")
+    root = store.project_root()
+    gpath, ppath = store.global_config_path(), store.project_config_path(root)
+    gconfig, pconfig = safe_load(gpath, "global"), safe_load(ppath, "project")
+    try:
+        state = store.load(store.state_path())
+    except store.StoreError as exc:
+        state = {}
+        report(f"unreadable state file (sessions are not remembered: retry acknowledgements, session modes and "
+               f"once-per-session notices do not stick) until it is fixed or removed: {exc}", "global")
+    for text in store.stray_config_problems(state):
+        report(text, "global")
+    for text in store.old_project_problems(root):
+        report(text, "project")
     for text in store.trust_problems(store.MANAGED_PATH):
         report(text, "managed")
-    for name, m in view(pstate, "modes").items():
-        if name in view(mstate, "modes") and isinstance(m, dict) and m.get("active") is True:
-            report(f"project state switches on mode '{name}', which the managed file declares (ignored)", "project")
-    found = policy.effective(mstate, gstate, pstate)
-    rules, modes = found.rules, policy.effective_modes(mstate, gstate, pstate)
+    for name, m in view(pconfig, "modes").items():
+        if name in view(mconfig, "modes") and isinstance(m, dict) and m.get("active") is True:
+            report(f"project config switches on mode '{name}', which the managed file declares (ignored)", "project")
+    found = policy.effective(mconfig, gconfig, pconfig)
+    rules, modes = found.rules, policy.effective_modes(mconfig, gconfig, pconfig)
     sid = args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
-    session = policy.Session.from_json(view(view(gstate, "sessions"), sid) if sid else {})
-    rule_origins = policy.origins("rules", mstate, gstate, pstate)
-    mode_origins = policy.origins("modes", mstate, gstate, pstate)
+    session = policy.Session.from_json(view(view(state, "sessions"), sid) if sid else {})
+    rule_origins = policy.origins("rules", mconfig, gconfig, pconfig)
+    mode_origins = policy.origins("modes", mconfig, gconfig, pconfig)
     for rid, why in sorted(found.problems.items()):
         report(f"rule {rid}: {why} (ignored by the hook)", *rule_origins.get(rid, []))
     for rid in sorted(rules):
@@ -227,8 +249,8 @@ def snapshot(args: Args) -> Snapshot:
             if m not in modes:
                 report(f"rule {rid}: mode '{m}' is not declared (the rule stays enforced)",
                        *rule_origins.get(rid, []))
-    for label, state in (("global", gstate), ("project", pstate)):
-        for text in policy.removed_key_problems((label, state)):
+    for label, doc in (("global", gconfig), ("project", pconfig)):
+        for text in policy.removed_key_problems((label, doc)):
             report(text, label)
     parsed = {rid: rule for rid, rule in rules.items() if rule.enabled
               and not any(p.startswith(f"rule {rid}:") for p in problems)}
@@ -244,7 +266,7 @@ def snapshot(args: Args) -> Snapshot:
             fails_open = f" MANAGED rules fail open too: {', '.join(managed_blind)}." if managed_blind else ""
             report(f"rules {', '.join(sorted(parsed))} use the ast-grep engine and are NOT enforced "
                    f"while the engine cannot run ({exc}).{fails_open}", *where)
-    return Snapshot(mstate, gstate, pstate, gpath, ppath, gstate.get("enabled", True) is not False,
+    return Snapshot(mconfig, gconfig, pconfig, gpath, ppath, gconfig.get("enabled", True) is not False,
                     rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers,
                     frozenset(blind))
 
@@ -262,10 +284,15 @@ def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, policy.Ac
     return "enabled"
 
 
-def managed_line() -> str:
-    where, state = render.span(str(store.MANAGED_PATH)), store.presence(store.MANAGED_PATH)
-    return f"**Managed** platform file {where} {state}" + (
-        " · no managed file is present, so there are no managed rules" if state == "absent" else "")
+def file_lines(snap: Snapshot) -> list[str]:
+    """Where each layer's config lives and whether the file is there."""
+    where, found = render.span(str(store.MANAGED_PATH)), store.presence(store.MANAGED_PATH)
+    lines = [f"**Managed** platform file {where} {found}" + (
+        " · no managed file is present, so there are no managed rules" if found == "absent" else "")]
+    lines.append(f"**Global** config {render.span(str(snap.gpath))} {store.presence(snap.gpath)}")
+    lines.append(f"**Project** config {render.span(str(snap.ppath))} {store.presence(snap.ppath)}" if snap.ppath
+                 else "**Project** none · not in a project, or the project is the home directory")
+    return lines
 
 
 def status_view(snap: Snapshot, scope: str | None) -> render.Status:
@@ -288,11 +315,11 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
         modes.append(render.ModeRow(name, on, snap.modes[name].agent_may_enable, snap.mode_origins.get(name, [])))
     notes = []
     if not snap.hook_on:
-        reason = f" ({snap.gstate['disabledReason']})" if snap.gstate.get("disabledReason") else ""
-        kept = "; managed rules stay enforced" if view(snap.mstate, "rules") else ""
+        reason = f" ({snap.gconfig['disabledReason']})" if snap.gconfig.get("disabledReason") else ""
+        kept = "; managed rules stay enforced" if view(snap.mconfig, "rules") else ""
         notes.append(f"the global hook is disabled{reason}{kept}")
-    status = render.Status(managed_line(), snap.hook_on, snap.ppath is not None
-                           and snap.pstate.get("enabled", True) is False, rules, modes, snap.problems_in(scope),
+    status = render.Status(file_lines(snap), snap.hook_on, snap.ppath is not None
+                           and snap.pconfig.get("enabled", True) is False, rules, modes, snap.problems_in(scope),
                            notes=notes)
     if scope:
         status.no_rules = f"No rules with a {scope} entry."
@@ -319,7 +346,7 @@ def cmd_status(args: Args) -> int:
 
 
 def cmd_stats(args: Args) -> int:
-    path = store.global_state_path().parent / telemetry.DB
+    path = bootstrap.data_dir() / telemetry.DB
     if args.reset:
         require_user(args, "stats --reset")
         telemetry.reset(path)
@@ -332,7 +359,7 @@ def cmd_stats(args: Args) -> int:
     elif args.rule:
         print(render.rule_days(rows, args.rule, days))
     else:
-        print(render.stats_card(rows, sorted(policy.effective(*states()).rules), days, args.slow))
+        print(render.stats_card(rows, sorted(policy.effective(*configs()).rules), days, args.slow))
     return 0
 
 
@@ -358,13 +385,13 @@ def cmd_rule_add(args: Args) -> int:
     scope = resolve_scope(args)
     path = scope_path(scope)
 
-    def change(state: store.State) -> bool:
-        rules = table(state, "rules")
+    def change(doc: store.Doc) -> bool:
+        rules = table(doc, "rules")
         existed = args.id in rules
         rules[args.id] = rule
         return existed
 
-    existed = change_state(scope, path, change)
+    existed = change_config(scope, path, change)
     print(f"{'replaced' if existed else 'added'} rule {args.id} in {path}")
     if unchecked:
         print(unchecked)
@@ -411,14 +438,14 @@ def cmd_rule_set(args: Args) -> int:
         if key not in SETTABLE:
             raise Invalid(f"--json key {key!r} must be one of {', '.join(SETTABLE)}")
     refuse_managed_rule(scope, args.id, path)
-    base = policy.effective_rules({}, store.load(store.global_state_path()), {}).get(args.id) \
+    base = policy.effective_rules({}, store.load(store.global_config_path()), {}).get(args.id) \
         if scope == "project" else None
 
     unchecked: list[str] = []
     candidate: list[policy.Rule] = []
 
-    def change(state: store.State) -> None:
-        rules = table(state, "rules")
+    def change(doc: store.Doc) -> None:
+        rules = table(doc, "rules")
         if not isinstance(rules.get(args.id), dict):
             if base is None:
                 raise Invalid(f"no rule '{args.id}' in {path}")
@@ -430,7 +457,7 @@ def cmd_rule_set(args: Args) -> int:
             unchecked.append(check_ast_rule(candidate[-1]))
         rule["setBy"] = stamp(args.reason)
 
-    change_state(scope, path, change)
+    change_config(scope, path, change)
     print(f"updated rule {args.id} in {path}")
     if unchecked and unchecked[-1]:
         print(unchecked[-1])
@@ -450,31 +477,29 @@ def cmd_rule_rm(args: Args) -> int:
     path = scope_path(scope)
     refuse_managed_rule(scope, args.id, path)
 
-    def change(state: store.State) -> None:
-        rules = table(state, "rules")
+    def change(doc: store.Doc) -> None:
+        rules = table(doc, "rules")
         if args.id not in rules:
             raise Invalid(f"no rule '{args.id}' in {path}")
         del rules[args.id]
 
-    change_state(scope, path, change)
+    change_config(scope, path, change)
     print(f"removed rule {args.id} from {path}")
     return 0
 
 
-def effect_notes(args: Args, rule: policy.Rule, layers: list[str], mstate: store.State,
-                 gstate: store.State, pstate: store.State) -> list[str]:
+def effect_notes(args: Args, rule: policy.Rule, layers: list[str], mconfig: store.Doc,
+                 gconfig: store.Doc, pconfig: store.Doc) -> list[str]:
     notes = []
     if not rule.enabled:
         notes.append("rule is disabled")
     if rule.requires and not policy.requirements_met(rule):
         notes.append(f"none of {'|'.join(rule.requires)} is installed here, so the hook skips this rule")
-    if "managed" not in layers and gstate.get("enabled", True) is False:
+    if "managed" not in layers and gconfig.get("enabled", True) is False:
         notes.append("the global hook is disabled, so the hook does not enforce this rule")
     listed = list(rule.modes)
     if listed:
-        sid = args.session_id or os.environ.get("CLAUDE_CODE_SESSION_ID")
-        session = policy.Session.from_json(view(view(gstate, "sessions"), sid) if sid else {})
-        active = policy.active_modes(policy.effective_modes(mstate, gstate, pstate), session)
+        active = policy.active_modes(policy.effective_modes(mconfig, gconfig, pconfig), session_of(args))
         on = [m for m in listed if m in active]
         if on:
             notes.append(f"mode {', '.join(on)} is active, so the hook suspends this rule right now")
@@ -553,7 +578,7 @@ def cmd_rule_test(args: Args) -> int:
     examples: list[Example] = [Example(c, render.Source(args.source), None) for c in args.commands]
     if args.examples is not None:
         examples += parse_examples(args.examples)
-    mstate, gstate, pstate = states()
+    mconfig, gconfig, pconfig = configs()
     if args.json is not None:
         draft, carried = split_envelope(load_json(args.json, "--json"))
         if carried is not None:
@@ -564,21 +589,21 @@ def cmd_rule_test(args: Args) -> int:
         rid = named if isinstance(named, str) and named else "new-rule"
         scope = args.scope or "global"
     else:
-        found = policy.effective(mstate, gstate, pstate)
+        found = policy.effective(mconfig, gconfig, pconfig)
         rules = found.rules
         if args.id in found.problems:
             raise Invalid(f"rule '{args.id}' is invalid and ignored by the hook: {found.problems[args.id]}")
         if args.id not in rules:
-            hidden = pstate.get("enabled", True) is False and args.id in view(pstate, "rules")
+            hidden = pconfig.get("enabled", True) is False and args.id in view(pconfig, "rules")
             raise Invalid(f"no rule '{args.id}'" + (" (project rules are disabled, so project entries are not "
                                                      "loaded)" if hidden else ""))
         rule = rules[args.id]
-        layers = policy.origins("rules", mstate, gstate, pstate)[args.id]
+        layers = policy.origins("rules", mconfig, gconfig, pconfig)[args.id]
         rid, scope = args.id, "+".join(layers)
 
     if not examples:
         raise Invalid("give at least one command or --examples")
-    notes = effect_notes(args, rule, layers, mstate, gstate, pstate)
+    notes = effect_notes(args, rule, layers, mconfig, gconfig, pconfig)
     evaluations = [matching.evaluate(cmd, {rid: rule}) for cmd, _, _ in examples]
     broken = {rid_: why for ev in evaluations for rid_, why in ev.invalid.items()}
     if broken:
@@ -633,17 +658,17 @@ def cmd_mode_declare(args: Args) -> int:
     scope = resolve_scope(args)
     path = scope_path(scope)
 
-    def change(state: store.State) -> None:
-        modes = table(state, "modes")
+    def change(doc: store.Doc) -> None:
+        modes = table(doc, "modes")
         previous = view(modes, args.name)
         modes[args.name] = {"description": args.description or str(previous.get("description", "")),
                             "agentMayEnable": bool(args.agent_may_enable),
                             "active": previous.get("active") is True,
                             "setBy": stamp(args.reason)}
 
-    change_state(scope, path, change)
+    change_config(scope, path, change)
     print(f"declared mode {args.name} in {path} (agent may enable: {'yes' if args.agent_may_enable else 'no'})")
-    if scope != "managed" and args.name in view(managed_state(), "modes"):
+    if scope != "managed" and args.name in view(managed_config(), "modes"):
         print(f"note: mode {args.name} is also declared in the managed file, which wins: this declaration can "
               "only tighten it")
     return 0
@@ -654,13 +679,13 @@ def cmd_mode_undeclare(args: Args) -> int:
     scope = resolve_scope(args)
     path = scope_path(scope)
 
-    def change(state: store.State) -> None:
-        modes = table(state, "modes")
+    def change(doc: store.Doc) -> None:
+        modes = table(doc, "modes")
         if args.name not in modes:
             raise Invalid(f"mode '{args.name}' is not declared in {path}")
         del modes[args.name]
 
-    change_state(scope, path, change)
+    change_config(scope, path, change)
     print(f"removed mode {args.name} from {path}")
     return 0
 
@@ -668,12 +693,12 @@ def cmd_mode_undeclare(args: Args) -> int:
 def set_persistent(args: Args, active: bool) -> int:
     require_user(args, f"mode {'on' if active else 'off'} --scope {args.scope}")
     path = scope_path(args.scope)
-    managed, gstate = managed_state(), store.load(store.global_state_path())
-    above = {"managed": ({}, {}), "global": (managed, {}), "project": (managed, gstate)}[args.scope]
+    managed, gconfig = managed_config(), store.load(store.global_config_path())
+    above = {"managed": ({}, {}), "global": (managed, {}), "project": (managed, gconfig)}[args.scope]
     declared_elsewhere = args.name in policy.effective_modes(*above, {})
 
-    def change(state: store.State) -> None:
-        modes = table(state, "modes")
+    def change(doc: store.Doc) -> None:
+        modes = table(doc, "modes")
         mode = modes.get(args.name)
         if not isinstance(mode, dict):
             if not declared_elsewhere:
@@ -682,7 +707,7 @@ def set_persistent(args: Args, active: bool) -> int:
         mode["active"] = active
         mode["setBy"] = stamp(args.reason)
 
-    change_state(args.scope, path, change)
+    change_config(args.scope, path, change)
     print(f"mode {args.name} {'on' if active else 'off'} for every session ({args.scope} scope)")
     if not active and args.scope != "managed" and getattr(
             policy.effective_modes(managed, {}, {}).get(args.name), "active", False):
@@ -696,7 +721,7 @@ def cmd_mode_on(args: Args) -> int:
     if args.scope != "session":
         return set_persistent(args, True)
     sid = session_id(args)
-    modes = policy.effective_modes(*states())
+    modes = policy.effective_modes(*configs())
     if args.name not in modes:
         raise Invalid(f"mode '{args.name}' is not declared (declared: {', '.join(sorted(modes)) or 'none'})")
     if is_agent():
@@ -705,12 +730,12 @@ def cmd_mode_on(args: Args) -> int:
         if not args.reason:
             raise Invalid("--reason is required: quote what the user said about this session's work")
 
-    def change(state: store.State) -> None:
-        session = table(table(state, "sessions"), sid)
+    def change(doc: store.Doc) -> None:
+        session = table(table(doc, "sessions"), sid)
         table(session, "modes")[args.name] = stamp(args.reason)
         session["seenAt"] = store.now()
 
-    store.mutate(store.global_state_path(), change)
+    store.mutate_state(change)
     print(f"mode {args.name} enabled for session {sid}")
     return 0
 
@@ -720,27 +745,28 @@ def cmd_mode_off(args: Args) -> int:
         return set_persistent(args, False)
     sid = session_id(args)
 
-    def change(state: store.State) -> bool:
-        return view(view(view(state, "sessions"), sid), "modes").pop(args.name, None) is not None
+    def change(doc: store.Doc) -> bool:
+        return view(view(view(doc, "sessions"), sid), "modes").pop(args.name, None) is not None
 
-    removed = store.mutate(store.global_state_path(), change)
+    removed = store.mutate_state(change)
     print(f"mode {args.name} {'disabled' if removed else 'was not on'} for session {sid}")
     return 0
 
 
 def set_enabled(args: Args, enabled: bool) -> int:
     forbid_agent("enable" if enabled else "disable")
-    path = scope_path(resolve_scope(args))
+    scope = resolve_scope(args)
+    path = scope_path(scope)
 
-    def change(state: store.State) -> None:
-        state["enabled"] = enabled
-        state["setBy"] = stamp(args.reason)
+    def change(doc: store.Doc) -> None:
+        doc["enabled"] = enabled
+        doc["setBy"] = stamp(args.reason)
         if enabled:
-            state.pop("disabledReason", None)
+            doc.pop("disabledReason", None)
         else:
-            state["disabledReason"] = args.reason or "disabled by user"
+            doc["disabledReason"] = args.reason or "disabled by user"
 
-    store.mutate(path, change)
+    change_config(scope, path, change)
     print(f"{'project rules' if args.scope == 'project' else 'guardrails hook'} {'enabled' if enabled else 'disabled'} ({path})")
     return 0
 
@@ -785,8 +811,8 @@ def cmd_preset_install(args: Args) -> int:
     by = stamp(args.reason or f"preset {args.name}")
     report: list[str] = []
 
-    def change(state: store.State) -> None:
-        srules = table(state, "rules")
+    def change(doc: store.Doc) -> None:
+        srules = table(doc, "rules")
         for rid, rule in sorted(chosen.items()):
             current = srules.get(rid)
             if isinstance(current, dict) and {k: v for k, v in current.items() if k != "setBy"} == rule:
@@ -795,7 +821,7 @@ def cmd_preset_install(args: Args) -> int:
             always = " (no modes: always enforced)" if scope == "managed" and not policy.json_modes(rule) else ""
             report.append(f"rule {rid}: {'replaced' if rid in srules else 'added'}{always}")
             srules[rid] = {**rule, "setBy": by}
-        smodes = table(state, "modes")
+        smodes = table(doc, "modes")
         for name, mode in sorted(modes.items()):
             if name in smodes:
                 report.append(f"mode {name}: kept existing declaration")
@@ -805,7 +831,7 @@ def cmd_preset_install(args: Args) -> int:
                             "active": False, "setBy": by}
             report.append(f"mode {name}: added (agent may enable: {'yes' if agent else 'no'})")
 
-    change_state(scope, path, change)
+    change_config(scope, path, change)
     print(f"installed preset {args.name} into {path}")
     for line in report:
         print(f"  {line}")
@@ -818,7 +844,7 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--session-id", help="session to act on (default: $CLAUDE_CODE_SESSION_ID)")
     common.add_argument("--reason", help="recorded with the change")
     scoped = argparse.ArgumentParser(add_help=False)
-    scoped.add_argument("--scope", choices=SCOPES, help="which state file to change (default: global); "
+    scoped.add_argument("--scope", choices=SCOPES, help="which config file to change (default: global); "
                         "managed needs root: sudo guardrails --scope managed ...")
 
     parser = argparse.ArgumentParser(prog="guardrails", description="Manage guardrails rules, modes and presets.")
@@ -877,7 +903,7 @@ def build_parser() -> argparse.ArgumentParser:
     preset.add_parser("list", parents=[common], help="list presets")
     show = preset.add_parser("show", parents=[common], help="print a preset")
     show.add_argument("name")
-    install = preset.add_parser("install", parents=[common, scoped], help="copy a preset's rules and modes into state")
+    install = preset.add_parser("install", parents=[common, scoped], help="copy a preset's rules and modes into config")
     install.add_argument("name")
     install.add_argument("--only", help="comma-separated rule ids to install")
 
@@ -928,6 +954,6 @@ def main(argv: list[str]) -> int:
         hint = f" Re-run with sudo: sudo {store.CLI} {shlex.join(argv)}" if getattr(args, "scope", None) == "managed" else ""
         print(f"error: {exc}.{hint}", file=sys.stderr)
         return 2
-    except (Invalid, store.StateError, OSError) as exc:
+    except (Invalid, store.StoreError, OSError) as exc:
         print(f"error: {exc}", file=sys.stderr)
         return 2

@@ -87,8 +87,10 @@ class Card(AstIsolated):
                  render.RuleRow("old-rule", "deny", ["global"], "disabled")]
         modes = [render.ModeRow("incident", "off", False, ["global"]),
                  render.ModeRow("reverse-engineering", "on (by agent: user said RE work)", True, ["global"])]
-        managed = "**Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` present"
-        text = render.status_listing(render.Status(managed, True, False, rules, modes, ["text as reported"]))
+        files = ["**Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` present",
+                 "**Global** config `/Users/me/.config/dev.gaetans.guardrails/claude-plugin/config.json` present",
+                 "**Project** config `/Users/me/src/app/.claude/guardrails.json` absent"]
+        text = render.status_listing(render.Status(files, True, False, rules, modes, ["text as reported"]))
         self.assertEqual(text, doc_block("**Managed** platform file"))
         self.assertNotIn("```\n", out)
 

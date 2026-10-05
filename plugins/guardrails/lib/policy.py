@@ -205,15 +205,15 @@ def merge_rule(base: Rule, override: Mapping[str, Any], reword: bool = True) -> 
     return base._replace(**changes)
 
 
-def _entries(state: object, key: str) -> dict[str, dict[str, Any]]:
-    return {str(k): v for k, v in view(state, key).items() if isinstance(v, dict)}
+def _entries(doc: object, key: str) -> dict[str, dict[str, Any]]:
+    return {str(k): v for k, v in view(doc, key).items() if isinstance(v, dict)}
 
 
-def origins(key: str, managed: object, global_state: object, project_state: object) -> dict[str, list[str]]:
+def origins(key: str, managed: object, global_config: object, project_config: object) -> dict[str, list[str]]:
     """Entry id (of 'rules' or 'modes') → the layers that define it, highest precedence first."""
     out: dict[str, list[str]] = {}
-    for layer, state in zip(LAYERS, (managed, global_state, project_state), strict=True):
-        for name in _entries(state, key):
+    for layer, doc in zip(LAYERS, (managed, global_config, project_config), strict=True):
+        for name in _entries(doc, key):
             out.setdefault(name, []).append(layer)
     return out
 
@@ -223,11 +223,11 @@ class Effective(NamedTuple):
     problems: dict[str, str]
 
 
-def project_enabled(project_state: object) -> bool:
-    return not isinstance(project_state, dict) or project_state.get("enabled", True) is not False
+def project_enabled(project_config: object) -> bool:
+    return not isinstance(project_config, dict) or project_config.get("enabled", True) is not False
 
 
-def effective(managed: object, global_state: object, project_state: object) -> Effective:
+def effective(managed: object, global_config: object, project_config: object) -> Effective:
     """Fold the layers in precedence order; each later layer may only tighten what an earlier one defined.
 
     A managed rule keeps its own texts, and only suspends for modes the managed layer declares. An entry that does
@@ -248,8 +248,8 @@ def effective(managed: object, global_state: object, project_state: object) -> E
         add(rid, raw)
         if rid in rules:
             rules[rid] = rules[rid]._replace(modes=tuple(m for m in rules[rid].modes if m in declared))
-    for state in [global_state, *([project_state] if project_enabled(project_state) else [])]:
-        for rid, raw in _entries(state, "rules").items():
+    for doc in [global_config, *([project_config] if project_enabled(project_config) else [])]:
+        for rid, raw in _entries(doc, "rules").items():
             if rid in problems:
                 continue
             if rid in rules:
@@ -259,22 +259,22 @@ def effective(managed: object, global_state: object, project_state: object) -> E
     return Effective(rules, problems)
 
 
-def effective_rules(managed: object, global_state: object, project_state: object) -> dict[str, Rule]:
-    return effective(managed, global_state, project_state).rules
+def effective_rules(managed: object, global_config: object, project_config: object) -> dict[str, Rule]:
+    return effective(managed, global_config, project_config).rules
 
 
 def removed_key_problems(*layers: tuple[str, object]) -> list[str]:
-    """One problem per state that still has the `wrappers` key, which is no longer read."""
-    return [f"{label} state has a 'wrappers' key: user-defined wrappers are no longer supported, so it is ignored "
-            "(remove it)" for label, state in layers if isinstance(state, dict) and "wrappers" in state]
+    """One problem per config that still has the `wrappers` key, which is no longer read."""
+    return [f"{label} config has a 'wrappers' key: user-defined wrappers are no longer supported, so it is ignored "
+            "(remove it)" for label, doc in layers if isinstance(doc, dict) and "wrappers" in doc]
 
 
-def effective_modes(managed: object, global_state: object, project_state: object) -> dict[str, Mode]:
+def effective_modes(managed: object, global_config: object, project_config: object) -> dict[str, Mode]:
     """A project (repo-controlled) cannot switch on a mode the managed layer declares."""
     modes: dict[str, Mode] = {}
     declared = set(_entries(managed, "modes"))
-    for layer, state in enumerate((managed, global_state, project_state)):
-        for name, raw in _entries(state, "modes").items():
+    for layer, doc in enumerate((managed, global_config, project_config)):
+        for name, raw in _entries(doc, "modes").items():
             if name not in modes:
                 modes[name] = Mode.from_json(raw)
             else:
@@ -282,26 +282,26 @@ def effective_modes(managed: object, global_state: object, project_state: object
     return modes
 
 
-def _shape_problems(path: str, state: object) -> list[str]:
+def _shape_problems(path: str, doc: object) -> list[str]:
     problems = []
     for key in ("rules", "modes"):
-        if not isinstance(state, dict) or key not in state:
+        if not isinstance(doc, dict) or key not in doc:
             continue
-        table = state[key]
+        table = doc[key]
         if not isinstance(table, dict):
-            problems.append(f"managed state {path}: '{key}' must be an object, so all its entries are ignored")
+            problems.append(f"managed file {path}: '{key}' must be an object, so all its entries are ignored")
             continue
-        problems += [f"managed state {path}: {key} entry '{name}' is not an object and is ignored"
+        problems += [f"managed file {path}: {key} entry '{name}' is not an object and is ignored"
                      for name, entry in table.items() if not isinstance(entry, dict)]
     return problems
 
 
-def managed_layer(state: object, path: str) -> tuple[dict[str, Any], list[str]]:
+def managed_layer(doc: object, path: str) -> tuple[dict[str, Any], list[str]]:
     """The managed file as a layer, and what is wrong with it."""
-    problems = _shape_problems(path, state)
-    modes = _entries(state, "modes")
+    problems = _shape_problems(path, doc)
+    modes = _entries(doc, "modes")
     rules: dict[str, dict[str, Any]] = {}
-    for rid, raw in _entries(state, "rules").items():
+    for rid, raw in _entries(doc, "rules").items():
         try:
             rule = Rule.from_json(raw)
         except Invalid as exc:

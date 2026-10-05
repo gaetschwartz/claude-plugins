@@ -44,24 +44,33 @@ failure behaviour are in [references/runtime.md](references/runtime.md); `guardr
 `guardrails disable` (global hook off; managed rules stay). The hook also fails open, loudly, when its runtime is broken, and a
 command the parser cannot finish in 5 seconds is denied ("command too complex to check") rather than let through.
 
-## State and layers
+## Config, state and layers
 
-| scope | file |
+| file | holds |
 |---|---|
-| global | `~/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` (`${CLAUDE_PLUGIN_DATA}`) |
-| project | `<project>/.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json` (none when it is the global file, as when the session starts in the home directory) |
-| managed | `/Library/Application Support/ClaudeCode/guardrails.json` (macOS), `/etc/claude-code/guardrails.json` (Linux); POSIX only |
+| managed: `/Library/Application Support/ClaudeCode/guardrails.json` (macOS), `/etc/claude-code/guardrails.json` (Linux); POSIX only | config |
+| global: `$XDG_CONFIG_HOME/dev.gaetans.guardrails/claude-plugin/config.json` (an absolute `XDG_CONFIG_HOME` only, else `~/.config/…`) | config |
+| project: `<project>/.claude/guardrails.json`, meant to be committed like `settings.json` (none when the project is the home directory) | config |
+| state: `${CLAUDE_PLUGIN_DATA}/state.json` (default `~/.claude/plugins/data/guardrails-gaetans-claude-plugins/`) | state |
+
+Config is what you set on purpose: `rules` (each with a `setBy` record of who changed it, when and why), `modes`
+declarations and persistent activations, and `enabled` / `disabledReason` (`guardrails disable`). Only the CLI writes it,
+atomically, under a lock kept in the data dir (`config.lock`), never next to the config. State is what the hook remembers per
+session (retry acknowledgements, session modes, warnings shown), one table for every project since session ids are unique;
+the hook writes nothing else, never config, and the state is pruned after 7 days. `guardrails status` names each config
+file. Configuration left in `state.json` (`rules`, `modes` or `enabled`), or a project's old
+`.claude/plugins/data/guardrails-gaetans-claude-plugins/state.json`, is no longer read: the hook names it once per session
+and `guardrails status --problems` lists it until it is moved to the config file.
 
 Layers stack managed > global > project. A lower layer adds rules of its own, and for an id a higher layer defines it can only
 tighten: `action` to deny, `retry` off, re-enable, fewer suspending modes, reworded text (not for managed rules); never a
-different `match` or `requires`. Session state (retry acknowledgements, modes, warnings shown) lives in the global file and is
-pruned after 7 days. A state file with a `wrappers` key (user-defined wrappers were removed) is skipped for that key and
-`status` and the hook name it.
+different `match` or `requires`. A config with a `wrappers` key (user-defined wrappers were removed) is skipped for that key
+and `status` and the hook name it.
 
 **Managed scope** is for rules an organisation or machine owner wants enforced whatever a user or project configures. A
 managed rule without `modes` can never be suspended and applies even when the global hook is disabled; lower layers cannot
 reword, loosen, disable or relax it, nor switch off a managed mode that is `active`. An unreadable or invalid managed file is
-skipped and reported, never treated as a guard that is off, and the CLI never overwrites a corrupt state file. Writing it is
+skipped and reported, never treated as a guard that is off, and the CLI never overwrites a corrupt file. Writing it is
 governed by OS permissions only: `rule add|set|rm`, `mode declare|undeclare|on|off` and `preset install` take `--scope
 managed`, a write that is not permitted exits 2 with the `sudo` command to re-run, and the file is created 0644 in a 0755
 directory. `status` warns when the file or its directory is not owned by root or is writable by group or others. Note that

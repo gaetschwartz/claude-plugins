@@ -36,8 +36,14 @@ Windows get an "unsupported platform" notice and no install attempt.
 
 The guard stops mistakes by an honest agent and by an agent steered by hostile repository content (a cloned repo's
 `.claude/settings.json` can set environment variables). Other local users, same-user malware and anyone who can write the
-plugin data dir are out of scope: they could edit the rules directly. Known gap: a repository that sets an absolute
-`CLAUDE_PLUGIN_DATA` chooses which runtime and rules the hook uses.
+plugin data dir or the global config are out of scope: they could edit the rules directly. Known gaps: a repository that
+sets an absolute `CLAUDE_PLUGIN_DATA` chooses which runtime and session state the hook uses, and one that sets an absolute
+`XDG_CONFIG_HOME` chooses which global config it reads. A repository's own `.claude/guardrails.json` is the project layer by
+design: it can add rules and tighten others, never loosen a global or managed one.
+
+Files: the runtime, `state.json` (per-session memory), `state.json.lock`, `config.lock`, `telemetry.db` and `notices/` live
+in the data dir. Configuration does not: the global config is under the XDG config dir and the project config in
+`<project>/.claude/guardrails.json` (see the README). The hook writes into the data dir only, never configuration.
 
 Only `lib/bootstrap.py`, `lib/installer.py` and `lib/hostcli.py` run on the host's Python (3.9 or newer, standard
 library only). The installer downloads the pinned `uv` wheel from the one `files.pythonhosted.org` URL in the manifest

@@ -9,8 +9,10 @@
   the message plus a ready-made `sudo …/bin/guardrails …` command. Show both to the user and stop; the user runs it
   themselves (for example `! sudo …` in the prompt). Do the same for every scope: try the write, and report a
   permission failure with the printed message and sudo command instead of assuming what the user may write.
-- `--scope global|project|managed` picks the file; global is the default. `--scope managed` writes the platform managed
-  file.
+- `--scope global|project|managed` picks the file; global is the default. Global writes `config.json` under the user's
+  XDG config dir, project writes `<project>/.claude/guardrails.json` (a file the repository can commit; there is none
+  when the project is the home directory), `--scope managed` writes the platform managed file. `guardrails status`
+  prints each path.
 - A project entry for a global or managed rule can only tighten it (`rule add` writes it with a note saying so), and
   `rule set` / `rule rm` on a managed rule from another scope are refused (exit 3 pointing at `--scope managed`). See `${CLAUDE_PLUGIN_ROOT}/references/matching.md` for the layering.
 - `guardrails enable` / `guardrails disable` (hook on/off) are refused for agents. The user runs them in a terminal.

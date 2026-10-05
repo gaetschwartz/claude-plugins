@@ -214,8 +214,9 @@ itself start without a tool call and are not covered.
 Order: managed, then global, then project. A lower layer can add rules of its own, and for an id a higher layer already
 defines it can only tighten: switch `action` to deny, `retry` to none, re-enable, remove suspending `modes`, and reword
 `message` / `messageShort` / `description` (not for managed rules). It cannot change `match`, `wrappers` or `requires`,
-loosen, disable or add modes. An override that fails validation is ignored. A project whose state file is the global one (a session started
-in the home directory) has no project layer.
+loosen, disable or add modes. An override that fails validation is ignored. The layers live in the managed file,
+`config.json` under the XDG config dir (global) and `<project>/.claude/guardrails.json` (project). A project at the home
+directory (a session started there) has no project layer: `~/.claude/guardrails.json` is never read.
 
 - Managed rules are always enforced unless their `modes` are declared by the managed file itself; a managed rule with no
   (declared) modes cannot be suspended by anything, and it still applies when the global hook is disabled.
@@ -227,7 +228,7 @@ in the home directory) has no project layer.
 Check these in order when a command the matcher selects still runs:
 
 1. The global hook is disabled (`guardrails disable`): global and project rules are off, managed rules still apply.
-2. Project rules are disabled in the project state: project entries are dropped.
+2. Project rules are disabled in the project config: project entries are dropped.
 3. The rule is disabled (`enabled: false`), or `requires` lists binaries and none is installed.
 4. A listed mode is active, so the rule is suspended.
 5. `retry: same-command` and the identical command was already blocked once this session.
@@ -239,3 +240,5 @@ Check these in order when a command the matcher selects still runs:
 9. The command is one of the documented limits above, or it came through a wrapper and the rule has `"wrappers": false`.
 10. A lower layer cannot loosen a higher one: a global or project entry with `enabled: false` or `action: warn` over a managed
     or global rule has no effect.
+11. The rule is in `state.json` in the plugin data dir, or in a project's old `.claude/plugins/data/…/state.json`, not in a
+    config file: it is not read, the session is told once and `status --problems` names it.

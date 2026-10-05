@@ -251,57 +251,60 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> telemetry.Recorder | None:
         return None
     command, sid = call.command, call.session_id
 
-    gpath = store.global_state_path()
     try:
-        gstate, gstate_ok = store.load(gpath), True
-    except store.StateError:
-        gstate, gstate_ok = {}, False
+        gconfig, gconfig_ok = store.load(store.global_config_path()), True
+    except store.StoreError:
+        gconfig, gconfig_ok = {}, False
+    try:
+        state, state_ok = store.load(store.state_path()), True
+    except store.StoreError:
+        state, state_ok = {}, False
     managed, managed_problems = store.load_managed()
     warnings = tuple(f"guardrails: {problem}" for problem in managed_problems)
     for warning in warnings:
         print(warning, file=sys.stderr)
     managed_ids = frozenset(policy.origins("rules", managed, {}, {}))
+    root = store.project_root(call.cwd)
     try:
-        pstate = store.load(store.project_state_path(call.cwd))
-    except store.StateError:
-        pstate = {}
+        pconfig = store.load(store.project_config_path(root))
+    except store.StoreError:
+        pconfig = {}
 
-    def layers(g: store.State) -> store.Layers:
-        killed = not gstate_ok or g.get("enabled", True) is False
-        return store.Layers(managed, {}, {}) if killed else store.Layers(managed, g, pstate)
-
-    if gstate_ok and gstate.get("enabled", True) is not False:
+    killed = not gconfig_ok or gconfig.get("enabled", True) is False
+    layers = store.Layers(managed, {}, {}) if killed else store.Layers(managed, gconfig, pconfig)
+    if not killed:
         warnings += tuple(f"guardrails: {problem}" for problem in
-                          policy.removed_key_problems(("global", gstate), ("project", pstate)))
-    found = policy.effective(*layers(gstate))
+                          policy.removed_key_problems(("global", gconfig), ("project", pconfig)))
+    warnings += tuple(f"guardrails: {problem}" for problem in
+                      store.stray_config_problems(state) + store.old_project_problems(root))
+    found = policy.effective(*layers)
     warnings += tuple(f"guardrails: rule {rid} is invalid ({why}) and is skipped" for rid, why in found.problems.items())
     if not found.rules and not warnings:
         return None
 
     output: Output | None = None
-    recorder = telemetry.Recorder(store.global_state_path().parent)
+    recorder = telemetry.Recorder(bootstrap.data_dir())
     outcomes: dict[str, telemetry.Outcome] = {}
     pre = judge(command, candidates_of(found.rules), recorder.start)
-    stateless = not gstate_ok
-    if gstate_ok:
+    modes = policy.effective_modes(*layers)
+    stateless = not state_ok
+    if state_ok:
         try:
-            with store.locked(gpath):
-                gstate = store.load(gpath)
-                sessions = policy.view(gstate, "sessions")
+            with store.state_lock():
+                state = store.load(store.state_path())
+                sessions = policy.view(state, "sessions")
                 session = policy.Session.from_json(sessions.get(sid))
-                now = layers(gstate)
-                output, changed = evaluate(command, policy.effective_rules(*now), policy.effective_modes(*now), session,
-                                           sid, managed_ids, warnings, pre, outcomes)
+                output, changed = evaluate(command, found.rules, modes, session, sid, managed_ids, warnings, pre,
+                                           outcomes)
                 if changed:
                     sessions[sid] = session.to_json(store.now())
-                    gstate["sessions"] = sessions
-                    store.write(gpath, gstate)
-        except OSError:
+                    state["sessions"] = sessions
+                    store.write_state(state)
+        except (OSError, store.StoreError):
             stateless = True
     if stateless:
         outcomes.clear()
-        output, _ = evaluate(command, found.rules, policy.effective_modes(*layers(gstate)), policy.Session(), sid,
-                             managed_ids, warnings, pre, outcomes)
+        output, _ = evaluate(command, found.rules, modes, policy.Session(), sid, managed_ids, warnings, pre, outcomes)
     if output:
         json.dump(output, stdout)
     recorder.samples = samples_of(outcomes, pre, (time.perf_counter_ns() - began) // 1000)

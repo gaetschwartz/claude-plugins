@@ -108,6 +108,8 @@ unavailable.
 Output:
 
     **Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` present
+    **Global** config `/Users/me/.config/dev.gaetans.guardrails/claude-plugin/config.json` present
+    **Project** config `/Users/me/src/app/.claude/guardrails.json` absent
 
     ### Guardrails · 4 rules · hook on
 
@@ -124,7 +126,9 @@ Output:
     **Problems**
     - text as reported
 
-- The first line says whether the platform managed file is present, absent (then there are no managed rules) or unreadable.
+- The first three lines name each layer's config file and whether it is present, absent or unreadable: the platform
+  managed file (absent: no managed rules), the global config, and the project config (`**Project** none` outside a
+  project or when the project is the home directory).
 - Rule state is one of `always enforced`, `suspended by <modes>` (only modes that are on now), `disabled`, `enabled`.
   Ids are padded to the longest id (capped at 40), modes to the longest mode name.
 - `--scope` keeps only rules, modes and problems that belong to that layer. `--problems` prints only the `**Problems**` group,

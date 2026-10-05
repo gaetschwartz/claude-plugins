@@ -282,6 +282,17 @@ class RealWrapperReady(RealRuntime):
         self.assertIn("the plugin data directory is not an absolute path", output["systemMessage"])
         self.assertNotIn("permissionDecision", output["hookSpecificOutput"])
 
+    def test_rules_left_in_the_state_file_are_announced_through_the_real_wrapper(self) -> None:
+        payload = self.deny_rule()
+        self.put(self.spath, {"rules": self.get(self.gpath)["rules"]})
+        self.gpath.unlink()
+        proc = subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+                              check=False, env=dict(os.environ), cwd=self.proj)
+        output = json.loads(proc.stdout)
+        self.assertIn(f"the state file {self.spath} still holds rules", output["systemMessage"])
+        self.assertNotIn("hookSpecificOutput", output)
+        self.assertFalse(self.gpath.exists())
+
     def test_the_hook_process_has_written_its_telemetry_when_it_exits(self) -> None:
         payload = self.deny_rule()
         for _ in range(3):
@@ -316,15 +327,17 @@ class RealWrapperReady(RealRuntime):
         data = home / ".claude" / "plugins" / "data" / "guardrails-x"
         data.mkdir(parents=True)
         (data / "runtime").symlink_to(DEV_DATA / "runtime")
-        (data / "state.json").write_text(json.dumps({"rules": {"no-pkill": {
+        config = home / ".config" / "dev.gaetans.guardrails" / "claude-plugin" / "config.json"
+        config.parent.mkdir(parents=True)
+        config.write_text(json.dumps({"rules": {"no-pkill": {
             "match": {"command": "pkill"}, "message": "No pkill.", "action": "deny"}}}))
         payload = json.dumps({"session_id": "home", "cwd": str(home), "tool_name": "Bash",
                               "tool_input": {"command": "sudo pkill x"}})
         for project in (home, home / ".claude", home / ".claude" / "plugins", Path("/")):
             for cwd in (home, home / ".claude", home / ".claude" / "plugins"):
                 with self.subTest(project=str(project), cwd=str(cwd)):
-                    env = {**os.environ, "HOME": str(home), "CLAUDE_PLUGIN_DATA": str(data),
-                           "CLAUDE_PROJECT_DIR": str(project)}
+                    env = {**{k: v for k, v in os.environ.items() if k != "XDG_CONFIG_HOME"}, "HOME": str(home),
+                           "CLAUDE_PLUGIN_DATA": str(data), "CLAUDE_PROJECT_DIR": str(project)}
                     self.assertTrue(self.enforced(payload, env, cwd))
 
 

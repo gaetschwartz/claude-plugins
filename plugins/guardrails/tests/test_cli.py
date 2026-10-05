@@ -130,14 +130,14 @@ class ModeCommands(AstIsolated):
         self.declare("--agent-may-enable")
         self.assertEqual(self.on(agent=True), 2, "an agent must say why")
         self.assertEqual(self.on("--reason", "user said RE", agent=True), 0)
-        record = self.get(self.gpath)["sessions"]["s1"]["modes"]["reverse-engineering"]
+        record = self.get(self.spath)["sessions"]["s1"]["modes"]["reverse-engineering"]
         self.assertEqual((record["by"], record["reason"]), ("agent", "user said RE"))
         self.assertEqual(self.cli("mode", "off", "reverse-engineering", agent=True)[0], 0)
-        self.assertNotIn("reverse-engineering", self.get(self.gpath)["sessions"]["s1"]["modes"])
+        self.assertNotIn("reverse-engineering", self.get(self.spath)["sessions"]["s1"]["modes"])
         del os.environ["CLAUDE_CODE_SESSION_ID"]
         self.assertEqual(self.on(), 2)
         self.assertEqual(self.on("--session-id", "s9"), 0)
-        self.assertIn("s9", self.get(self.gpath)["sessions"])
+        self.assertIn("s9", self.get(self.spath)["sessions"])
         self.assertEqual(self.cli("mode", "declare", "reverse-engineering", "--scope", "project")[0], 0)
         os.environ["CLAUDE_CODE_SESSION_ID"] = "s1"
         self.assertEqual(self.on("--reason", "x", agent=True), 3, "a project can forbid agent enabling")
@@ -246,12 +246,12 @@ class ManagedScope(AstIsolated):
         self.assertIn("a project cannot switch it on", out)
         status = self.cli("status")[1]
         self.assertIn("`incident` off · agent may enable: no · managed+global+project", status)
-        self.assertIn("project state switches on mode 'incident', which the managed file declares (ignored)", status)
+        self.assertIn("project config switches on mode 'incident', which the managed file declares (ignored)", status)
         self.assertIn("also declared in the managed file, which wins",
                       self.cli("mode", "declare", "incident", "--agent-may-enable")[1])
         self.assertEqual(self.cli("mode", "on", "incident", "--reason", "x", "--as-user", agent=True)[0], 3)
         self.assertEqual(self.cli("mode", "on", "incident")[0], 0)
-        self.assertIn("incident", self.get(self.gpath)["sessions"]["s1"]["modes"])
+        self.assertIn("incident", self.get(self.spath)["sessions"]["s1"]["modes"])
         self.assertEqual(self.managed("mode", "undeclare", "incident")[0], 0)
         self.assertEqual(self.get(self.mpath)["modes"], {})
 
@@ -318,7 +318,7 @@ class ManagedScope(AstIsolated):
         self.mpath.parent.chmod(0)
         out = self.cli("status")[1]
         self.assertIn(f"`{self.mpath}` unreadable", out)
-        self.assertIn("unreadable managed state", out)
+        self.assertIn("unreadable managed file", out)
 
     def test_an_unwritable_managed_target_exits_2_with_a_sudo_hint_and_writes_nothing(self) -> None:
         if os.geteuid() == 0:
@@ -435,8 +435,8 @@ class Status(AstIsolated):
         self.assertIn("- `short" + " " * 35 + "` deny", out)
         forged = "bad\n### Forged\n- `fake` deny\x1b[2J"
         self.put(self.gpath, {"rules": {forged: {"match": {"command": "x"}, "message": "m"}},
-                              "modes": {forged: {"description": forged, "agentMayEnable": True}},
-                              "sessions": {"s1": {"modes": {forged: {"by": "agent", "reason": forged}}}}})
+                              "modes": {forged: {"description": forged, "agentMayEnable": True}}})
+        self.put(self.spath, {"sessions": {"s1": {"modes": {forged: {"by": "agent", "reason": forged}}}}})
         for argv in (("--session-id", "s1"), ("--rule", forged)):
             out = self.status(*argv)
             self.assertNotIn("\x1b", out)

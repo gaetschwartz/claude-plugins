@@ -23,7 +23,7 @@ Parse the text above; every long flag has a short one.
   turned into a JSON object for `guardrails rule set --json`; the keys are `action`, `retry`, `enabled`, `modes`,
   `message`, `messageShort`, `description`, `match`, `wrappers`, `requires`. Comma lists for `modes` and `requires`
   become JSON arrays, `enabled` and `wrappers` are booleans, `match` is a JSON object that replaces the whole matcher
-  (the rule's current `match` from the state file is the starting point), an empty value becomes `null`, which clears
+  (the rule's current `match` from its config file is the starting point), an empty value becomes `null`, which clears
   the field.
 - `-s` / `--scope global|project|managed` (default global), `-y` / `--yes` (do not confirm `rm`).
 - No arguments: run `guardrails status`, paste its output VERBATIM, ask (AskUserQuestion, or chat when there

@@ -53,11 +53,12 @@ def caught(out: str) -> dict[str, bool]:
     return {row["cmd"]: row["glyph"] == "✗" for row in rows}
 
 
-SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR")
+SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "XDG_CONFIG_HOME")
 
 
 class Isolated(unittest.TestCase):
-    """Global state under <tmp>/data, the managed file at <tmp>/managed, project root <tmp>/proj, no agent markers."""
+    """State under <tmp>/data, global config under <tmp>/xdg, HOME at <tmp>/home, the managed file at <tmp>/managed,
+    project root <tmp>/proj, no agent markers."""
 
     silent_telemetry = True
 
@@ -68,6 +69,7 @@ class Isolated(unittest.TestCase):
         self.data = self.tmp / "data"
         self.proj = self.tmp / "proj"
         self.proj.mkdir()
+        self.data.mkdir()
         self.mpath = self.tmp / "managed" / "guardrails.json"
         if self.silent_telemetry:
             quiet = mock.patch.object(telemetry.Recorder, "start")
@@ -77,7 +79,10 @@ class Isolated(unittest.TestCase):
         patch_managed.start()
         self.addCleanup(patch_managed.stop)
         env = {k: v for k, v in os.environ.items() if k not in SCRUBBED}
-        env.update(CLAUDE_PLUGIN_DATA=str(self.data), CLAUDE_PROJECT_DIR=str(self.proj))
+        self.home = self.tmp / "home"
+        self.home.mkdir()
+        env.update(CLAUDE_PLUGIN_DATA=str(self.data), CLAUDE_PROJECT_DIR=str(self.proj),
+                   XDG_CONFIG_HOME=str(self.tmp / "xdg"), HOME=str(self.home))
         patcher = mock.patch.dict(os.environ, env, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
@@ -87,11 +92,15 @@ class Isolated(unittest.TestCase):
 
     @property
     def gpath(self) -> Path:
-        return self.data / "state.json"
+        return self.tmp / "xdg" / "dev.gaetans.guardrails" / "claude-plugin" / "config.json"
 
     @property
     def ppath(self) -> Path:
-        return self.proj / ".claude" / "plugins" / "data" / "guardrails-gaetans-claude-plugins" / "state.json"
+        return self.proj / ".claude" / "guardrails.json"
+
+    @property
+    def spath(self) -> Path:
+        return self.data / "state.json"
 
     def put(self, path: Path, state: Any) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
