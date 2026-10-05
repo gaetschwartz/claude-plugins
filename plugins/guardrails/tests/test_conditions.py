@@ -397,6 +397,26 @@ class Shown(AstIsolated):
         self.assertIn('- `on-here ` deny · global · enabled · when `{"not":{"bin":"no-such-bin-xyz"}}` · 1 message case',
                       out)
 
+    def test_status_and_rule_test_judge_when_for_the_tool_and_background_flag_asked_for(self) -> None:
+        self.put(self.gpath, {"rules": {
+            "fg": rule(when={"not": {"background": True}}), "bg": rule(when={"background": True}),
+            "mon": rule(when={"tool": "Monitor"}), "bash": rule(when={"tool": "Bash"})}})
+        for flags, active in (((), {"fg", "bash"}), (("--background",), {"bg", "bash"}),
+                              (("--tool", "Monitor"), {"fg", "mon"}), (("--tool", "Monitor", "--background"), {"bg", "mon"})):
+            with self.subTest(flags=flags):
+                out = self.cli("status", *flags)[1]
+                inactive = {rid for rid in ("fg", "bg", "mon", "bash") if f"`{rid}" in out and
+                            next(line for line in out.splitlines() if f"`{rid}" in line).count("inactive here")}
+                self.assertEqual(inactive, {"fg", "bg", "mon", "bash"} - active)
+                for rid in ("fg", "bg", "mon", "bash"):
+                    code, card, _ = self.cli("rule", "test", "--id", rid, "strings x", *flags)
+                    self.assertEqual(code, 0)
+                    self.assertIn("does not hold here" if rid not in active else "· holds here", card)
+
+    def test_the_tool_flag_takes_bash_or_monitor(self) -> None:
+        with self.assertRaises(SystemExit):
+            self.cli("status", "--tool", "Edit")
+
     def test_rule_test_shows_the_condition_the_cases_and_the_case_per_command(self) -> None:
         out = self.cli("rule", "test", "--json", json.dumps(CASES), "rm -rf / a", "sudo rm -rf /x y", "rm -rf /x y",
                        "ls")[1]

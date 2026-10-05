@@ -202,6 +202,11 @@ class Snapshot:
         return [p for p, layers in zip(self.problems, self.problem_layers) if scope is None or scope in layers]
 
 
+def call_env(args: Args, root: Path | None) -> conditions.Env:
+    """The call a `when` is judged against: the tool and background flag the command line asked for."""
+    return conditions.Env(tool=args.tool, root=root, background=args.background)
+
+
 def snapshot(args: Args) -> Snapshot:
     mconfig, problems = store.load_managed()
     layers: list[frozenset[str]] = [frozenset({"managed"})] * len(problems)
@@ -272,7 +277,7 @@ def snapshot(args: Args) -> Snapshot:
                    f"while the engine cannot run ({exc}).{fails_open}", *where)
     return Snapshot(mconfig, gconfig, pconfig, gpath, ppath, gconfig.get("enabled", True) is not False,
                     rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers,
-                    frozenset(blind), conditions.Env(root=root))
+                    frozenset(blind), call_env(args, root))
 
 
 def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, policy.Activation], blind: bool = False,
@@ -643,7 +648,7 @@ def cmd_rule_test(args: Args) -> int:
 
     if not examples:
         raise Invalid("give at least one command or --examples")
-    env = conditions.Env(root=store.project_root())
+    env = call_env(args, store.project_root())
     notes = effect_notes(args, rule, layers, mconfig, gconfig, pconfig, env)
     evaluations = [matching.evaluate(cmd, {rid: rule}, env) for cmd, _, _ in examples]
     broken = {rid_: why for ev in evaluations for rid_, why in ev.invalid.items()}
@@ -892,13 +897,18 @@ def build_parser() -> argparse.ArgumentParser:
     common.add_argument("--as-user", action="store_true", help="agents only: the user explicitly asked for this change")
     common.add_argument("--session-id", help="session to act on (default: $CLAUDE_CODE_SESSION_ID)")
     common.add_argument("--reason", help="recorded with the change")
+    call = argparse.ArgumentParser(add_help=False)
+    call.add_argument("--tool", choices=conditions.TOOLS, default=conditions.TOOLS[0],
+                      help="judge each rule's when for a call of this tool (default: Bash)")
+    call.add_argument("--background", action="store_true",
+                      help="judge each rule's when for a call that asked to run in the background")
     scoped = argparse.ArgumentParser(add_help=False)
     scoped.add_argument("--scope", choices=SCOPES, help="which config file to change (default: global); "
                         "managed needs root: sudo guardrails --scope managed ...")
 
     parser = argparse.ArgumentParser(prog="guardrails", description="Manage guardrails rules, modes and presets.")
     verbs = parser.add_subparsers(dest="verb", required=True)
-    status = verbs.add_parser("status", parents=[common], help="show effective rules and modes")
+    status = verbs.add_parser("status", parents=[common, call], help="show effective rules and modes")
     status.add_argument("--scope", choices=SCOPES, help="list only rules and modes with an entry in this layer")
     status.add_argument("--problems", action="store_true", help="print only the problems")
     status.add_argument("--rule", metavar="ID", help="print only this rule's row")
@@ -928,10 +938,10 @@ def build_parser() -> argparse.ArgumentParser:
     set_.add_argument("--json", required=True, help="fields to change as a JSON object (null removes one), @<file> or - for stdin")
     rm = rule.add_parser("rm", parents=[common, scoped], help="remove a rule")
     rm.add_argument("id")
-    test = rule.add_parser("test", parents=[common], help="dry-run a rule against sample commands")
+    test = rule.add_parser("test", parents=[common, call], help="dry-run a rule against sample commands")
     source = test.add_mutually_exclusive_group(required=True)
     source.add_argument("--json", help="a draft rule as a JSON object, @<file> or - for stdin; its match is one "
-                        "ast-grep rule that may use the command, assignment, wrapper, statement, redirect and discards atoms")
+                        "ast-grep rule that may use the command, assignment, wrapper, statement, redirect, discards and capture atoms")
     source.add_argument("--id", help="an installed rule's id")
     test.add_argument("commands", nargs="*", metavar="CMD")
     test.add_argument("--examples", help='JSON list of {"cmd", "source", "expect"} objects, @<file> or - for stdin')
