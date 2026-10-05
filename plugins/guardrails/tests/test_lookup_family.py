@@ -12,7 +12,13 @@ DRAFT = json.loads((ROOT / "tests" / "lookup_family.extended.json").read_text())
 STILL_DENIED = [
     "kill $(pgrep -f x)", "pgrep -f x | xargs kill", "ps aux | grep x | xargs kill", "kill $(lsof -ti:80)",
     "kill $(pidof vite)", "lsof -ti:3000 | xargs kill -9", "echo $(pgrep -f x)", "pgrep -f x | head -1",
+    "lsof -ti :3010 :3011 2>/dev/null | xargs -r kill -9", "lsof -ti:80 2>/dev/null | xargs kill",
+    "ps aux 2>/dev/null | grep x | xargs kill", "ps aux 2>&1 | grep x | xargs kill",
+    "ps aux >/dev/null 2>&1 | grep x | xargs kill", "ps aux &>/dev/null | grep x | xargs kill",
+    "ps aux >/dev/null | grep x | xargs kill", "ps aux | grep x 2>/dev/null | xargs kill",
+    "lsof -ti:80 | xargs kill 2>/dev/null",
 ]
+PROCESS_SUBSTITUTED = ["while read p; do kill $p; done < <(pgrep -f x)"]
 
 ASSIGNED_THEN_KILLED = [
     "PID=$(ps aux | grep X | awk '{print $2}'); kill $PID",
@@ -29,6 +35,12 @@ LOOPED = [
     "ps aux | grep X | awk '{print $2}' | while read p; do kill $p; done",
     "lsof -ti:80 | while read p; do kill $p; done",
     "ps -C node -o pid= | while read p; do kill -9 $p; done",
+    "lsof -ti:80 2>/dev/null | while read p; do kill $p; done",
+    "lsof -ti:80 2>&1 | while read p; do kill $p; done",
+    "lsof -ti:80 >/dev/null 2>&1 | while read p; do kill $p; done",
+    "ps aux &>/dev/null | grep X | awk '{print $2}' | while read p; do kill $p; done",
+    "ps aux 2>/dev/null | grep X | awk '{print $2}' | while read p; do kill $p; done",
+    "ps aux | grep X 2>/dev/null | awk '{print $2}' | while read p; do kill $p; done",
 ]
 GENERATED_SCRIPT = [
     "ps aux | grep X | awk '{print \"kill \" $2}' | sh",
@@ -71,6 +83,9 @@ class LookupFamily(AstIsolated):
 
     def test_existing_catches_stay_denied(self) -> None:
         self.assert_denied(STILL_DENIED)
+
+    def test_a_loop_fed_by_a_process_substitution_is_denied(self) -> None:
+        self.assert_denied(PROCESS_SUBSTITUTED)
 
     def test_a_pid_assigned_from_an_imprecise_lookup_then_killed_is_denied(self) -> None:
         self.assert_denied(ASSIGNED_THEN_KILLED)

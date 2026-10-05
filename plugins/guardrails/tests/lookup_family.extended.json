@@ -15,6 +15,9 @@
           "any": [
             {
               "kind": "command_substitution"
+            },
+            {
+              "kind": "process_substitution"
             }
           ],
           "stopBy": "end"
@@ -34,19 +37,38 @@
         "command": "kill"
       },
       {
-        "follows": {
-          "has": {
-            "field": "name",
-            "regex": "^(ps|pidof|lsof)$"
-          },
+        "statement": {
           "kind": "command",
-          "stopBy": "end"
+          "regex": "^xargs\\b.*\\bkill\\b"
         },
         "inside": {
           "kind": "pipeline"
         },
-        "kind": "command",
-        "regex": "^xargs\\b.*\\bkill\\b"
+        "follows": {
+          "any": [
+            {
+              "statement": {
+                "command": [
+                  "ps",
+                  "pidof",
+                  "lsof"
+                ]
+              }
+            },
+            {
+              "kind": "redirected_statement",
+              "has": {
+                "command": [
+                  "ps",
+                  "pidof",
+                  "lsof"
+                ],
+                "stopBy": "end"
+              }
+            }
+          ],
+          "stopBy": "end"
+        }
       },
       {
         "any": [
@@ -292,6 +314,49 @@
                     "rg",
                     "awk",
                     "sed"
+                  ],
+                  "stopBy": "end"
+                }
+              },
+              {
+                "kind": "redirected_statement",
+                "has": {
+                  "any": [
+                    {
+                      "command": [
+                        "pgrep",
+                        "pidof",
+                        "lsof"
+                      ]
+                    },
+                    {
+                      "command": "ps",
+                      "has": {
+                        "regex": "^-C"
+                      }
+                    },
+                    {
+                      "command": "ps",
+                      "not": {
+                        "has": {
+                          "regex": "^-[A-Za-z]*p[A-Za-z0-9]*$|^--pid(=.*)?$"
+                        }
+                      },
+                      "inside": {
+                        "kind": "pipeline"
+                      },
+                      "precedes": {
+                        "command": [
+                          "grep",
+                          "egrep",
+                          "fgrep",
+                          "rg",
+                          "awk",
+                          "sed"
+                        ],
+                        "stopBy": "end"
+                      }
+                    }
                   ],
                   "stopBy": "end"
                 }
