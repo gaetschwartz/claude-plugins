@@ -90,7 +90,7 @@
         "bin": "cargo-nextest"
       },
       "action": "warn",
-      "message": "Prefer `cargo nextest run` over `cargo test` (faster, one process per test); see `cargo nextest run --help`. Doctests still need `cargo test --doc`."
+      "message": "Prefer `cargo nextest run` over `cargo test` (faster, one process per test; `--nocapture` is `--no-capture`); see `cargo nextest run --help`. Doctests still need `cargo test --doc`."
     },
     "du-dust": {
       "description": "du when dust is installed",

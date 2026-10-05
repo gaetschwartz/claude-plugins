@@ -161,7 +161,7 @@ class Examples(AstIsolated):
         return engine.texts_of(rule, evaluation.details.get("r")).full
 
     def test_modern_cli_messages_name_the_replacement(self) -> None:
-        expect = {"cargo-nextest": ("cargo test -p foo my_test", ("cargo nextest run", "cargo test --doc")),
+        expect = {"cargo-nextest": ("cargo test -p foo my_test", ("cargo nextest run", "cargo test --doc", "`--nocapture` is `--no-capture`")),
                   "du-dust": ("du -sh /tmp/x", ("`dust -d 1 /tmp/x` for one level",))}
         for rid, (command, needles) in expect.items():
             text = self.says("modern-cli", rid, command)
