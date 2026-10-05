@@ -171,7 +171,7 @@ class Cli(AstIsolated):
         self.assertEqual(self.cli("rule", "add", "r", "--json", json.dumps(self.RULE))[0], 0)
         code, _, err = self.cli("rule", "set", "r", "--json", '{"match": {"kind": "program", "regex": "(", "kind": "word"}}')
         self.assertEqual(code, 2)
-        self.assertIn("does not compile", err)
+        self.assertIn("'match.regex' is not a valid regex", err)
         code, _, err = self.cli("rule", "set", "r", "--json", '{"match": {"bogus": 1}}')
         self.assertEqual(code, 2)
         self.assertIn("unknown field match.bogus", err)
@@ -266,7 +266,7 @@ class Hook(AstIsolated):
         out = self.hook("pkill x")
         assert out is not None
         self.assertIn("deny", json.dumps(out))
-        self.assertIn("rule bad does not compile (error: look-around", out["systemMessage"])
+        self.assertIn("rule bad is invalid ('match.regex' is not a valid regex (error: look-around", out["systemMessage"])
 
     def test_a_catastrophic_regex_is_linear_and_still_judged(self) -> None:
         self.put(self.gpath, {"rules": {"slow": {"match": {"kind": "program", "regex": "(a+)+$"}, "message": "No."},
@@ -294,7 +294,7 @@ class Hook(AstIsolated):
                 with self.subTest(pattern=pattern, verb=argv[1]):
                     code, _, err = self.cli(*argv)
                     self.assertEqual(code, 2)
-                    self.assertIn("does not compile", err)
+                    self.assertIn("'match.regex' is not a valid regex", err)
         self.assertNotIn("r", self.get(self.gpath)["rules"])
         self.assertEqual(self.cli("rule", "add", "ok", "--json", json.dumps({"match": {"kind": "program", "regex": r"\bfoo\b"},
                                                                           "message": "m"}))[0], 0)

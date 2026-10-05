@@ -70,6 +70,7 @@ def match_of(raw: object) -> dict[str, Any]:
     match = rulebuilder.checked(raw)
     if (size := ast_size(match)) > MAX_AST_BYTES:
         raise Invalid(f"'match' is {size} bytes, over the {MAX_AST_BYTES // 1024} KiB limit; split it into rules")
+    rulebuilder.check_regexes(match)
     return match
 
 

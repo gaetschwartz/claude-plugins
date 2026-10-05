@@ -318,6 +318,40 @@ def checked(match: object) -> dict[str, Any]:
     return match
 
 
+def regexes(node: object, where: str) -> Iterator[tuple[str, str]]:
+    """(path, regex) for every regex a rule is written with: `regex` keys (also inside the assignment and redirect
+    atoms) and the `args` of a command."""
+    if isinstance(node, list):
+        for i, item in enumerate(node):
+            yield from regexes(item, f"{where}[{i}]")
+    elif isinstance(node, dict):
+        for key, value in node.items():
+            if key in ("regex", "args") and isinstance(value, str):
+                yield f"{where}.{key}", value
+            else:
+                yield from regexes(value, f"{where}.{key}")
+
+
+def check_regexes(match: object) -> None:
+    """Raise policy.Invalid for a regex ast-grep cannot compile (its Rust dialect, which Python's `re` does not
+    share); without the library nothing can be checked here and `rule add` / `status` compile-check later."""
+    found = list(regexes(match, "match"))
+    if not found:
+        return
+    try:
+        from ast_grep_py import SgRoot
+    except ImportError:
+        return
+    root = SgRoot("x", "bash").root()
+    for where, text in found:
+        try:
+            root.find({"rule": {"regex": text}})
+        except RuntimeError as exc:
+            reason = next((line.strip() for line in reversed(str(exc).splitlines()) if line.strip()), "invalid regex")
+            raise policy.Invalid(f"'{where}' is not a valid regex ({reason}); ast-grep uses the Rust regex syntax: "
+                                 "no look-around or back-references") from None
+
+
 def widen(rule: Any) -> Any:
     """A pattern ending in ` $$$` also selects the command when it has no arguments (the bare hole never does)."""
     if isinstance(rule, list):
