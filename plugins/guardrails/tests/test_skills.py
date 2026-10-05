@@ -7,7 +7,7 @@ import unittest
 from helpers import ROOT
 
 SKILLS = ROOT / "skills"
-EXPECTED = {"status", "stats", "explain", "new", "edit", "mode", "setup"}
+EXPECTED = {"status", "stats", "explain", "audit", "new", "edit", "mode", "setup"}
 TEXT_SUFFIXES = {".md", ".json", ".py", ".sh", ".toml", ".txt"}
 READ_ONLY_TOOLS = ["Bash(guardrails status *)", "Bash(guardrails rule test *)", "Bash(guardrails rule ast *)"]
 CAT_REFERENCES = "Bash(cat ${CLAUDE_PLUGIN_ROOT}/references/*)"
@@ -27,15 +27,16 @@ def tools(name: str) -> list[str]:
 
 
 class SkillFiles(unittest.TestCase):
-    def test_the_seven_skills_exist_and_are_named_after_their_directory(self) -> None:
+    def test_the_eight_skills_exist_and_are_named_after_their_directory(self) -> None:
         self.assertEqual({p.name for p in SKILLS.iterdir()}, EXPECTED)
         for name in EXPECTED:
             self.assertEqual(skill(name)[0]["name"].strip(), name)
 
-    def test_only_status_stats_and_explain_fork_and_each_injects_exactly_what_it_may_read(self) -> None:
+    def test_only_status_stats_explain_and_audit_fork_and_each_injects_exactly_what_it_may_read(self) -> None:
         for name in EXPECTED:
             fields, body = skill(name)
-            files = {"status": set(), "stats": set(), "explain": {"matching.md", "presentation.md"}}.get(name)
+            files = {"status": set(), "stats": set(), "audit": set(),
+                     "explain": {"matching.md", "presentation.md"}}.get(name)
             injected = set(re.findall(r"^!`cat \$\{CLAUDE_PLUGIN_ROOT\}/references/([a-z-]+\.md)`$", body, re.MULTILINE))
             with self.subTest(skill=name):
                 self.assertEqual(fields.get("context", "").strip(), "fork" if files is not None else "")
@@ -45,14 +46,16 @@ class SkillFiles(unittest.TestCase):
     def test_allowed_tools_are_pinned_read_only_and_never_preapprove_changes(self) -> None:
         pinned = {"new": [*READ_ONLY_TOOLS, "Bash(guardrails preset list *)", "AskUserQuestion"],
                   "edit": [*READ_ONLY_TOOLS, "AskUserQuestion"], "explain": [*READ_ONLY_TOOLS, CAT_REFERENCES],
-                  "status": ["Bash(guardrails status *)"], "stats": ["Bash(guardrails stats *)"]}
+                  "status": ["Bash(guardrails status *)"], "stats": ["Bash(guardrails stats *)"],
+                  "audit": ["Bash(guardrails audit *)"]}
         for name, expected in pinned.items():
             with self.subTest(skill=name):
                 self.assertEqual(tools(name), expected)
-        fields, body = skill("explain")
-        self.assertEqual(set(fields["disallowed-tools"].split()), {"Edit", "Write", "NotebookEdit"})
-        self.assertIsNone(re.search(r"guardrails (rule (add|set|rm)|enable|disable|mode (on|off|declare|undeclare))|"
-                                    r"preset install|sudo (guardrails|python)", body))
+        for name in ("explain", "audit"):
+            fields, body = skill(name)
+            self.assertEqual(set(fields["disallowed-tools"].split()), {"Edit", "Write", "NotebookEdit"})
+            self.assertIsNone(re.search(r"guardrails (rule (add|set|rm)|enable|disable|mode (on|off|declare|undeclare))|"
+                                        r"preset install|sudo (guardrails|python)", body))
         for name in ("new", "edit"):
             self.assertIn("--json -", skill(name)[1])
             self.assertNotIn("Write", skill(name)[0]["allowed-tools"])

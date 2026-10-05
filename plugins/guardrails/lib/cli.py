@@ -13,6 +13,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, NamedTuple
 
+import audit
 import bootstrap
 import conditions
 import hostcli
@@ -367,6 +368,27 @@ def cmd_stats(args: Args) -> int:
         print(render.rule_days(rows, args.rule, days))
     else:
         print(render.stats_card(rows, sorted(policy.effective(*configs()).rules), days, args.slow))
+    return 0
+
+
+def audit_report(args: Args) -> audit.Report:
+    rules = policy.effective(*configs()).rules
+    window = {side: max(0, value if value is not None else args.context if args.context is not None else 4)
+              for side, value in (("before", args.before), ("after", args.after))}
+    warn = frozenset(rid for rid, rule in rules.items() if rule.action == policy.Action.WARN)
+    query = audit.Query(args.rule, None if args.all_rules else frozenset(rules), warn, **window)
+    return audit.find_denials(audit.projects_dir(), max(args.limit, 1), query)
+
+
+def cmd_audit(args: Args) -> int:
+    report = audit_report(args)
+    if args.json:
+        print(json.dumps({"projects": report.projects, "rule": args.rule, "files_total": report.files_total,
+                          "files_scanned": len(report.opened), "stopped_early": report.stopped_early,
+                          "dropped_unknown_rules": report.dropped, "corrupt_lines": report.corrupt,
+                          "unreadable_files": report.unreadable, "hits": report.hits}, ensure_ascii=False))
+    else:
+        print(render.audit_card(report, args.rule))
     return 0
 
 
@@ -882,6 +904,15 @@ def build_parser() -> argparse.ArgumentParser:
     stats.add_argument("--reset", action="store_true", help="delete all telemetry")
     stats.add_argument("--as-user", action="store_true", help="agents only: the user explicitly asked for this change")
 
+    audit_ = verbs.add_parser("audit", help="the most recent denials found in Claude Code transcripts, with the messages around each")
+    audit_.add_argument("rule", nargs="?", help="only denials by this rule")
+    audit_.add_argument("-n", "--limit", type=int, default=10, help="how many denials, newest first (default 10)")
+    audit_.add_argument("-B", "--before", type=int, help="messages before the denied call (default 4)")
+    audit_.add_argument("-A", "--after", type=int, help="messages after the denial (default 4)")
+    audit_.add_argument("-C", "--context", type=int, help="messages on both sides; -A and -B win over it")
+    audit_.add_argument("--all-rules", action="store_true", help="keep denials by rules that are not in the current config")
+    audit_.add_argument("--json", action="store_true", help="print the machine form")
+
     rule = verbs.add_parser("rule", help="add, change or remove rules").add_subparsers(dest="op", required=True)
     add = rule.add_parser("add", parents=[common, scoped], help="add or replace a rule")
     add.add_argument("id")
@@ -945,6 +976,7 @@ def build_parser() -> argparse.ArgumentParser:
 HANDLERS: dict[tuple[str, str | None], Callable[[Args], int]] = {
     ("status", None): cmd_status,
     ("stats", None): cmd_stats,
+    ("audit", None): cmd_audit,
     ("rule", "add"): cmd_rule_add,
     ("rule", "set"): cmd_rule_set,
     ("rule", "rm"): cmd_rule_rm,

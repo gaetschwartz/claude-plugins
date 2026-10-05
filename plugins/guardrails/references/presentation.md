@@ -171,6 +171,40 @@ Output (times are local; `--slow` sorts **Rules** by average time instead of by 
 A rule id argument prints `### <id> · last 7 days` and one row per local day under **Days**. With nothing recorded the
 output is one line.
 
+## Audit: `guardrails audit`
+
+    guardrails audit [<rule>] [-n N] [-A N] [-B N] [-C N] [--all-rules] [--json]
+
+Output, one card per denial, newest first (times are local; `--json` prints the same data for the `audit` skill):
+
+    ### Guardrails audit · 1 denial · newest first
+
+    **Scope** scanned 16 of 3547 transcript files under `/Users/me/.claude/projects`
+
+    #### no-pkill · Bash · 2026-10-05 11:55:35
+
+    **Command** `pkill zz_no_such_process_zz`
+    **Denied** the denial text as the hook gave it, cut at 2000 characters
+    **Where** `-Users-me-app/0b1c2d3e.jsonl:10973` · session `0b1c2d3e` · cwd `/Users/me/app`
+
+    **Before**
+    - assistant · tool_use Bash `pgrep -fl zz_none_marker`
+
+    **After**
+    - assistant · text: Checking the live setup.
+
+- `-B` / `-A` count transcript messages (user and assistant entries) before the denied call and after the denial, 4 each by
+  default; `-C` sets both and an explicit `-A` or `-B` wins over it. Blocks are cut (commands 2000 characters, text and
+  results 600, the denial text 2000) and a cut one ends with ` …`.
+- A denial is found only as an error `tool_result` of a Bash or Monitor call in the same transcript, whose text starts with
+  `[guardrails:<id>]`, bare or after `PreToolUse:<tool> hook error: `. One card per tool call: copies in resumed sessions
+  show as `also in N other files`.
+- **Scope** names how many transcript files were opened (the scan stops once no older file can hold a newer denial), the
+  denials left out because their rule is not in the current config (`--all-rules` keeps them), and unreadable lines or
+  files. With no denial the output is one line saying so with the scope.
+- Commands and results can contain secrets: they go to stdout only. Text is made single-line and safe like every other
+  renderer.
+
 ## Explain
 
 `explain` pastes the rule card of `guardrails rule test --id <id> …` verbatim. After a blank line it adds

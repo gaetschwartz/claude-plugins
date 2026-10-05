@@ -11,6 +11,7 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from typing import Any
 
+import audit
 import policy
 import telemetry
 
@@ -346,3 +347,56 @@ def rule_days(rows: list[telemetry.Row], rule: str, days: int) -> str:
     width = common_width(list(by_day))
     return "\n".join([f"### {clean(rule)} · last {plural(days, 'day')}", "", "**Days**",
                       *(f"- {span(day, width)} {counts(by_day[day])}" for day in sorted(by_day, reverse=True))])
+
+
+def audit_block(item: audit.Block, role: str) -> str:
+    cut = " …" if item["truncated"] else ""
+    match item["type"]:
+        case "tool_use":
+            return f"- {role} · tool_use {clean(item['name'] or '')} {span(item['text'])}{cut}"
+        case "tool_result":
+            return f"- {role} · tool_result{' (error)' if item['is_error'] else ''}: {prose(item['text'])}{cut}"
+        case "text":
+            return f"- {role} · text: {prose(item['text'])}{cut}"
+    return f"- {role} · {clean(item['type'])}"
+
+
+def audit_window(title: str, messages: list[audit.Message]) -> list[str]:
+    if not messages:
+        return []
+    return ["", f"**{title}**", *(audit_block(item, m["role"]) for m in messages for item in m["blocks"])]
+
+
+def audit_hit(hit: audit.Hit) -> list[str]:
+    where = f"{span(hit['file'] + ':' + str(hit['line']))}"
+    if hit["session_id"]:
+        where += f" · session {span(hit['session_id'][:8])}"
+    if hit["is_sidechain"]:
+        where += f" · subagent {span(str(hit['agent_id']))}" if hit["agent_id"] else " · subagent"
+    if hit["cwd"]:
+        where += f" · cwd {span(str(hit['cwd']))}"
+    if hit["also_in"]:
+        where += f" · also in {plural(len(hit['also_in']), 'other file')}"
+    return [f"#### {clean(hit['rule'])} · {hit['tool']} · {hit['local'] or hit['timestamp']}", "",
+            f"**Command** {span(hit['command'])}{' …' if hit['command_truncated'] else ''}",
+            f"**Denied** {prose(hit['message'])}{' …' if hit['message_truncated'] else ''}", f"**Where** {where}",
+            *audit_window("Before", hit["before"]), *audit_window("After", hit["after"]), ""]
+
+
+def audit_card(report: audit.Report, rule: str | None) -> str:
+    scope = f"{len(report.opened)} of {plural(report.files_total, 'transcript file')}"
+    notes = [f"scanned {scope} under {span(report.projects)}"]
+    if report.dropped:
+        notes.append(f"{plural(report.dropped, 'denial')} for rules not in the current config left out "
+                     "(`--all-rules` keeps them)")
+    if report.corrupt:
+        notes.append(f"{plural(report.corrupt, 'unreadable line')} skipped")
+    if report.unreadable:
+        notes.append(f"{plural(report.unreadable, 'unreadable file')} skipped")
+    if not report.hits:
+        return f"No guardrails denials found{f' for {clean(rule)}' if rule else ''}: " + " · ".join(notes) + "."
+    lines = [f"### Guardrails audit · {plural(len(report.hits), 'denial')} · newest first", "",
+             "**Scope** " + " · ".join(notes), ""]
+    for hit in report.hits:
+        lines += audit_hit(hit)
+    return "\n".join(lines).rstrip()

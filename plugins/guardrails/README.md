@@ -114,7 +114,7 @@ is a configuration change and needs the user's explicit request (`--as-user`).
 
 An agent runs `guardrails <verb>` (the plugin's `bin/` is on the Bash tool's PATH); from your own terminal use `python3
 <plugin dir>/lib/guard.py <verb>`. Verbs: `status`, `rule add|set|rm|test|ast`, `mode declare|undeclare|on|off`, `preset
-list|show|install`, `stats`, `engine status|ensure`, `enable|disable` (`--scope project` for the project rules); changes take `--scope
+list|show|install`, `stats`, `audit`, `engine status|ensure`, `enable|disable` (`--scope project` for the project rules); changes take `--scope
 global|project|managed`. When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user` and `enable` /
 `disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample commands without
 changing anything; it checks the matcher only and prints a `**Note**` line when the hook would not act on a match.
@@ -132,23 +132,34 @@ Every hook call counts, per rule id, how often the rule denied, warned, passed o
 anywhere. `guardrails stats` shows it (`guardrails stats --reset` deletes it); what is recorded, the cost and the failure
 behaviour are in [references/runtime.md](references/runtime.md#telemetry).
 
+## Audit
+
+Telemetry stores no commands, so `guardrails audit [rule] [-n N] [-A N] [-B N] [-C N] [--all-rules] [--json]` finds the most
+recent denials in Claude Code's own session transcripts (`projects/**/*.jsonl` under `$CLAUDE_CONFIG_DIR`, else `~/.claude`,
+subagent transcripts included) and shows the messages around each. A denial is a `tool_result` of a Bash or Monitor call whose
+text starts with the hook's `[guardrails:<id>]` marker, so a transcript that merely quotes the marker never matches. Denials by
+ids that are not in the current config are left out (and counted) unless `--all-rules`. Read-only: it writes nothing. Commands
+and results are printed to stdout and can contain secrets. Files are scanned in parallel newest first and the scan stops as
+soon as no older file can hold a newer denial. The layout is in [references/presentation.md](references/presentation.md).
+
 ## Skills
 
-Seven skills; arguments are free text, each skill parses its own flags, and every long flag has a short form. Shared material
+Eight skills; arguments are free text, each skill parses its own flags, and every long flag has a short form. Shared material
 lives in `references/` and is read only when a skill needs it.
 
 | skill | arguments |
 |---|---|
 | `guardrails:status` | `[-s/--scope global\|project\|managed] [-p/--problems]` |
 | `guardrails:stats` | `[-d/--days N] [-s/--slow] [<rule>]` |
+| `guardrails:audit` | `[<rule>] [-n/--limit N] [-A/--after N] [-B/--before N] [-C/--context N]` |
 | `guardrails:explain` | `[<id>] [-c/--command '<cmd>'] [-s/--scope ...]` |
 | `guardrails:new` | `[-B/--block <cmd>]... [-A/--allow <cmd>]... [-s/--scope ...] [-a/--action deny\|warn] [-R/--retry] [-m/--modes a,b] [-i/--id <id>] [-y/--yes] [description]` |
 | `guardrails:edit` | `<id> [enable\|disable\|rm\|key=value ...] [-s/--scope ...] [-y/--yes]` |
 | `guardrails:mode` | `[on\|off\|declare\|undeclare] [<name>] [-s/--scope ...] [-e/--agent-may-enable]` |
 | `guardrails:setup` | `[<preset>...] [-s/--scope ...] [-y/--yes]` |
 
-`status`, `stats` and `explain` run forked (Haiku, Haiku and Sonnet) and need no conversation: callers, other agents included, must pass the
-rule id or the exact command to `explain`. `new` interviews, tests the rule on your examples and on edge cases it thinks of,
+`status`, `stats`, `explain` and `audit` run forked (Haiku, Haiku, Sonnet and Sonnet) and need no conversation: callers, other agents included, must pass the
+rule id or the exact command to `explain`. `audit` judges recent denials from the transcripts and never edits a rule. `new` interviews, tests the rule on your examples and on edge cases it thinks of,
 shows the `rule test` card for confirmation and writes the very rule it tested. `edit`, `mode` and `setup` change
 configuration only when you ask, always with `--as-user` and your own words in `--reason`, and never run `sudo`: a
 not-writable file prints the `sudo` command for you to run.
