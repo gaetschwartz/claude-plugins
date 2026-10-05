@@ -4,165 +4,150 @@
     "pipe-status": {
       "description": "A pipeline ending in a filter whose status is read as if it were the producer's",
       "match": {
-        "command": [
-          "head",
-          "tail",
-          "cat",
-          "wc",
-          "sort",
-          "cut",
-          "uniq",
-          "tr",
-          "sed",
-          "tee",
-          "column",
-          "nl",
-          "paste",
-          "rev",
-          "fold",
-          "less",
-          "more"
-        ],
-        "nthChild": {
-          "position": 1,
-          "reverse": true
-        },
-        "all": [
-          {
-            "inside": {
-              "kind": "pipeline"
-            }
+        "capture": {
+          "command": [
+            "head",
+            "tail",
+            "cat",
+            "wc",
+            "sort",
+            "cut",
+            "uniq",
+            "tr",
+            "sed",
+            "tee",
+            "column",
+            "nl",
+            "paste",
+            "rev",
+            "fold",
+            "less",
+            "more"
+          ],
+          "nthChild": {
+            "position": 1,
+            "reverse": true
           },
-          {
-            "inside": {
-              "statement": {
-                "kind": "pipeline",
-                "not": {
-                  "has": {
-                    "kind": "command",
-                    "nthChild": 1,
+          "all": [
+            {
+              "inside": {
+                "kind": "pipeline"
+              }
+            },
+            {
+              "inside": {
+                "statement": {
+                  "kind": "pipeline",
+                  "not": {
+                    "has": {
+                      "kind": "command",
+                      "nthChild": 1,
+                      "any": [
+                        {
+                          "has": {
+                            "field": "name",
+                            "regex": "^(\\S*/)?(echo|printf|ls|cat|grep|egrep|fgrep|rg|fd|fdfind|find|jq|awk|sed|sort|wc|head|tail|tr|cut|stat|file|which|tree|date|pwd|env|printenv|ps|pgrep|du|df|dust|column|basename|dirname|realpath|readlink|seq|true)$"
+                          }
+                        },
+                        {
+                          "has": {
+                            "field": "name",
+                            "regex": "^git$"
+                          },
+                          "regex": "^git(\\s+-\\S+(\\s+\\S+)?)*\\s+(log|diff|show|status|branch|ls-files|rev-parse|remote|config|blame|tag|rev-list|shortlog|describe)(\\s|$)"
+                        }
+                      ]
+                    }
+                  }
+                },
+                "stopBy": {
+                  "statement": {
+                    "kind": "pipeline"
+                  }
+                },
+                "all": [
+                  {
                     "any": [
                       {
-                        "has": {
-                          "field": "name",
-                          "regex": "^(\\S*/)?(echo|printf|ls|cat|grep|egrep|fgrep|rg|fd|fdfind|find|jq|awk|sed|sort|wc|head|tail|tr|cut|stat|file|which|tree|date|pwd|env|printenv|ps|pgrep|du|df|dust|column|basename|dirname|realpath|readlink|seq|true)$"
+                        "precedes": {
+                          "regex": "^(&&|\\|\\|)$"
                         }
                       },
                       {
-                        "has": {
-                          "field": "name",
-                          "regex": "^git$"
-                        },
-                        "regex": "^git(\\s+-\\S+(\\s+\\S+)?)*\\s+(log|diff|show|status|branch|ls-files|rev-parse|remote|config|blame|tag|rev-list|shortlog|describe)(\\s|$)"
-                      }
-                    ]
-                  }
-                }
-              },
-              "stopBy": {
-                "statement": {
-                  "kind": "pipeline"
-                }
-              },
-              "all": [
-                {
-                  "any": [
-                    {
-                      "precedes": {
-                        "regex": "^(&&|\\|\\|)$"
-                      }
-                    },
-                    {
-                      "inside": {
-                        "kind": "list",
-                        "precedes": {
-                          "regex": "^(&&|\\|\\|)$"
-                        }
-                      }
-                    },
-                    {
-                      "inside": {
-                        "any": [
-                          {
-                            "kind": "if_statement"
-                          },
-                          {
-                            "kind": "while_statement"
+                        "inside": {
+                          "kind": "list",
+                          "precedes": {
+                            "regex": "^(&&|\\|\\|)$"
                           }
-                        ],
-                        "field": "condition"
-                      }
-                    },
-                    {
-                      "nthChild": 1,
-                      "inside": {
-                        "kind": "elif_clause"
-                      }
-                    },
-                    {
-                      "precedes": {
-                        "has": {
-                          "kind": "special_variable_name",
-                          "regex": "^\\?$",
-                          "stopBy": "end"
-                        },
-                        "stopBy": "end"
-                      }
-                    },
-                    {
-                      "nthChild": {
-                        "position": 1,
-                        "reverse": true
+                        }
                       },
-                      "inside": {
-                        "any": [
-                          {
-                            "kind": "subshell"
-                          },
-                          {
-                            "kind": "compound_statement"
-                          }
-                        ],
-                        "precedes": {
-                          "regex": "^(&&|\\|\\|)$"
+                      {
+                        "inside": {
+                          "any": [
+                            {
+                              "kind": "if_statement"
+                            },
+                            {
+                              "kind": "while_statement"
+                            }
+                          ],
+                          "field": "condition"
                         }
-                      }
-                    },
-                    {
-                      "has": {
-                        "kind": "negated_command"
-                      }
-                    },
-                    {
-                      "has": {
-                        "kind": "pipeline",
+                      },
+                      {
+                        "nthChild": 1,
+                        "inside": {
+                          "kind": "elif_clause"
+                        }
+                      },
+                      {
+                        "precedes": {
+                          "has": {
+                            "kind": "special_variable_name",
+                            "regex": "^\\?$",
+                            "stopBy": "end"
+                          },
+                          "stopBy": "end"
+                        }
+                      },
+                      {
+                        "nthChild": {
+                          "position": 1,
+                          "reverse": true
+                        },
+                        "inside": {
+                          "any": [
+                            {
+                              "kind": "subshell"
+                            },
+                            {
+                              "kind": "compound_statement"
+                            }
+                          ],
+                          "precedes": {
+                            "regex": "^(&&|\\|\\|)$"
+                          }
+                        }
+                      },
+                      {
                         "has": {
                           "kind": "negated_command"
                         }
-                      }
-                    }
-                  ]
-                }
-              ],
-              "not": {
-                "any": [
-                  {
-                    "follows": {
-                      "any": [
-                        {
-                          "kind": "command",
-                          "regex": "^set(\\s+\\S+)*\\s+-[A-Za-z]*o\\s+pipefail(\\s|$)"
-                        },
-                        {
-                          "kind": "command",
-                          "regex": "(?i)^setopt(\\s+\\S+)*\\s+pipe_?fail(\\s|$)"
+                      },
+                      {
+                        "has": {
+                          "kind": "pipeline",
+                          "has": {
+                            "kind": "negated_command"
+                          }
                         }
-                      ],
-                      "stopBy": "end"
-                    }
-                  },
-                  {
-                    "inside": {
+                      }
+                    ]
+                  }
+                ],
+                "not": {
+                  "any": [
+                    {
                       "follows": {
                         "any": [
                           {
@@ -175,25 +160,44 @@
                           }
                         ],
                         "stopBy": "end"
-                      },
-                      "stopBy": "end"
+                      }
+                    },
+                    {
+                      "inside": {
+                        "follows": {
+                          "any": [
+                            {
+                              "kind": "command",
+                              "regex": "^set(\\s+\\S+)*\\s+-[A-Za-z]*o\\s+pipefail(\\s|$)"
+                            },
+                            {
+                              "kind": "command",
+                              "regex": "(?i)^setopt(\\s+\\S+)*\\s+pipe_?fail(\\s|$)"
+                            }
+                          ],
+                          "stopBy": "end"
+                        },
+                        "stopBy": "end"
+                      }
+                    },
+                    {
+                      "inside": {
+                        "kind": "program",
+                        "regex": "PIPESTATUS|pipestatus",
+                        "stopBy": "end"
+                      }
                     }
-                  },
-                  {
-                    "inside": {
-                      "kind": "program",
-                      "regex": "PIPESTATUS|pipestatus",
-                      "stopBy": "end"
-                    }
-                  }
-                ]
+                  ]
+                }
               }
             }
-          }
-        ]
+          ]
+        },
+        "name": "LAST",
+        "field": "name"
       },
       "action": "deny",
-      "message": "A pipeline's status is its last command's (`tail`, `head`, …), so a failure of the first command goes unseen. Run `set -o pipefail` first, or write to a file, check the status, then read the file.",
+      "message": "A pipeline's status is its last command's (`{LAST}`), so a failure of the first command goes unseen. Run `set -o pipefail` first, or write to a file, check the status, then read the file.",
       "messages": [
         {
           "when": {
@@ -244,7 +248,7 @@
           "messageShort": "`head` hides the producer's status; pipefail gives 141. Write to a file, check it, then `head` it."
         }
       ],
-      "messageShort": "Pipe status is the last command's. `set -o pipefail`, or write to a file and check it."
+      "messageShort": "Pipe status is `{LAST}`'s. `set -o pipefail`, or write to a file and check it."
     },
     "tail-follow": {
       "description": "tail -f in the foreground blocks the Bash tool",

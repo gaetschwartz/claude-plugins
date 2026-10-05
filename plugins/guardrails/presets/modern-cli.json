@@ -95,13 +95,46 @@
     "du-dust": {
       "description": "du when dust is installed",
       "match": {
-        "command": "du"
+        "any": [
+          {
+            "command": "du",
+            "has": {
+              "capture": {
+                "kind": "word",
+                "regex": "^[^-]",
+                "not": {
+                  "regex": "^[0-9]+[KMGTB]?$"
+                }
+              },
+              "name": "PATH"
+            }
+          },
+          {
+            "command": "du"
+          }
+        ]
       },
       "when": {
         "bin": "dust"
       },
       "action": "warn",
-      "message": "Prefer `dust` over `du` (sorted, with bars): `dust -d 1 PATH` for one level; see `dust --help`."
+      "message": "Prefer `dust` over `du` (sorted, with bars): `dust -d 1` for one level; see `dust --help`.",
+      "messages": [
+        {
+          "when": {
+            "matches": {
+              "has": {
+                "kind": "word",
+                "regex": "^[^-]",
+                "not": {
+                  "regex": "^[0-9]+[KMGTB]?$"
+                }
+              }
+            }
+          },
+          "text": "Prefer `dust` over `du` (sorted, with bars): `dust -d 1 {PATH}` for one level; see `dust --help`."
+        }
+      ]
     }
   },
   "modes": {},

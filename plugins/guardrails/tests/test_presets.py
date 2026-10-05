@@ -33,8 +33,11 @@ class Presets(AstIsolated):
         for rid, rule in rules.items():
             with self.subTest(rule=rid):
                 self.assertEqual(rule["action"], "warn")
-                for key in ("retry", "messages", "messageShort"):
+                for key in ("retry", "messageShort"):
                     self.assertNotIn(key, rule)
+                self.assertEqual("messages" in rule, rid == "du-dust")
+                for case in rule.get("messages", []):
+                    self.assertNotIn("\n", case["text"])
                 self.assertNotIn("\n", rule["message"])
                 self.assertLess(len(rule["message"]), 200)
                 self.assertNotRegex(rule["message"].replace("{found}", ""), "[{}]")
@@ -159,7 +162,7 @@ class Examples(AstIsolated):
 
     def test_modern_cli_messages_name_the_replacement(self) -> None:
         expect = {"cargo-nextest": ("cargo test -p foo my_test", ("cargo nextest run", "cargo test --doc")),
-                  "du-dust": ("du -sh /tmp", ("dust -d 1 PATH",))}
+                  "du-dust": ("du -sh /tmp/x", ("`dust -d 1 /tmp/x` for one level",))}
         for rid, (command, needles) in expect.items():
             text = self.says("modern-cli", rid, command)
             for needle in needles:
@@ -175,6 +178,22 @@ class Examples(AstIsolated):
         default = self.says("shell-hygiene", "pipe-status", "make | tail -5 && echo ok")
         self.assertIn("set -o pipefail", default)
         self.assertNotIn("SIGPIPE", default)
+
+    def test_pipe_status_names_the_last_command_of_the_whole_pipeline(self) -> None:
+        for command, last in (("make | tail -5 && echo ok", "tail"), ("a | b | sort && echo ok", "sort"),
+                              ("a | b | c | wc -l && echo ok", "wc"), ("make | cat > o 2>&1 && echo ok", "cat"),
+                              ("make | /usr/bin/sort && echo ok", "/usr/bin/sort")):
+            with self.subTest(command=command):
+                self.assertIn(f"last command's (`{last}`)", self.says("shell-hygiene", "pipe-status", command))
+
+    def test_du_dust_quotes_the_first_path_and_reads_fine_without_one(self) -> None:
+        for command, path in (("du -sh /tmp/x", "/tmp/x"), ("du -d 1 ~", "~"), ("sudo du -sh a b", "a"),
+                              ("du --max-depth=1 ./src | sort -h", "./src")):
+            with self.subTest(command=command):
+                self.assertIn(f"`dust -d 1 {path}` for one level", self.says("modern-cli", "du-dust", command))
+        for command in ("du", "du -sh", "du -d 1"):
+            with self.subTest(command=command):
+                self.assertIn("`dust -d 1` for one level", self.says("modern-cli", "du-dust", command))
 
     def test_ps_grep_cases(self) -> None:
         self.assertIn("off by about 2", self.says("shell-hygiene", "ps-grep-self-match", "ps aux | grep x | wc -l"))
