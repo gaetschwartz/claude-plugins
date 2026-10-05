@@ -105,6 +105,12 @@ class Atoms(Isolated):
         self.assertFalse(self.holds({"tool": "Monitor"}))
         self.assertTrue(self.holds({"tool": "Monitor"}, conditions.Env("Monitor")))
 
+    def test_background_is_the_call_flag(self) -> None:
+        self.assertTrue(self.holds({"background": False}))
+        self.assertFalse(self.holds({"background": True}))
+        self.assertTrue(self.holds({"background": True}, conditions.Env(background=True)))
+        self.assertFalse(self.holds({"background": False}, conditions.Env(background=True)))
+
     def test_combinators(self) -> None:
         os.environ["GR_A"] = "1"
         yes, no = {"env": "GR_A"}, {"env": "GR_B"}
@@ -132,7 +138,8 @@ class Validation(unittest.TestCase):
             ({"env": {"A": 1}}, "when.env"), ({"env": {"A": "1", "B": "2"}}, "when.env"), ({"env": {}}, "when.env"),
             ({"file": "/etc/passwd"}, "when.file"), ({"file": "../x"}, "when.file"), ({"file": "a/../../x"}, "when.file"),
             ({"file": ""}, "when.file"), ({"file": 3}, "when.file"), ({"tool": "Read"}, "when.tool"),
-            ({"tool": "bash"}, "when.tool"),
+            ({"tool": "bash"}, "when.tool"), ({"background": "yes"}, "when.background"),
+            ({"background": 1}, "when.background"),
             ({"all": []}, "when.all"), ({"any": {"bin": "x"}}, "when.any"), ({"not": []}, "when.not"),
             ({"any": [{"bin": "x"}, {"oss": "linux"}]}, "when.any[1].oss"), ({}, "when"),
             ({"bin": "x", "os": "linux"}, "when"), ("bin", "when"), ({"all": [{"not": {"tool": 1}}]}, "when.all[0].not.tool"),
@@ -322,6 +329,35 @@ class Hook(AstIsolated):
         self.assertIsNone(self.reason("make all"))
         (self.proj / "Cargo.toml").write_text("")
         self.assertIn("[guardrails:cargo] use cargo", plain(self.reason("make all", session="later") or ""))
+
+    def test_background_reads_run_in_background_of_a_bash_call(self) -> None:
+        self.put(self.gpath, {"rules": {"fg": rule(match={"command": "tail"}, message="no tail",
+                                                   when={"not": {"background": True}}),
+                                        "bg": rule(match={"command": "sleep"}, message="no sleep",
+                                                   when={"background": True})}})
+        for n, (command, tool, tool_input, denied) in enumerate([
+                ("tail -f x", "Bash", {"command": "tail -f x"}, True),
+                ("tail -f x", "Bash", {"command": "tail -f x", "run_in_background": False}, True),
+                ("tail -f x", "Bash", {"command": "tail -f x", "run_in_background": True}, False),
+                ("tail -f x", "Monitor", {"command": "tail -f x", "run_in_background": True}, True),
+                ("tail -f x", "Monitor", {"command": "tail -f x"}, True),
+                ("sleep 5", "Bash", {"command": "sleep 5"}, False),
+                ("sleep 5", "Bash", {"command": "sleep 5", "run_in_background": True}, True),
+                ("sleep 5", "Monitor", {"command": "sleep 5", "persistent": True}, False)]):
+            with self.subTest(command=command, tool=tool, tool_input=tool_input):
+                out = self.hook(command, session=f"bg{n}", tool=tool, tool_input=tool_input)
+                self.assertEqual(out is not None, denied)
+
+    def test_background_gates_a_message_case(self) -> None:
+        raw = rule(match={"command": "tail"}, message="default", messages=[{"when": {"background": True},
+                                                                              "text": "in the background"}])
+        self.put(self.gpath, {"rules": {"t": raw}})
+        out = self.hook("tail -f x", tool_input={"command": "tail -f x", "run_in_background": True})
+        assert out is not None
+        self.assertIn("in the background", out["hookSpecificOutput"]["permissionDecisionReason"])
+        out = self.hook("tail -f x", session="other")
+        assert out is not None
+        self.assertNotIn("in the background", out["hookSpecificOutput"]["permissionDecisionReason"])
 
     def test_found_names_the_binary_on_path(self) -> None:
         sheet = rule(match={"command": "find"}, when={"bin": ["zz-fd", "zz-fdfind"]}, message="use {found} -e py")

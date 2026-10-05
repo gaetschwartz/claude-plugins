@@ -1,7 +1,7 @@
 """Conditions: the `when` of a rule and of each message case, a tree of `all` / `any` / `not` over atoms.
 
 Environment atoms read where the hook runs (binaries on PATH, OS, architecture, host, environment variables, files in
-the project, the calling tool). Hit atoms (`matches`, `wrapped`) read the command node that decided a rule's verdict and
+the project, the calling tool, whether it runs in the background). Hit atoms (`matches`, `wrapped`) read the command node that decided a rule's verdict and
 exist only in message cases. All input here is trusted configuration.
 """
 
@@ -25,16 +25,18 @@ TOOLS = ("Bash", "Monitor")
 OSES = ("linux", "macos")
 ARCHES = ("arm64", "x86_64")
 COMBINATORS = ("all", "any", "not")
-ENVIRONMENT_ATOMS = ("bin", "os", "arch", "host", "env", "file", "tool")
+ENVIRONMENT_ATOMS = ("bin", "os", "arch", "host", "env", "file", "tool", "background")
 HIT_ATOMS = ("matches", "wrapped")
 MACHINES = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x86_64", "amd64": "x86_64"}
 
 
 class Env(NamedTuple):
-    """What a condition may read beyond the process environment: the calling tool and the project root."""
+    """What a condition may read beyond the process environment: the calling tool, the project root and whether the
+    call asked to run in the background."""
 
     tool: str = "Bash"
     root: Path | None = None
+    background: bool = False
 
 
 DEFAULT = Env()
@@ -122,6 +124,8 @@ def well_formed(key: str, value: object) -> bool:
             return relative_path(value)
         case "tool":
             return value in TOOLS
+        case "background":
+            return isinstance(value, bool)
         case _:
             return False
 
@@ -139,6 +143,7 @@ SHAPES = {
     "env": 'a variable name, or {"NAME": "value"} with one variable',
     "file": "a path relative to the project root (not absolute, no '..')",
     "tool": f"one of {', '.join(TOOLS)}",
+    "background": "true or false",
 }
 
 
@@ -195,6 +200,8 @@ def atom_holds(key: str, value: Any, env: Env, hit: Hit | None) -> bool:
             return env.root is not None and (env.root / value).exists()
         case "tool":
             return env.tool == value
+        case "background":
+            return env.background is value
         case "matches":
             return hit is not None and hit.matches(value)
         case "wrapped":

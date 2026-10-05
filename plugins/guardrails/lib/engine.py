@@ -236,6 +236,7 @@ class Call(NamedTuple):
     cwd: Path | None
     session_id: str
     tool: str
+    background: bool
 
 
 def parse_call(text: str) -> Call | None:
@@ -251,7 +252,9 @@ def parse_call(text: str) -> Call | None:
     if not isinstance(command, str) or not command.strip():
         return None
     cwd = payload.get("cwd")
-    return Call(command, Path(cwd) if isinstance(cwd, str) else None, bootstrap.session_id(payload), str(tool))
+    background = tool == "Bash" and tool_input.get("run_in_background") is True
+    return Call(command, Path(cwd) if isinstance(cwd, str) else None, bootstrap.session_id(payload), str(tool),
+                background)
 
 
 def samples_of(outcomes: dict[str, telemetry.Outcome], evaluation: Evaluation,
@@ -307,7 +310,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> telemetry.Recorder | None:
     output: Output | None = None
     recorder = telemetry.Recorder(bootstrap.data_dir())
     outcomes: dict[str, telemetry.Outcome] = {}
-    env = conditions.Env(call.tool, root)
+    env = conditions.Env(call.tool, root, call.background)
     pre = judge(command, candidates_of(found.rules, env), env, recorder.start)
     modes = policy.effective_modes(*layers)
     stateless = not state_ok

@@ -24,7 +24,8 @@ A rule matches a command and says what happens:
 - `modes`: session modes that suspend the rule, e.g. `reverse-engineering` for `strings`. `messageShort`: shown instead of
   `message` once the full text was seen in the session.
 - `when`: where the rule applies at all, checked before the command is read: `all` / `any` / `not` over `bin` (on PATH),
-  `os`, `arch`, `host`, `env`, `file` (in the project) and `tool` (Bash or Monitor), e.g. `{"bin": ["fd", "fdfind"]}`.
+  `os`, `arch`, `host`, `env`, `file` (in the project), `tool` (Bash or Monitor) and `background` (the Bash call asked to run in the
+  background), e.g. `{"bin": ["fd", "fdfind"]}`.
   It replaced `requires`, which now makes a rule invalid (skipped and reported) until rewritten.
 - `messages`: cases `{"when": ..., "text": ...}` that pick the text by the caught command's shape (`matches`, `wrapped`);
   the first that holds wins, else `message`. Texts take `{found}` (the `bin` name found on PATH), `{ARG}` (what `$ARG`

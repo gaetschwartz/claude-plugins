@@ -69,6 +69,8 @@ the matched node did not bind renders as nothing. Write `{{` and `}}` for a lite
 }
 ```
 
-The rule is skipped (no telemetry, `inactive here` in `status`) on a machine with neither binary. `{found}` is the first
+The rule is skipped (no telemetry, `inactive here` in `status`) on a machine with neither binary. A rule or a message
+case can also read how the call runs: `{"background": true}` holds when the Bash call asked for `run_in_background`, so
+`{"not": {"background": true}}` limits a rule to foreground calls. `{found}` is the first
 name of a `bin` atom of the rule's `when` that is on PATH, so a Debian machine that installs fd as `fdfind` is told
 `fdfind -e py`; a text that uses `{found}` needs a `bin` atom in the rule's `when`.

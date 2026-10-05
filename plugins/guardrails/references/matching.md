@@ -230,6 +230,9 @@ rule whose `when` does not hold costs nothing, writes no telemetry row, is `inac
   top level). Relative only, no `..`; false outside a project.
 - `{"tool": "Bash"}` or `{"tool": "Monitor"}`: the tool that made the call. `status` and `rule test` judge a `when` as
   for a Bash call.
+- `{"background": true}` or `{"background": false}`: whether the call asked to run in the background, the Bash tool's
+  `run_in_background` input. A call without the field, and every Monitor call, is not in the background; `status` and
+  `rule test` judge a `when` as for a foreground call.
 
 `when` replaced `requires`: `"requires": ["fd", "fdfind"]` is `"when": {"bin": ["fd", "fdfind"]}`. A rule that still
 has `requires` is invalid: `rule add` / `rule test` refuse it (exit 2), the hook skips it and names it once per session,

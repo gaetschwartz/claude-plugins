@@ -65,7 +65,7 @@ The layout contract, all of it computed by the CLI:
   field, else `new-rule`.
 - `**Intent**` (only with `--intent`), `**Match**` (the `match` object as compact one-line JSON, then
   ` · not through wrappers` when the rule has `"wrappers": false`), `**When**` (only when the rule has one: the
-  condition as compact JSON, then ` · holds here` or ` · does not hold here`, judged for a Bash call in this
+  condition as compact JSON, then ` · holds here` or ` · does not hold here`, judged for a foreground Bash call in this
   environment), `**Message**` (with `{found}` filled, or left as `{found}` when no binary of the `when` is found here;
   capture placeholders such as `{TARGET}` stay as written, since they differ per command), then one
   `**Case N** when <condition> · <text>` line per message case, in order.
