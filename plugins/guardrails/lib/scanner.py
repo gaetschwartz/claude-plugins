@@ -191,11 +191,16 @@ def scripts_in(root: SgNode, restricted: bool) -> list[Script]:
     return [script for script in found if script.text.strip()]
 
 
-def statement_range(node: SgNode) -> tuple[int, int]:
-    """The range of the top-level statement (a direct child of the program) that holds the node."""
+def statement_node(node: SgNode) -> SgNode:
+    """The top-level statement (a direct child of the program) that holds the node."""
     while (parent := node.parent()) is not None and parent.kind() != "program":
         node = parent
-    where = node.range()
+    return node
+
+
+def statement_range(node: SgNode) -> tuple[int, int]:
+    """The range of the top-level statement that holds the node."""
+    where = statement_node(node).range()
     return where.start.index, where.end.index
 
 

@@ -179,11 +179,12 @@ Output, one card per denial, newest first (times are local; `--json` prints the 
 
     ### Guardrails audit · 1 denial · newest first
 
-    **Scope** scanned 16 of 3547 transcript files under `/Users/me/.claude/projects`
+    **Scope** scanned 16 of 3547 transcript files under `/Users/me/.claude/projects` · 4 denials skipped: other version of the rule · 9 denials skipped: recorded before rule hashing
 
-    #### no-pkill · Bash · 2026-10-05 11:55:35
+    #### no-pkill#5e85e534 · Bash · 2026-10-05 11:55:35
 
     **Command** `pkill zz_no_such_process_zz`
+    **Matched** `pkill zz_no_such_process_zz`
     **Denied** the denial text as the hook gave it, cut at 2000 characters
     **Where** `-Users-me-app/0b1c2d3e.jsonl:10973` · session `0b1c2d3e` · cwd `/Users/me/app`
 
@@ -197,11 +198,18 @@ Output, one card per denial, newest first (times are local; `--json` prints the 
   default; `-C` sets both and an explicit `-A` or `-B` wins over it. Blocks are cut (commands 2000 characters, text and
   results 600, the denial text 2000) and a cut one ends with ` …`.
 - A denial is found only as an error `tool_result` of a Bash or Monitor call in the same transcript, whose text starts with
-  `[guardrails:<id>]`, bare or after `PreToolUse:<tool> hook error: `. One card per tool call: copies in resumed sessions
-  show as `also in N other files`.
+  `[guardrails:<id>#<hash>]` (older denials have no `#<hash>`), bare or after `PreToolUse:<tool> hook error: `. One card per
+  tool call: copies in resumed sessions show as `also in N other files`. Only denials whose hash equals the current rule's
+  are shown; `--all-rules` also shows rule ids that are not in the config, without the hash check.
 - **Scope** names how many transcript files were opened (the scan stops once no older file can hold a newer denial), the
-  denials left out because their rule is not in the current config (`--all-rules` keeps them), and unreadable lines or
-  files. With no denial the output is one line saying so with the scope.
+  denials skipped (`other version of the rule`, `recorded before rule hashing`, `rule no longer exists`; `-n` counts only
+  kept denials), and unreadable lines or files. With no denial the output is one line saying so with the scope.
+- **Matched** is the top-level statement the current rule matches in the full denied command (the first match in scan
+  order, the one that decides a rule's message case), cut at 400 characters; `when`, modes and `enabled` are ignored. When the
+  replay cannot reproduce it the line is `**Matched** none: <why>`; `--json` has `matched`, `matched_truncated`,
+  `matched_note` and `rule_hash`.
+- Tool calls other than Bash and Monitor show the tool name and one short field (`file_path`, `path`, `pattern`, `url`,
+  `query` or `description`, cut at 120 characters), never the whole input.
 - Commands and results can contain secrets: they go to stdout only. Text is made single-line and safe like every other
   renderer.
 

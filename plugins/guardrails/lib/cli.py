@@ -376,8 +376,11 @@ def audit_report(args: Args) -> audit.Report:
     window = {side: max(0, value if value is not None else args.context if args.context is not None else 4)
               for side, value in (("before", args.before), ("after", args.after))}
     warn = frozenset(rid for rid, rule in rules.items() if rule.action == policy.Action.WARN)
-    query = audit.Query(args.rule, None if args.all_rules else frozenset(rules), warn, **window)
-    return audit.find_denials(audit.projects_dir(), max(args.limit, 1), query)
+    current = {rid: policy.rule_hash(rule) for rid, rule in rules.items()}
+    report = audit.find_denials(audit.projects_dir(), max(args.limit, 1),
+                                audit.Query(args.rule, current, args.all_rules, warn, **window))
+    audit.attach_matched(report, rules)
+    return report
 
 
 def cmd_audit(args: Args) -> int:
@@ -385,8 +388,11 @@ def cmd_audit(args: Args) -> int:
     if args.json:
         print(json.dumps({"projects": report.projects, "rule": args.rule, "files_total": report.files_total,
                           "files_scanned": len(report.opened), "stopped_early": report.stopped_early,
-                          "dropped_unknown_rules": report.dropped, "corrupt_lines": report.corrupt,
-                          "unreadable_files": report.unreadable, "hits": report.hits}, ensure_ascii=False))
+                          "skipped_other_version": report.skipped_for(audit.Skip.OTHER_VERSION),
+                          "skipped_unhashed": report.skipped_for(audit.Skip.UNHASHED),
+                          "dropped_unknown_rules": report.skipped_for(audit.Skip.UNKNOWN),
+                          "corrupt_lines": report.corrupt, "unreadable_files": report.unreadable,
+                          "hits": report.hits}, ensure_ascii=False))
     else:
         print(render.audit_card(report, args.rule))
     return 0
@@ -910,7 +916,7 @@ def build_parser() -> argparse.ArgumentParser:
     audit_.add_argument("-B", "--before", type=int, help="messages before the denied call (default 4)")
     audit_.add_argument("-A", "--after", type=int, help="messages after the denial (default 4)")
     audit_.add_argument("-C", "--context", type=int, help="messages on both sides; -A and -B win over it")
-    audit_.add_argument("--all-rules", action="store_true", help="keep denials by rules that are not in the current config")
+    audit_.add_argument("--all-rules", action="store_true", help="also keep denials by rules that are not in the current config")
     audit_.add_argument("--json", action="store_true", help="print the machine form")
 
     rule = verbs.add_parser("rule", help="add, change or remove rules").add_subparsers(dest="op", required=True)

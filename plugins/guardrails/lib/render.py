@@ -353,7 +353,7 @@ def audit_block(item: audit.Block, role: str) -> str:
     cut = " …" if item["truncated"] else ""
     match item["type"]:
         case "tool_use":
-            return f"- {role} · tool_use {clean(item['name'] or '')} {span(item['text'])}{cut}"
+            return f"- {role} · tool_use {clean(item['name'] or '')}" + (f" {span(item['text'])}{cut}" if item["text"] else "")
         case "tool_result":
             return f"- {role} · tool_result{' (error)' if item['is_error'] else ''}: {prose(item['text'])}{cut}"
         case "text":
@@ -367,6 +367,12 @@ def audit_window(title: str, messages: list[audit.Message]) -> list[str]:
     return ["", f"**{title}**", *(audit_block(item, m["role"]) for m in messages for item in m["blocks"])]
 
 
+def matched_lines(hit: audit.Hit) -> list[str]:
+    if hit["matched"] is not None:
+        return [f"**Matched** {span(hit['matched'])}{' …' if hit['matched_truncated'] else ''}"]
+    return [f"**Matched** none: {prose(hit['matched_note'])}"] if hit["matched_note"] else []
+
+
 def audit_hit(hit: audit.Hit) -> list[str]:
     where = f"{span(hit['file'] + ':' + str(hit['line']))}"
     if hit["session_id"]:
@@ -377,8 +383,9 @@ def audit_hit(hit: audit.Hit) -> list[str]:
         where += f" · cwd {span(str(hit['cwd']))}"
     if hit["also_in"]:
         where += f" · also in {plural(len(hit['also_in']), 'other file')}"
-    return [f"#### {clean(hit['rule'])} · {hit['tool']} · {hit['local'] or hit['timestamp']}", "",
+    return [f"#### {clean(hit['rule'])}{'#' + hit['rule_hash'] if hit['rule_hash'] else ''} · {hit['tool']} · {hit['local'] or hit['timestamp']}", "",
             f"**Command** {span(hit['command'])}{' …' if hit['command_truncated'] else ''}",
+            *matched_lines(hit),
             f"**Denied** {prose(hit['message'])}{' …' if hit['message_truncated'] else ''}", f"**Where** {where}",
             *audit_window("Before", hit["before"]), *audit_window("After", hit["after"]), ""]
 
@@ -386,9 +393,11 @@ def audit_hit(hit: audit.Hit) -> list[str]:
 def audit_card(report: audit.Report, rule: str | None) -> str:
     scope = f"{len(report.opened)} of {plural(report.files_total, 'transcript file')}"
     notes = [f"scanned {scope} under {span(report.projects)}"]
-    if report.dropped:
-        notes.append(f"{plural(report.dropped, 'denial')} for rules not in the current config left out "
-                     "(`--all-rules` keeps them)")
+    for count, why in ((report.skipped_for(audit.Skip.OTHER_VERSION), "other version of the rule"),
+                       (report.skipped_for(audit.Skip.UNHASHED), "recorded before rule hashing"),
+                       (report.skipped_for(audit.Skip.UNKNOWN), "rule no longer exists (`--all-rules` keeps them)")):
+        if count:
+            notes.append(f"{plural(count, 'denial')} skipped: {why}")
     if report.corrupt:
         notes.append(f"{plural(report.corrupt, 'unreadable line')} skipped")
     if report.unreadable:

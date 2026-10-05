@@ -137,9 +137,14 @@ behaviour are in [references/runtime.md](references/runtime.md#telemetry).
 Telemetry stores no commands, so `guardrails audit [rule] [-n N] [-A N] [-B N] [-C N] [--all-rules] [--json]` finds the most
 recent denials in Claude Code's own session transcripts (`projects/**/*.jsonl` under `$CLAUDE_CONFIG_DIR`, else `~/.claude`,
 subagent transcripts included) and shows the messages around each. A denial is a `tool_result` of a Bash or Monitor call whose
-text starts with the hook's `[guardrails:<id>]` marker, so a transcript that merely quotes the marker never matches. Denials by
-ids that are not in the current config are left out (and counted) unless `--all-rules`. Read-only: it writes nothing. Commands
-and results are printed to stdout and can contain secrets. Files are scanned in parallel newest first and the scan stops as
+text starts with the hook's `[guardrails:<id>#<hash>]` marker, so a transcript that merely quotes the marker never matches.
+The hash identifies the rule as it was enforced (`match`, `wrappers`, `when`, `action`, `retry`, `message`, `messageShort`
+and `messages`; rewording changes it, `description`, `enabled`, `modes` and `setBy` do not), so the audit keeps only denials
+from the rule's current version and counts what it skipped: other version of the rule, recorded before rule hashing (marker
+without a hash), rule no longer exists. `--all-rules` also keeps denials by rule ids that are not in the current config.
+Right after a rule edit it can therefore show nothing. For each kept denial it runs the current rule on the full denied
+command to show the statement that matched (`matched`, null with a note when the replay does not reproduce it). Read-only:
+it writes nothing. Commands and results are printed to stdout and can contain secrets. Files are scanned in parallel newest first and the scan stops as
 soon as no older file can hold a newer denial. The layout is in [references/presentation.md](references/presentation.md).
 
 ## Skills

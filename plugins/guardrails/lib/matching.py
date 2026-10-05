@@ -159,6 +159,63 @@ def compute(command: str, rules: dict[str, policy.Rule], env: conditions.Env = c
                     result.details)
 
 
+class Matched(NamedTuple):
+    """The top-level statement the rule matched, with its range in the text that was parsed (the command itself for a
+    direct hit; a wrapper's variant or a shell string otherwise)."""
+
+    text: str
+    start: int
+    end: int
+    kind: Kind
+
+
+class Replay(NamedTuple):
+    matched: Matched | None
+    note: str | None
+
+
+def locate(command: str, rule: policy.Rule) -> object:
+    """In the child: the statement of the rule's verdict hit as [text, start, end, kind], or a reason string."""
+    try:
+        import scanner
+    except ImportError as exc:
+        return f"the ast-grep-py library cannot be imported ({type(exc).__name__})"
+    found: list[list[object]] = []
+
+    def describe(rid: str, node: SgNode, kind: Kind) -> None:
+        top = scanner.statement_node(node)
+        where = top.range()
+        found.append([top.text(), where.start.index, where.end.index, kind.value])
+
+    result = scanner.Scanner(configs_of({"rule": rule}), direct_only({"rule": rule}), describe).run(parseable(command))
+    if result.invalid:
+        return f"the rule does not compile here ({result.invalid['rule']})"
+    return found[-1] if found else None
+
+
+def matched_statement(command: str, rule: policy.Rule) -> Replay:
+    """The statement the rule matches in the command, ignoring `when`, modes and `enabled`; never raises.
+
+    The same first-match-in-scan-order hit that decides a rule's verdict and message case.
+    """
+    if len(command.encode("utf-8", "replace")) > MAX_COMMAND_BYTES:
+        return Replay(None, "the command is too large to replay")
+    try:
+        result = bounded.call(lambda: locate(command, rule), DEADLINE_SECONDS)
+    except OSError as exc:
+        return Replay(None, f"the matcher could not be started ({type(exc).__name__})")
+    if result.outcome is not bounded.Outcome.DONE:
+        return Replay(None, f"the matcher did not answer ({result.outcome.value})")
+    payload = result.payload
+    if isinstance(payload, str):
+        return Replay(None, payload)
+    if not (isinstance(payload, list) and len(payload) == 4):
+        return Replay(None, "the current rule does not match this command here (the hit may depend on the environment "
+                            "it ran in)")
+    text, start, end, kind = payload
+    return Replay(Matched(str(text), int(start), int(end), Kind(kind)), None)
+
+
 def evaluate(command: str, rules: dict[str, policy.Rule], env: conditions.Env = conditions.DEFAULT,
              after_fork: Callable[[], None] | None = None) -> Evaluation:
     """How each rule's matcher selects the command: "direct", "wrapped" or None, and for a hit what its message

@@ -1,7 +1,9 @@
-from __future__ import annotations
+from __future__ import annotations  # noqa: I001
 
 import json
 import os
+import subprocess
+import sys
 import time
 import unittest
 import warnings
@@ -10,11 +12,16 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
+from helpers import LIB, AstIsolated
+
 import audit
-from helpers import Isolated
+import policy
 
 BASE = datetime(2026, 7, 1, 8, 0, 0, tzinfo=UTC).timestamp()
-DENIAL = "[guardrails:no-pkill] Killing by name can hit the wrong process."
+PKILL = {"match": {"command": "pkill"}, "message": "m"}
+HASH = policy.rule_hash(policy.Rule.from_json(PKILL))
+DENIAL = f"[guardrails:no-pkill#{HASH}] Killing by name can hit the wrong process."
+LEGACY = "[guardrails:no-pkill] Killing by name can hit the wrong process."
 
 
 def stamp(epoch: float) -> str:
@@ -45,7 +52,7 @@ def denied(tid: str, epoch: float, command: str = "pkill node", text: str = DENI
     return [use(tid, command, epoch, tool, **extra), result(tid, shown, epoch + 1, **extra)]
 
 
-class Fixture(Isolated):
+class Fixture(AstIsolated):
     def setUp(self) -> None:
         super().setUp()
         self.enterContext(warnings.catch_warnings(action="ignore", category=DeprecationWarning))
@@ -75,7 +82,7 @@ class Extraction(Fixture):
         self.assertEqual([(h["tool_use_id"], h["rule"], h["tool"]) for h in hits],
                          [("t2", "no-pkill", "Bash"), ("t1", "no-pkill", "Bash")])
         self.assertEqual(hits[1]["command"], "pkill node")
-        self.assertTrue(hits[1]["message"].startswith("PreToolUse:Bash hook error: [guardrails:no-pkill]"))
+        self.assertTrue(hits[1]["message"].startswith("PreToolUse:Bash hook error: [guardrails:no-pkill#"))
 
     def test_denial_in_list_content(self) -> None:
         text = [{"type": "text", "text": f"PreToolUse:Bash hook error: {DENIAL}"}]
@@ -112,9 +119,13 @@ class Extraction(Fixture):
         self.assertEqual(self.find().hits, [])
 
     def test_ids_are_parsed_from_the_marker_and_later_paragraphs_with_the_managed_suffix_removed(self) -> None:
-        text = "[guardrails:a-rule, b-rule (managed)] first\n\n[guardrails:warn-rule] second\n\nplain [guardrails:not-a-marker]"
-        self.assertEqual(audit.denial_ids(text, "Bash"), ["a-rule", "b-rule", "warn-rule"])
-        self.assertEqual(audit.denial_ids(f"PreToolUse:Bash hook error: {text}", "Bash"), ["a-rule", "b-rule", "warn-rule"])
+        text = ("[guardrails:a-rule#0123abcd, b-rule#89ef4567 (managed)] first\n\n[guardrails:warn-rule] second\n\n"
+                "plain [guardrails:not-a-marker]")
+        parsed = [audit.Marked("a-rule", "0123abcd"), audit.Marked("b-rule", "89ef4567"), audit.Marked("warn-rule", None)]
+        self.assertEqual(audit.denial_ids(text, "Bash"), parsed)
+        self.assertEqual(audit.denial_ids(f"PreToolUse:Bash hook error: {text}", "Bash"), parsed)
+        for bad in ("[guardrails:a#] m", "[guardrails:a#XYZ12345] m", "[guardrails:a#0123abc] m", "[guardrails:#0123abcd] m"):
+            self.assertIsNone(audit.denial_ids(bad, "Bash"), bad)
         self.assertIsNone(audit.denial_ids(f"PreToolUse:Bash hook error: {text}", "Monitor"))
         self.assertIsNone(audit.denial_ids(" [guardrails:a] m", "Bash"))
 
@@ -135,20 +146,60 @@ class Extraction(Fixture):
 class Filtering(Fixture):
     def setUp(self) -> None:
         super().setUp()
-        self.write("p/a.jsonl", [*denied("t1", BASE, text="[guardrails:no-pkill] m"),
-                                 *denied("t2", BASE + 10, text="[guardrails:old-dev-rule] m"),
-                                 *denied("t3", BASE + 20, text="[guardrails:no-curl] m")])
+        self.current = {"no-pkill": HASH, "no-curl": "c0c0c0c0"}
+        self.write("p/a.jsonl", [*denied("t1", BASE, text=f"[guardrails:no-pkill#{HASH}] m"),
+                                 *denied("t2", BASE + 10, text="[guardrails:old-dev-rule#aaaaaaaa] m"),
+                                 *denied("t3", BASE + 20, text="[guardrails:no-curl#bbbbbbbb] m"),
+                                 *denied("t4", BASE + 30, text="[guardrails:no-pkill] m"),
+                                 *denied("t5", BASE + 40, text="[guardrails:no-curl#c0c0c0c0] m")])
 
-    def test_rule_filter(self) -> None:
-        report = self.find(rule="no-curl")
-        self.assertEqual([h["tool_use_id"] for h in report.hits], ["t3"])
-        self.assertEqual(report.dropped, 0)
+    def kept(self, **query: Any) -> tuple[list[str], dict[str, int]]:
+        report = self.find(current=self.current, **query)
+        return [h["tool_use_id"] for h in report.hits], {why.value: report.skipped_for(why) for why in audit.Skip}
 
-    def test_unknown_ids_are_dropped_and_counted_unless_all_rules(self) -> None:
-        report = self.find(known=frozenset({"no-pkill", "no-curl"}))
-        self.assertEqual(([h["rule"] for h in report.hits], report.dropped), (["no-curl", "no-pkill"], 1))
-        report = self.find()
-        self.assertEqual(([h["rule"] for h in report.hits], report.dropped), (["no-curl", "old-dev-rule", "no-pkill"], 0))
+    def test_only_denials_from_the_current_rule_version_are_kept_and_the_rest_counted_by_reason(self) -> None:
+        self.assertEqual(self.kept(), (["t5", "t1"], {"other_version": 1, "unhashed": 1, "unknown": 1}))
+
+    def test_all_rules_adds_unknown_ids_but_still_filters_known_ones(self) -> None:
+        self.assertEqual(self.kept(keep_unknown=True), (["t5", "t2", "t1"], {"other_version": 1, "unhashed": 1, "unknown": 0}))
+
+    def test_rule_filter_counts_only_that_rules_denials(self) -> None:
+        self.assertEqual(self.kept(rule="no-curl"), (["t5"], {"other_version": 1, "unhashed": 0, "unknown": 0}))
+        self.assertEqual(self.kept(rule="old-dev-rule"), ([], {"other_version": 0, "unhashed": 0, "unknown": 1}))
+
+    def test_hit_carries_the_hash_from_its_marker(self) -> None:
+        hits = self.find(current=self.current, keep_unknown=True).hits
+        self.assertEqual([(h["rule"], h["rule_hash"]) for h in hits], [("no-curl", "c0c0c0c0"), ("old-dev-rule", "aaaaaaaa"),
+                                                                     ("no-pkill", HASH)])
+
+    def test_legacy_markers_are_kept_when_no_current_config_is_given(self) -> None:
+        self.assertEqual([h["rule_hash"] for h in self.find().hits], ["c0c0c0c0", None, "bbbbbbbb", "aaaaaaaa", HASH])
+
+    def test_a_multi_rule_denial_counts_when_any_considered_rule_is_current(self) -> None:
+        text = f"[guardrails:no-curl#bbbbbbbb, no-pkill#{HASH}] m"
+        self.write("q/m.jsonl", denied("mm", BASE + 50, text=text), mtime=BASE + 20_000)
+        hits = self.find(current=self.current).hits
+        first = hits[0]
+        self.assertEqual((first["tool_use_id"], first["rule"], first["rules"]), ("mm", "no-pkill", ["no-curl", "no-pkill"]))
+        self.assertEqual(self.find(current=self.current, rule="no-curl").skipped_for(audit.Skip.OTHER_VERSION), 2)
+
+    def test_skip_counts_do_not_double_count_copies_in_resumed_files(self) -> None:
+        for name in ("r1", "r2", "r3"):
+            self.write(f"q/{name}.jsonl", denied("same", BASE + 60, text="[guardrails:no-pkill#99999999] m"), mtime=BASE + 20_000)
+        self.assertEqual(self.find(current=self.current).skipped_for(audit.Skip.OTHER_VERSION), 2)
+
+    def test_skipped_denials_do_not_count_toward_the_limit_and_the_pool_agrees(self) -> None:
+        for i in range(10):
+            skipped = denied(f"old{i}", BASE + 1000 + i * 10, text="[guardrails:no-pkill#99999999] m")
+            self.write(f"s/n{i:02d}.jsonl", skipped, mtime=BASE + 2000 + i)
+        for i in range(3):
+            self.write(f"s/k{i}.jsonl", denied(f"ok{i}", BASE + 100 + i * 10), mtime=BASE + 105 + i * 10)
+        for workers in (1, 3):
+            report = self.find(limit=2, workers=workers, current=self.current)
+            self.assertEqual([h["tool_use_id"] for h in report.hits], ["ok2", "ok1"])
+            self.assertEqual(report.stopped_early, workers == 1)
+        serial, pooled = (self.find(limit=20, workers=w, current=self.current) for w in (1, 3))
+        self.assertEqual((serial.hits, serial.skipped), (pooled.hits, pooled.skipped))
 
 
 class Ordering(Fixture):
@@ -266,7 +317,7 @@ class Context(Fixture):
         self.assertEqual((hit["before"], len(hit["after"])), ([], 1))
 
     def test_cli_context_sets_both_sides_and_explicit_a_and_b_win(self) -> None:
-        self.put(self.gpath, {"rules": {"no-pkill": {"match": {"command": "pkill"}, "message": "m"}}})
+        self.put(self.gpath, {"rules": {"no-pkill": PKILL}})
         sides = lambda *argv: [(len(h["before"]), len(h["after"])) for h in self.hits(*argv)]
         self.assertEqual(sides(), [(4, 4)])
         self.assertEqual(sides("-C", "2"), [(2, 2)])
@@ -314,15 +365,16 @@ class Robustness(Fixture):
         lines = [chat("user", long_text, BASE), entry("assistant", [{"type": "tool_use", "id": "o", "name": "Read",
                                                                      "input": {"file_path": long_text}}], BASE + 1),
                  entry("user", [{"type": "tool_result", "tool_use_id": "o", "content": long_text}], BASE + 2),
-                 *denied("t1", BASE + 10, command="pkill " + "y" * 5000, text="[guardrails:no-pkill] " + "z" * 5000),
+                 *denied("t1", BASE + 10, command="pkill " + "y" * 5000, text=f"[guardrails:no-pkill#{HASH}] " + "z" * 5000),
                  chat("assistant", long_text, BASE + 20)]
         self.write("p/a.jsonl", lines)
         hit = self.find(before=4, after=1).hits[0]
         self.assertEqual((len(hit["command"]), hit["command_truncated"]), (audit.COMMAND_CAP, True))
         self.assertEqual((len(hit["message"]), hit["message_truncated"]), (audit.MESSAGE_CAP, True))
         blocks = [b for m in (*hit["before"], *hit["after"]) for b in m["blocks"]]
-        self.assertEqual(len(blocks), 4)
-        self.assertTrue(all(len(b["text"]) == audit.TEXT_CAP and b["truncated"] for b in blocks))
+        self.assertEqual([(b["type"], len(b["text"]), b["truncated"]) for b in blocks],
+                         [("text", audit.TEXT_CAP, True), ("tool_use", audit.LABEL_CAP, True),
+                          ("tool_result", audit.TEXT_CAP, True), ("text", audit.TEXT_CAP, True)])
 
     def test_block_kinds_are_rendered_without_thinking_and_with_uniform_keys(self) -> None:
         content = [{"type": "thinking", "thinking": "hmm", "signature": "s"}, {"type": "text", "text": "hi"},
@@ -337,23 +389,30 @@ class Robustness(Fixture):
 class Rendering(Fixture):
     def setUp(self) -> None:
         super().setUp()
-        self.put(self.gpath, {"rules": {"no-pkill": {"match": {"command": "pkill"}, "message": "m"}}})
+        self.put(self.gpath, {"rules": {"no-pkill": PKILL}})
         self.write("proj/s.jsonl", [chat("user", "kill it\nnow", BASE), *denied("t1", BASE + 10, "pkill `node`\nx",
                                                                                agentId="ag1", isSidechain=True),
                                     chat("assistant", "ok", BASE + 20)])
-        self.write("proj/u.jsonl", denied("t2", BASE + 100, text="[guardrails:dev-only] m"), mtime=BASE + 20_000)
+        self.write("proj/u.jsonl", denied("t2", BASE + 100, text="[guardrails:dev-only#aaaaaaaa] m"),
+                   mtime=BASE + 20_000)
+        self.write("proj/v.jsonl", denied("t3", BASE + 200, text=f"[guardrails:no-pkill#{'9' * 8}] m"), mtime=BASE + 20_001)
+        self.write("proj/w.jsonl", denied("t4", BASE + 300, text="[guardrails:no-pkill] m"), mtime=BASE + 20_002)
 
     def test_json_schema_is_stable(self) -> None:
         code, out, _ = self.cli("audit", "--json")
         data = json.loads(out)
         self.assertEqual(code, 0)
         self.assertEqual(list(data), ["projects", "rule", "files_total", "files_scanned", "stopped_early",
-                                      "dropped_unknown_rules", "corrupt_lines", "unreadable_files", "hits"])
-        self.assertEqual((data["files_total"], data["dropped_unknown_rules"], len(data["hits"])), (2, 1, 1))
+                                      "skipped_other_version", "skipped_unhashed", "dropped_unknown_rules",
+                                      "corrupt_lines", "unreadable_files", "hits"])
+        self.assertEqual((data["files_total"], data["skipped_other_version"], data["skipped_unhashed"],
+                          data["dropped_unknown_rules"], len(data["hits"])), (4, 1, 1, 1, 1))
         hit = data["hits"][0]
-        self.assertEqual(list(hit), ["rule", "rules", "tool", "tool_use_id", "timestamp", "local", "session_id", "file",
-                                     "line", "is_sidechain", "agent_id", "cwd", "command", "command_truncated", "message",
+        self.assertEqual(list(hit), ["rule", "rule_hash", "rules", "tool", "tool_use_id", "timestamp", "local",
+                                     "session_id", "file", "line", "is_sidechain", "agent_id", "cwd", "command",
+                                     "command_truncated", "matched", "matched_truncated", "matched_note", "message",
                                      "message_truncated", "before", "after", "also_in"])
+        self.assertEqual(hit["rule_hash"], HASH)
         self.assertEqual((hit["file"], hit["line"], hit["is_sidechain"], hit["agent_id"], hit["cwd"], hit["session_id"]),
                          ("proj/s.jsonl", 3, True, "ag1", "/work/app", "sess-1"))
         self.assertEqual(list(hit["before"][0]), ["role", "timestamp", "line", "blocks"])
@@ -361,6 +420,7 @@ class Rendering(Fixture):
     def test_all_rules_keeps_unknown_ids(self) -> None:
         data = json.loads(self.cli("audit", "--json", "--all-rules")[1])
         self.assertEqual(([h["rule"] for h in data["hits"]], data["dropped_unknown_rules"]), (["dev-only", "no-pkill"], 0))
+        self.assertEqual(data["skipped_other_version"], 1)
 
     def test_rule_argument_and_limit(self) -> None:
         self.assertEqual([h["rule"] for h in json.loads(self.cli("audit", "no-pkill", "--json")[1])["hits"]], ["no-pkill"])
@@ -380,9 +440,11 @@ class Rendering(Fixture):
     def test_markdown_card(self) -> None:
         code, out, _ = self.cli("audit", "-C", "1")
         self.assertEqual(code, 0)
-        self.assertTrue(out.startswith("### Guardrails audit · 1 denial · newest first\n\n**Scope** scanned 2 of 2 transcript files"))
-        self.assertIn("1 denial for rules not in the current config left out", out)
-        self.assertIn("#### no-pkill · Bash · ", out)
+        self.assertTrue(out.startswith("### Guardrails audit · 1 denial · newest first\n\n**Scope** scanned 4 of 4 transcript files"))
+        for note in ("1 denial skipped: other version of the rule", "1 denial skipped: recorded before rule hashing",
+                     "1 denial skipped: rule no longer exists"):
+            self.assertIn(note, out)
+        self.assertIn(f"#### no-pkill#{HASH} · Bash · ", out)
         self.assertIn("**Command** `` pkill `node`⏎x ``", out)
         self.assertIn("· subagent `ag1`", out)
         self.assertIn("**Before**\n- user · text: kill it now", out)
@@ -392,7 +454,7 @@ class Rendering(Fixture):
     def test_no_denials_is_one_plain_line_with_the_scope(self) -> None:
         code, out, _ = self.cli("audit", "ghost")
         self.assertEqual(code, 0)
-        self.assertTrue(out.startswith("No guardrails denials found for ghost: scanned 2 of 2 transcript files under"))
+        self.assertTrue(out.startswith("No guardrails denials found for ghost: scanned 4 of 4 transcript files under"))
         self.assertEqual(len(out.strip().splitlines()), 1)
 
     def test_the_command_never_writes_anything(self) -> None:
@@ -401,6 +463,133 @@ class Rendering(Fixture):
             self.cli(*argv)
         self.assertEqual(self.tree(), before)
         self.assertEqual(list(self.data.iterdir()), [])
+
+
+class Compact(Fixture):
+    def test_non_shell_tool_calls_show_the_name_and_one_short_key_field(self) -> None:
+        calls = [("Write", {"file_path": "/a/b.py", "content": "x" * 9000}, "/a/b.py"),
+                 ("Grep", {"pattern": "foo", "path": "/src"}, "/src"), ("Grep", {"pattern": "foo"}, "foo"),
+                 ("WebFetch", {"url": "https://example.com/" + "u" * 300, "prompt": "p"}, ("https://example.com/" + "u" * 300)[:120]),
+                 ("Agent", {"description": "do it", "prompt": "long " * 500}, "do it"),
+                 ("Task", {"other": 1}, ""), ("Bash", {"command": "ls -la"}, "ls -la")]
+        lines = [entry("assistant", [{"type": "tool_use", "id": f"c{i}", "name": name, "input": args}], BASE + i)
+                 for i, (name, args, _) in enumerate(calls)]
+        self.write("p/a.jsonl", [*lines, *denied("t1", BASE + 50)])
+        blocks = [b for m in self.find(before=9).hits[0]["before"] for b in m["blocks"]]
+        self.assertEqual([(b["name"], b["text"]) for b in blocks], [(name, shown) for name, _, shown in calls])
+
+
+class Matched(Fixture):
+    def matched(self, command: str, rule: dict[str, Any] = PKILL) -> tuple[str | None, str | None]:
+        import matching
+
+        found = matching.matched_statement(command, policy.Rule.from_json(rule))
+        return (found.matched.text if found.matched else None), found.note
+
+    def test_a_plain_command_is_its_own_statement(self) -> None:
+        self.assertEqual(self.matched("pkill x"), ("pkill x", None))
+
+    def test_the_statement_inside_a_longer_script(self) -> None:
+        self.assertEqual(self.matched("echo a\ncd /tmp\npkill x\necho done")[0], "pkill x")
+        self.assertEqual(self.matched("cd /tmp && echo a; pkill x && echo done; ls")[0], "pkill x && echo done")
+
+    def test_a_wrapped_command_matches_through_the_wrapper(self) -> None:
+        found = self.matched("sudo pkill x")[0]
+        self.assertIsNotNone(found)
+        self.assertIn("pkill x", found or "")
+        self.assertEqual(self.matched("echo ok; bash -c 'ls; pkill y; ls'")[0], "pkill y")
+
+    def test_a_script_with_one_matching_statement(self) -> None:
+        script = "cat <<EOF\npkill inside heredoc text\nEOF\nls\npkill x\necho done"
+        self.assertEqual(self.matched(script)[0], "pkill x")
+
+    def test_message_cases_do_not_change_which_statement_is_reported(self) -> None:
+        cased = {**PKILL, "messages": [{"when": {"wrapped": True}, "text": "wrapped one"}]}
+        for command in ("echo a; pkill x", "sudo pkill x; ls"):
+            with self.subTest(command=command):
+                self.assertEqual(self.matched(command, cased), self.matched(command))
+
+    def test_a_replay_that_cannot_reproduce_the_hit_is_null_with_a_note(self) -> None:
+        matched, note = self.matched("echo hi")
+        self.assertIsNone(matched)
+        self.assertIn("does not match", note or "")
+        direct = {**PKILL, "wrappers": False}
+        self.assertEqual(self.matched("sudo pkill x", direct)[0], None)
+        self.assertIn("too large", self.matched("x" * (300 << 10))[1] or "")
+
+    def test_when_modes_and_enabled_do_not_gate_the_replay(self) -> None:
+        gated = {**PKILL, "when": {"bin": "definitely-not-installed"}, "enabled": False}
+        self.assertEqual(self.matched("pkill x", gated)[0], "pkill x")
+
+    def test_matched_is_filled_from_the_full_command_and_capped(self) -> None:
+        self.put(self.gpath, {"rules": {"no-pkill": PKILL}})
+        long_tail = "pkill " + "y" * 3000
+        self.write("p/a.jsonl", [*denied("t1", BASE, command=f"echo {'z' * 3000}; {long_tail}")])
+        hit = json.loads(self.cli("audit", "--json")[1])["hits"][0]
+        self.assertEqual(len(hit["command"]), audit.COMMAND_CAP)
+        self.assertNotIn("pkill", hit["command"][audit.COMMAND_CAP - 20:])
+        self.assertEqual((len(hit["matched"]), hit["matched_truncated"], hit["matched_note"]), (audit.MATCHED_CAP, True, None))
+        self.assertTrue(hit["matched"].startswith("pkill yyyy"))
+        self.assertIn("**Matched** `pkill yyyy", self.cli("audit")[1])
+
+    def test_an_unreproducible_hit_prints_a_note_and_null(self) -> None:
+        self.put(self.gpath, {"rules": {"no-pkill": PKILL}})
+        self.write("p/a.jsonl", denied("t1", BASE, command="echo nothing here"))
+        hit = json.loads(self.cli("audit", "--json")[1])["hits"][0]
+        self.assertEqual((hit["matched"], hit["matched_truncated"]), (None, False))
+        self.assertIn("does not match", hit["matched_note"])
+        self.assertIn("**Matched** none: ", self.cli("audit")[1])
+
+    def test_an_all_rules_hit_for_an_unknown_rule_has_a_note(self) -> None:
+        self.put(self.gpath, {"rules": {"no-pkill": PKILL}})
+        self.write("p/a.jsonl", denied("t1", BASE, text="[guardrails:gone#aaaaaaaa] m"))
+        hit = json.loads(self.cli("audit", "--json", "--all-rules")[1])["hits"][0]
+        self.assertEqual((hit["matched"], hit["rule"]), (None, "gone"))
+        self.assertIn("not in the current config", hit["matched_note"])
+
+
+class EngineWeight(Fixture):
+    HEAVY = ("matching", "scanner", "ast_grep_py")
+
+    def run_python(self, body: str) -> dict[str, Any]:
+        code = f"import sys, json\nsys.path.insert(0, {str(LIB)!r})\nimport audit, policy\n{body}"
+        done = subprocess.run([sys.executable, "-c", code], capture_output=True, text=True, check=True)
+        return json.loads(done.stdout)
+
+    def loaded(self) -> str:
+        return f"[m for m in {self.HEAVY!r} if m in sys.modules]"
+
+    def test_importing_audit_and_scanning_without_a_surviving_hit_never_loads_the_engine(self) -> None:
+        self.write("p/a.jsonl", denied("t1", BASE, text="[guardrails:no-pkill#99999999] m"))
+        out = self.run_python(f"""
+before = {self.loaded()}
+q = audit.Query(current={{"no-pkill": {HASH!r}}})
+report = audit.find_denials(audit.Path({str(self.root)!r}), 5, q, workers=2)
+audit.attach_matched(report, {{}})
+print(json.dumps({{"before": before, "hits": len(report.hits), "after": {self.loaded()}}}))""")
+        self.assertEqual(out, {"before": [], "hits": 0, "after": []})
+
+    def test_workers_never_load_the_engine_and_the_main_process_loads_only_the_matcher_for_surviving_hits(self) -> None:
+        self.write("p/a.jsonl", denied("t1", BASE))
+        self.write("p/b.jsonl", denied("t2", BASE + 5), mtime=BASE + 20_000)
+        out = self.run_python(f"""
+real = audit.scan_file
+def probe(path, rel, query):
+    scan = real(path, rel, query)
+    scan.corrupt = len({self.loaded()})
+    return scan
+audit.scan_file = probe
+q = audit.Query(current={{"no-pkill": {HASH!r}}})
+report = audit.find_denials(audit.Path({str(self.root)!r}), 5, q, workers=2)
+rules = {{"no-pkill": policy.Rule.from_json({PKILL!r})}}
+mid = {self.loaded()}
+audit.attach_matched(report, rules)
+print(json.dumps({{"hits": len(report.hits), "in_workers": report.corrupt, "mid": mid, "after": {self.loaded()},
+                  "matched": [h["matched"] for h in report.hits]}}))""")
+        self.assertEqual((out["hits"], out["in_workers"], out["mid"]), (2, 0, []))
+        self.assertEqual(out["matched"], ["pkill node", "pkill node"])
+        self.assertIn("matching", out["after"])
+        self.assertNotIn("ast_grep_py", out["after"])
 
 
 if __name__ == "__main__":

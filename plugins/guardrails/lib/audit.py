@@ -6,11 +6,16 @@ import json
 import multiprocessing
 import os
 from collections import deque
+from collections.abc import Mapping
 from concurrent.futures import ProcessPoolExecutor
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
+from enum import StrEnum
 from pathlib import Path
-from typing import Any, NamedTuple, TypedDict
+from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
+
+if TYPE_CHECKING:
+    import policy
 
 SHELL_TOOLS = ("Bash", "Monitor")
 MARKER = "[guardrails:"
@@ -18,6 +23,10 @@ HOOK_ERROR = " hook error: "
 COMMAND_CAP = 2000
 TEXT_CAP = 600
 MESSAGE_CAP = 2000
+MATCHED_CAP = 400
+LABEL_CAP = 120
+LABEL_FIELDS = ("file_path", "path", "pattern", "url", "query", "description")
+REPLAY_MAX_BYTES = 256 << 10
 RING_SLACK = 256
 USE_LIMIT = 4096
 MAX_WORKERS = 8
@@ -33,19 +42,35 @@ def valid_id(text: str) -> bool:
     return bool(text) and text.isascii() and text[0].isalnum() and all(c.isalnum() or c in "_.-" for c in text)
 
 
-def leading_ids(text: str) -> list[str] | None:
-    """The rule ids of a `[guardrails:a, b (managed)]` marker at the very start of text."""
+class Marked(NamedTuple):
+    """A rule id of a denial marker and the hash of the rule that denied (None before denials carried one)."""
+
+    id: str
+    digest: str | None
+
+
+def valid_digest(text: str) -> bool:
+    return len(text) == 8 and all(c in "0123456789abcdef" for c in text)
+
+
+def leading_ids(text: str) -> list[Marked] | None:
+    """The ids of a `[guardrails:a#1b2c3d4e, b (managed)]` marker at the very start of text."""
     if not text.startswith(MARKER):
         return None
     close = text.find("]", len(MARKER))
     if close < 0:
         return None
-    ids = [part.removesuffix(" (managed)") for part in text[len(MARKER):close].split(", ")]
-    return ids if all(valid_id(i) for i in ids) else None
+    found = []
+    for part in text[len(MARKER):close].split(", "):
+        name, _, digest = part.removesuffix(" (managed)").partition("#")
+        if not valid_id(name) or (digest and not valid_digest(digest)) or ("#" in part and not digest):
+            return None
+        found.append(Marked(name, digest or None))
+    return found
 
 
-def denial_ids(text: str, tool: str) -> list[str] | None:
-    """The rule ids in the hook's denial text for this tool, or None when the text is not such a denial.
+def denial_ids(text: str, tool: str) -> list[Marked] | None:
+    """The ids in the hook's denial text for this tool, or None when the text is not such a denial.
 
     Claude Code shows the hook's reason either bare or after `PreToolUse:<tool> hook error: `; later paragraphs
     each start with their own marker.
@@ -60,7 +85,7 @@ def denial_ids(text: str, tool: str) -> list[str] | None:
     if ids is None:
         return None
     for paragraph in body.split("\n\n")[1:]:
-        ids += [i for i in leading_ids(paragraph) or [] if i not in ids]
+        ids += [m for m in leading_ids(paragraph) or [] if m.id not in {i.id for i in ids}]
     return ids
 
 
@@ -82,6 +107,7 @@ class Message(TypedDict):
 
 class Hit(TypedDict):
     rule: str
+    rule_hash: str | None
     rules: list[str]
     tool: str
     tool_use_id: str
@@ -95,6 +121,9 @@ class Hit(TypedDict):
     cwd: str | None
     command: str
     command_truncated: bool
+    matched: str | None
+    matched_truncated: bool
+    matched_note: str | None
     message: str
     message_truncated: bool
     before: list[Message]
@@ -105,6 +134,7 @@ class Hit(TypedDict):
 class Found(NamedTuple):
     epoch: float
     hit: Hit
+    command: str
 
 
 def cap(text: str, limit: int) -> tuple[str, bool]:
@@ -125,6 +155,15 @@ def block(kind: str, text: str = "", limit: int = TEXT_CAP, name: str | None = N
     return {"type": kind, "text": shown, "name": name, "tool_use_id": use_id, "is_error": error, "truncated": truncated}
 
 
+def label_of(args: object) -> str:
+    """The one field of a non-shell tool call that says what it works on."""
+    if isinstance(args, dict):
+        for key in LABEL_FIELDS:
+            if isinstance(args.get(key), str) and args[key]:
+                return args[key]
+    return ""
+
+
 def blocks_of(content: object) -> list[Block]:
     if isinstance(content, str):
         return [block("text", content)]
@@ -139,9 +178,11 @@ def blocks_of(content: object) -> list[Block]:
             args = item.get("input")
             name = str(item.get("name", ""))
             command = args.get("command") if isinstance(args, dict) else None
-            text = command if isinstance(command, str) else json.dumps(args, ensure_ascii=False, separators=(",", ":"))
-            out.append(block("tool_use", text, COMMAND_CAP if name in SHELL_TOOLS else TEXT_CAP, name,
-                             str(item.get("id", ""))))
+            if name in SHELL_TOOLS:
+                out.append(block("tool_use", command if isinstance(command, str) else "", COMMAND_CAP, name,
+                                 str(item.get("id", ""))))
+            else:
+                out.append(block("tool_use", label_of(args), LABEL_CAP, name, str(item.get("id", ""))))
         elif kind == "tool_result":
             out.append(block("tool_result", text_of(item.get("content")), use_id=str(item.get("tool_use_id", "")),
                              error=bool(item.get("is_error"))))
@@ -162,10 +203,19 @@ def local_time(timestamp: str) -> str:
     return when.astimezone().strftime("%Y-%m-%d %H:%M:%S") if when else ""
 
 
+class Skip(StrEnum):
+    OTHER_VERSION = "other_version"
+    UNHASHED = "unhashed"
+    UNKNOWN = "unknown"
+
+
 @dataclass(frozen=True)
 class Query:
+    """What to keep. `current` maps each rule id of the current config to its hash; None keeps every denial."""
+
     rule: str | None = None
-    known: frozenset[str] | None = None
+    current: Mapping[str, str] | None = None
+    keep_unknown: bool = False
     warn: frozenset[str] = frozenset()
     before: int = 4
     after: int = 4
@@ -174,17 +224,41 @@ class Query:
 @dataclass
 class FileScan:
     hits: list[Found] = field(default_factory=list)
+    skipped: dict[str, Skip] = field(default_factory=dict)
     corrupt: int = 0
-    dropped: int = 0
     unreadable: bool = False
 
 
-def kept_ids(ids: list[str], query: Query) -> tuple[list[str], bool]:
-    """The ids that denied (warn rules ride along in the text) and whether the hit passes the query."""
-    deniers = [i for i in ids if i not in query.warn]
-    if query.rule is not None:
-        return deniers, query.rule in deniers
-    return deniers, query.known is None or any(i in query.known for i in deniers)
+def standing(marked: Marked, query: Query) -> Skip | None:
+    if query.current is None:
+        return None
+    current = query.current.get(marked.id)
+    if current is None:
+        return None if query.keep_unknown else Skip.UNKNOWN
+    if marked.digest is None:
+        return Skip.UNHASHED
+    return None if marked.digest == current else Skip.OTHER_VERSION
+
+
+class Verdict(NamedTuple):
+    deniers: list[Marked]
+    kept: Marked | None
+    skip: Skip | None
+
+
+def judge(ids: list[Marked], query: Query) -> Verdict | None:
+    """Which rule of a denial counts for the query, or why none does; None when it is not about the queried rule.
+
+    Warn rules ride along in a denial's text and are not its deniers.
+    """
+    deniers = [m for m in ids if m.id not in query.warn]
+    considered = [m for m in deniers if query.rule in (None, m.id)]
+    if not considered:
+        return None
+    reasons = {m: standing(m, query) for m in considered}
+    kept = next((m for m, why in reasons.items() if why is None), None)
+    skip = next((why for why in Skip if why in reasons.values()), None) if kept is None else None
+    return Verdict(deniers, kept, skip)
 
 
 def denied_results(entry: dict[str, Any]) -> list[tuple[str, str]]:
@@ -269,25 +343,30 @@ class Scanner:
             return
         self.seen.add(use_id)
         query = self.query
-        deniers, keep = kept_ids(ids, query)
-        if not keep:
-            self.scan.dropped += query.rule is None
+        verdict = judge(ids, query)
+        if verdict is None:
+            return
+        if verdict.kept is None:
+            if verdict.skip is not None:
+                self.scan.skipped[use_id] = verdict.skip
             return
         shown, command_cut = cap(used.command, COMMAND_CAP)
         message, message_cut = cap(text, MESSAGE_CAP)
         stamp = str(entry.get("timestamp", ""))
         when = instant(stamp)
-        primary = query.rule or next((i for i in deniers if query.known is None or i in query.known), deniers[0])
         earlier = [m for seq, m in self.ring if seq < used.seq]
         hit: Hit = {
-            "rule": primary, "rules": deniers, "tool": used.tool, "tool_use_id": use_id, "timestamp": stamp,
+            "rule": verdict.kept.id, "rule_hash": verdict.kept.digest, "rules": [m.id for m in verdict.deniers],
+            "tool": used.tool, "tool_use_id": use_id, "timestamp": stamp,
             "local": local_time(stamp), "session_id": str(entry.get("sessionId") or entry.get("session_id") or ""),
             "file": self.rel, "line": number, "is_sidechain": bool(entry.get("isSidechain")),
             "agent_id": entry.get("agentId"), "cwd": entry.get("cwd"), "command": shown,
-            "command_truncated": command_cut, "message": message, "message_truncated": message_cut,
+            "command_truncated": command_cut, "matched": None,
+            "matched_truncated": False, "matched_note": None, "message": message, "message_truncated": message_cut,
             "before": earlier[-query.before:] if query.before else [], "after": [], "also_in": [],
         }
-        found = Found(when.timestamp() if when else -1.0, hit)
+        full = used.command if len(used.command) <= REPLAY_MAX_BYTES else ""
+        found = Found(when.timestamp() if when else -1.0, hit, full)
         self.scan.hits.append(found)
         if query.after:
             self.pending.append(Pending(found, query.after))
@@ -308,13 +387,17 @@ def scan_file(path: str, rel: str, query: Query) -> FileScan:
 @dataclass
 class Report:
     hits: list[Hit] = field(default_factory=list)
-    dropped: int = 0
+    commands: dict[str, str] = field(default_factory=dict)
+    skipped: dict[str, Skip] = field(default_factory=dict)
     corrupt: int = 0
     unreadable: int = 0
     files_total: int = 0
     opened: list[str] = field(default_factory=list)
     stopped_early: bool = False
     projects: str = ""
+
+    def skipped_for(self, why: Skip) -> int:
+        return sum(1 for reason in self.skipped.values() if reason is why)
 
 
 def transcripts(root: Path) -> list[tuple[float, str, str]]:
@@ -360,8 +443,8 @@ def find_denials(root: Path, limit: int, query: Query, workers: int | None = Non
             for (_, _, rel), scan in zip(batch, scans):
                 report.opened.append(rel)
                 report.corrupt += scan.corrupt
-                report.dropped += scan.dropped
                 report.unreadable += scan.unreadable
+                report.skipped.update({use_id: why for use_id, why in scan.skipped.items() if use_id not in held})
                 for found in scan.hits:
                     if found.hit["tool_use_id"] in held:
                         held[found.hit["tool_use_id"]].hit["also_in"].append(rel)
@@ -373,4 +456,28 @@ def find_denials(root: Path, limit: int, query: Query, workers: int | None = Non
     order = {rel: n for n, (_, _, rel) in enumerate(files)}
     ranked = sorted(held.values(), key=lambda f: (-f.epoch, order[f.hit["file"]], -f.hit["line"]))
     report.hits = [found.hit for found in ranked[:limit]]
+    report.commands = {found.hit["tool_use_id"]: found.command for found in ranked[:limit]}
+    report.skipped = {use_id: why for use_id, why in report.skipped.items() if use_id not in held}
     return report
+
+
+def attach_matched(report: Report, rules: Mapping[str, policy.Rule]) -> None:
+    """Fill `matched` of each kept hit with the statement the current rule matches in the full command.
+
+    The only place the matching engine is used, after the hash filter and in this process, never in a worker.
+    """
+    if not report.hits:
+        return
+    import matching
+
+    for hit in report.hits:
+        rule, command = rules.get(hit["rule"]), report.commands.get(hit["tool_use_id"], "")
+        if rule is None:
+            hit["matched_note"] = "the rule is not in the current config, so the denied statement cannot be located"
+        elif not command:
+            hit["matched_note"] = "the command is too large to replay"
+        else:
+            replay = matching.matched_statement(command, rule)
+            if replay.matched is not None:
+                hit["matched"], hit["matched_truncated"] = cap(replay.matched.text, MATCHED_CAP)
+            hit["matched_note"] = replay.note
