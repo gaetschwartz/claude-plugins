@@ -39,7 +39,11 @@ The guard stops mistakes by an honest agent and by an agent steered by hostile r
 plugin data dir or the global config are out of scope: they could edit the rules directly. Known gaps: a repository that
 sets an absolute `CLAUDE_PLUGIN_DATA` chooses which runtime and session state the hook uses, and one that sets an absolute
 `XDG_CONFIG_HOME` chooses which global config it reads. A repository's own `.claude/guardrails.json` is the project layer by
-design: it can add rules and tighten others, never loosen a global or managed one.
+design: it can add rules and tighten others, never loosen a global or managed one. A rule's `when` (and a message case's)
+reads the environment the hook runs in: `PATH` for `bin`, environment variables for `env`, the host name, the project
+root for `file`. A cloned repository's `.claude/settings.json` can change those variables (and its files exist for
+`file`), so it can make a `when` hold or fail and with it switch such a rule on or off; that environment is trusted by
+design, like the variables above. A rule without `when` does not depend on it.
 
 Files: the runtime, `state.json` (per-session memory), `state.json.lock`, `config.lock`, `telemetry.db` and `notices/` live
 in the data dir. Configuration does not: the global config is under the XDG config dir and the project config in
@@ -105,7 +109,7 @@ match".
 Per-rule counters in `${CLAUDE_PLUGIN_DATA}/telemetry.db` (SQLite, mode 0600, local only: nothing is ever sent). One row per
 rule id and hour: how many calls the rule `deny`-ed or `warn`-ed (it matched), let `pass` (evaluated, no match) or had
 `suspended` by an active mode (it matched), plus the summed and the largest evaluation time in microseconds. A rule that was
-not evaluated (disabled, `requires` missing, engine failure) writes no row. Rule ids are user text, so they are reduced to
+not evaluated (disabled, its `when` does not hold, engine failure) writes no row. Rule ids are user text, so they are reduced to
 at most 64 printable ASCII characters and never start with `@`. Rows older than 365 days are deleted at SessionStart.
 
 Reserved `@` rows count what is not a rule: `@hook` (calls, and the time in the hook process; interpreter start-up is not

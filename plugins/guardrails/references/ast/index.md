@@ -12,6 +12,7 @@ in [writing-rules.md](../writing-rules.md).
 | match a flag in any spelling or cluster, an argument value, an exception (`--force-with-lease`), `git -C dir push -f`, `rm -rf /`, `docker run --privileged`, `kill -9`, `kill $( )` | [flags.md](flags.md) |
 | depend on order in `&&` / `;` lists (`cd x && git ...`); understand subshells, groups and what `wrapped` means | [lists.md](lists.md) |
 | match `sudo`, `bash -c`, `eval`; the `wrapper` atom; a rule NOT through wrappers (`"wrappers": false`); `LD_PRELOAD=` prefixes (the `assignment` atom); how wrappers and shell strings are looked through; single versus double quotes; heredocs and `<<-` as data | [wrappers.md](wrappers.md) |
+| apply a rule only where a tool is installed or in some projects (`when`); give a different message per command shape (`messages` cases); put the installed binary (`{found}`) or a captured word (`{TARGET}`) in the text | [messages.md](messages.md) |
 
 ## Method in three lines
 
@@ -24,5 +25,6 @@ in [writing-rules.md](../writing-rules.md).
 ## Example format
 
 Each example is a `rule-example` block: the `match` object (`rule`), the `action`, the commands to `catch` and to
-`pass`, and optionally the rule's `wrappers` field and the node kinds that matter (`tree`). `tests/test_ast_examples.py` runs every block through the
-same code path as `rule test`.
+`pass`, and optionally the rule's `wrappers`, `when`, `message` and `messages` fields, the node kinds that matter
+(`tree`), the message case each listed command picks (`cases`, 1-based, `null` for the rule's own `message`) and the
+exact text it renders (`says`). `tests/test_ast_examples.py` runs every block through the same code path as `rule test`.

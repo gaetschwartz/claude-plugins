@@ -55,7 +55,10 @@ plain chat what to explain instead.)
 5. After a blank line add the bold-label lines from the Explain section of the presentation reference (`Happens`,
    `Loosen`, `Lower layers`, and `Cause` only when the question was why something was or was not caught), with no
    command spans or verdicts of your own. State the cause when the matching reference explains it (its "Why a rule may
-   not fire" list, the limits of the `command` atom and its `args`, wrappers and `"wrappers": false`); do not hedge and
+   not fire" list, a `when` that does not hold here (the card's `**When**` line and `**Note**`, `inactive here` in
+   `status`), the limits of the `command` atom and its `args`, wrappers and `"wrappers": false`); when the question is
+   why a command got a particular text, the row's ` · case N` / ` · default message` tag and the `**Case N**` lines
+   answer it; do not hedge and
    do not say "possibly". For a rule with relations, run `guardrails rule ast '<cmd>'` to show the tree and the
    shell-string units. If the engine was
    unavailable the row is listed under **Not evaluated**: `cat ${CLAUDE_PLUGIN_ROOT}/references/runtime.md` for what that

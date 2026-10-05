@@ -42,6 +42,7 @@ class Result:
     source: Source
     outcome: Outcome
     expect: Expect | None = None
+    case: int | None = None
 
     @property
     def matched(self) -> bool:
@@ -59,6 +60,7 @@ class RuleRow:
     action: str
     layers: list[str]
     state: str
+    conditions: str = ""
 
 
 @dataclass
@@ -132,6 +134,20 @@ def describe_match(rule: policy.Rule) -> str:
     return span(compact(rule.match)) + ("" if rule.wrappers else " · not through wrappers")
 
 
+def describe_conditions(rule: policy.Rule) -> str:
+    """The status row's tail: the rule's `when` and how many message cases it has."""
+    parts = [f"when {span(compact(rule.when))}"] if rule.when is not None else []
+    if rule.messages:
+        parts.append(plural(len(rule.messages), "message case"))
+    return " · ".join(parts)
+
+
+def case_tag(rule: policy.Rule, result: Result) -> str:
+    if not rule.messages or not result.matched:
+        return ""
+    return f" · case {result.case + 1}" if result.case is not None else " · default message"
+
+
 def texts_under(node: object, keys: tuple[str, ...]) -> list[str]:
     """Every value under one of these keys in a rule object, in document order (a pattern object: its context)."""
     if isinstance(node, list):
@@ -157,7 +173,8 @@ def plural(n: int, word: str) -> str:
 
 
 def rule_card(rid: str, rule: policy.Rule, message: str, scope: str, intent: str,
-              results: list[Result], notes: list[str]) -> str:
+              results: list[Result], notes: list[str], applies: bool = True, cases: tuple[str, ...] = ()) -> str:
+    """`message` and `cases` are the texts as shown (placeholders other than captures filled)."""
     action = str(rule.action)
     head = [f"### {clean(rid)}", clean(action)]
     if rule.retry is policy.Retry.SAME_COMMAND:
@@ -168,7 +185,11 @@ def rule_card(rid: str, rule: policy.Rule, message: str, scope: str, intent: str
     if intent:
         lines.append(f"**Intent** {prose(intent)}")
     lines.append(f"**Match** {describe_match(rule)}")
+    if rule.when is not None:
+        lines.append(f"**When** {span(compact(rule.when))} · {'holds here' if applies else 'does not hold here'}")
     lines.append(f"**Message** {prose(message)}")
+    for i, (case, text) in enumerate(zip(rule.messages, cases, strict=True), 1):
+        lines.append(f"**Case {i}** when {span(compact(case.when))} · {prose(text)}")
 
     shown = [clean(r.cmd) for r in results]
     width = common_width(shown)
@@ -181,7 +202,7 @@ def rule_card(rid: str, rule: policy.Rule, message: str, scope: str, intent: str
         lines += ["", f"**{heading}**"]
         for text, r in group:
             flag = "⚠ " if r.mismatch else ""
-            tag = r.source + (" · wrapped" if r.outcome is Outcome.WRAPPED else "")
+            tag = r.source + (" · wrapped" if r.outcome is Outcome.WRAPPED else "") + case_tag(rule, r)
             lines.append(f"- {glyph} {flag}{span(text, width)} {tag}")
 
     bad = sum(r.mismatch for r in results)
@@ -213,7 +234,7 @@ def status_listing(status: Status) -> str:
     lines += ["", "**Rules**"]
     if status.rules:
         for row, cell in zip(status.rules, padded_rows([r.id for r in status.rules])):
-            lines.append(f"- {cell} {clean(row.action)} · {'+'.join(row.layers)} · {clean(row.state)}")
+            lines.append(f"- {cell} {row_tail(row)}")
     else:
         lines.append(status.no_rules)
     if status.modes:
@@ -233,8 +254,14 @@ def problems_listing(problems: list[str]) -> str:
     return "\n".join(["**Problems**", *(f"- {prose(p)}" for p in problems)])
 
 
+def row_tail(row: RuleRow) -> str:
+    """Everything after the id: `conditions` is already rendered markdown."""
+    tail = f"{clean(row.action)} · {'+'.join(row.layers)} · {clean(row.state)}"
+    return f"{tail} · {row.conditions}" if row.conditions else tail
+
+
 def rule_row(row: RuleRow) -> str:
-    return f"- {span(row.id)} {clean(row.action)} · {'+'.join(row.layers)} · {clean(row.state)}"
+    return f"- {span(row.id)} {row_tail(row)}"
 
 
 @dataclass(slots=True)

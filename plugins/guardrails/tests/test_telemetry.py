@@ -75,6 +75,12 @@ class Counted(Fixture):
         self.assertEqual(self.table()["no-kill"], (0, 0, 0, 1))
         self.assertNotIn("no-curl", self.table())
 
+    def test_a_rule_whose_when_does_not_hold_writes_nothing(self) -> None:
+        self.put(self.gpath, {"rules": {**RULES, "no-curl": {**RULES["no-curl"], "when": {"bin": "no-such-bin-xyz"}},
+                                        "warn-ls": {**RULES["warn-ls"], "when": {"tool": "Monitor"}}}})
+        self.run_hook("curl x; ls")
+        self.assertEqual(sorted(self.table()), ["@hook", "@parse", "no-kill"])
+
     def test_only_rule_ids_integers_and_hours_reach_the_file_even_for_hostile_ids(self) -> None:
         self.put(self.gpath, {"rules": {**RULES, **{rid: {"match": {"command": "kill"}, "message": "No kill."}
                                                     for rid in HOSTILE}}})

@@ -1,10 +1,9 @@
 from __future__ import annotations  # noqa: I001
 
-import os
 import unittest
 from typing import Any, ClassVar
 
-from helpers import Isolated
+import helpers  # noqa: F401
 
 import policy
 
@@ -24,12 +23,12 @@ def shape(eff: policy.Rule) -> tuple[Any, ...]:
 class Validate(unittest.TestCase):
     def test_minimal_and_full_rules_are_valid_and_malformed_ones_are_not(self) -> None:
         policy.Rule.from_json(rule())
-        policy.Rule.from_json(rule(match={"kind": "command"}, requires=["rg"], messageShort="s", wrappers=False))
+        policy.Rule.from_json(rule(match={"kind": "command"}, when={"bin": "rg"}, messageShort="s", wrappers=False))
         bad: list[Any] = [
             "notadict", {"match": {"command": "x"}}, rule(message="  "), rule(match={}), rule(match={"args": "-9"}),
             rule(match={"command": "x", "bogus": 1}), rule(match={"command": 3}), rule(match={"command": ["x", ""]}),
             rule(match={"builtin": "nope"}), rule(match={"command": "x y"}), rule(match={"command": "a/b"}),
-            rule(action="block"), rule(retry="always"), rule(modes="reverse-engineering"), rule(requires=[]),
+            rule(action="block"), rule(retry="always"), rule(modes="reverse-engineering"), rule(when={}),
             rule(enabled="false"), rule(messageShort=3), rule(wrappers="no"), rule(wrappers=None),
         ]
         for r in bad:
@@ -81,13 +80,16 @@ class Layering(unittest.TestCase):
             ("cannot relax", tight, {"action": "warn", "retry": "same-command", "enabled": False, "modes": ["re", "x"]},
              ("deny", "none", True, ("re",))),
             ("re-enable", rule(enabled=False), {"enabled": True}, ("deny", "none", True, ())),
-            ("requires ignored", rule(requires=["rg"]), {"requires": ["fd"]}, ("deny", "none", True, ())),
+            ("when ignored", rule(when={"bin": "rg"}), {"when": {"bin": "fd"}}, ("deny", "none", True, ())),
+            ("messages ignored", rule(messages=[{"when": {"wrapped": True}, "text": "w"}]),
+             {"messages": [{"when": {"wrapped": False}, "text": "d"}]}, ("deny", "none", True, ())),
         ]
         for name, base, override, expected in cases:
             with self.subTest(name):
                 eff = rules_of({}, {"rules": {"r": base}}, {"rules": {"r": override}})["r"]
                 self.assertEqual(shape(eff), expected)
-                self.assertEqual(eff.requires, tuple(base.get("requires", ())))
+                self.assertEqual((eff.when, eff.messages), (policy.Rule.from_json(base).when,
+                                                            policy.Rule.from_json(base).messages))
 
     def test_text_is_replaced_but_match_is_not_and_an_empty_message_falls_back(self) -> None:
         g = {"rules": {"r": rule()}}
@@ -103,7 +105,8 @@ class Layering(unittest.TestCase):
 
 
 class ManagedLayering(unittest.TestCase):
-    MANAGED: ClassVar[dict[str, Any]] = {"rules": {"r": rule(action="deny", retry="none", requires=["rg"], modes=["re"])},
+    MANAGED: ClassVar[dict[str, Any]] = {"rules": {"r": rule(action="deny", retry="none", when={"bin": "rg"}, modes=["re"],
+                                                         messages=[{"when": {"wrapped": True}, "text": "w"}])},
                                          "modes": {"re": {"description": "m", "agentMayEnable": False}}}
 
     def eff(self, g: Any = None, p: Any = None) -> policy.Rule:
@@ -112,7 +115,8 @@ class ManagedLayering(unittest.TestCase):
     def test_each_loosening_is_ignored_on_its_own_and_an_invalid_override_falls_back(self) -> None:
         for field, value in (("action", "warn"), ("retry", "same-command"), ("enabled", False),
                              ("modes", ["re", "extra"]), ("match", {"command": "nm"}), ("wrappers", False),
-                             ("requires", ["fd"]), ("message", "")):
+                             ("when", {"bin": "fd"}), ("when", None), ("message", ""),
+                             ("messages", [{"when": {"wrapped": False}, "text": "d"}]), ("requires", ["fd"])):
             with self.subTest(field=field):
                 base = self.eff()
                 self.assertEqual(self.eff({"rules": {"r": {field: value}}}), base)
@@ -211,22 +215,3 @@ class Modes(unittest.TestCase):
         locked = policy.effective_modes(self.MANAGED, {"modes": {"re": {"agentMayEnable": True}}}, {})
         agent = policy.Session.from_json({"modes": {"re": {"by": "agent"}, "ops": {"by": "agent"}}})
         self.assertEqual(sorted(policy.active_modes(locked, agent)), ["always", "ops"])
-
-
-class Rendering(Isolated):
-    def make_tool(self, name: str) -> str:
-        bin_dir = self.tmp / "bin"
-        bin_dir.mkdir(exist_ok=True)
-        tool = bin_dir / name
-        tool.write_text("#!/bin/sh\n")
-        tool.chmod(0o755)
-        return str(bin_dir)
-
-    def test_which_placeholder_and_requires_prefer_what_is_installed(self) -> None:
-        os.environ["PATH"] = self.make_tool("fdfind")
-        self.assertEqual(policy.render("use {which:fd|fdfind} now"), "use fdfind now")
-        self.assertTrue(policy.requirements_met(policy.Rule.from_json(rule(requires=["fd", "fdfind"]))))
-        self.assertFalse(policy.requirements_met(policy.Rule.from_json(rule(requires=["nope"]))))
-        self.assertTrue(policy.requirements_met(policy.Rule.from_json(rule())))
-        os.environ["PATH"] = str(self.tmp / "empty")
-        self.assertEqual(policy.render("use {which:fd|fdfind}; keep {} and {/}"), "use fd; keep {} and {/}")

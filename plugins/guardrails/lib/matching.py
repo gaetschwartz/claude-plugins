@@ -7,16 +7,19 @@ be interrupted and a hook that runs out of time lets the command through.
 from __future__ import annotations
 
 import time
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import StrEnum
-from typing import TYPE_CHECKING, NamedTuple, assert_never
+from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 
 import bounded
+import conditions
+import messages
 import policy
-from verdict import MAX_COMMAND_BYTES, Evaluation, Fault, Kind, Limit, UnitTree
+from verdict import MAX_COMMAND_BYTES, Detail, Evaluation, Fault, Kind, Limit, UnitTree
 
 if TYPE_CHECKING:
-    from ast_grep_py import Config
+    from ast_grep_py import Config, SgNode
+    from scanner import Describe
 
 HOOK_SECONDS = 10.0
 HEADROOM_SECONDS = 2.0
@@ -38,6 +41,7 @@ class Computed(NamedTuple):
     failure: str | None
     micros: dict[str, int]
     parse_us: int
+    details: dict[str, Detail]
 
     @classmethod
     def from_json(cls, raw: object) -> Computed:
@@ -46,7 +50,57 @@ class Computed(NamedTuple):
             raise TypeError("not an object")
         return cls({rid: Kind(kind) if kind else None for rid, kind in raw["kinds"].items()}, dict(raw["invalid"]),
                    Limit(raw["limit"]) if raw["limit"] else None, raw["failure"], dict(raw["micros"]),
-                   int(raw["parse_us"]))
+                   int(raw["parse_us"]), {rid: detail_of(value) for rid, value in raw["details"].items()})
+
+
+def detail_of(raw: object) -> Detail:
+    """A Detail from the checker's JSON, held to the caps on captures."""
+    if not isinstance(raw, list | tuple) or len(raw) != 2:
+        raise TypeError("not a detail")
+    case, captures = raw
+    if not (case is None or (isinstance(case, int) and not isinstance(case, bool))) or not isinstance(captures, dict) \
+            or len(captures) > messages.MAX_CAPTURES:
+        raise ValueError("malformed detail")
+    for name, text in captures.items():
+        if not (isinstance(name, str) and isinstance(text, str) and len(text) <= messages.MAX_CAPTURE_CHARS + 1):
+            raise ValueError("malformed capture")
+    return Detail(case, dict(captures))
+
+
+class NodeHit:
+    """The node that decided a rule's verdict, for the hit atoms of message cases."""
+
+    __slots__ = ("node", "wrapped")
+
+    def __init__(self, node: SgNode, wrapped: bool) -> None:
+        self.node = node
+        self.wrapped = wrapped
+
+    def matches(self, rule: Mapping[str, Any]) -> bool:
+        import rulebuilder
+
+        return self.node.matches(**rulebuilder.built(dict(rule)))
+
+
+def describer(rules: dict[str, policy.Rule], env: conditions.Env) -> Describe | None:
+    """What the checker reads from a hit for a rule's message: the case that holds and the captures its texts name.
+    None when no rule has cases or capture placeholders, so the common path does no extra work."""
+    wanted = {rid: rule for rid, rule in rules.items()
+              if rule.messages or messages.captures_wanted((rule.message, rule.message_short))}
+    if not wanted:
+        return None
+
+    def describe(rid: str, node: SgNode, kind: Kind) -> Detail | None:
+        rule = wanted.get(rid)
+        if rule is None:
+            return None
+        hit = NodeHit(node, kind is Kind.WRAPPED)
+        case = next((i for i, c in enumerate(rule.messages) if conditions.holds(c.when, env, hit)), None)
+        names = messages.captures_wanted(messages.chosen(rule, case))
+        captures = {name: text for name in names if (text := messages.capture(node, name)) is not None}
+        return Detail(case, captures)
+
+    return describe
 
 
 class Health(StrEnum):
@@ -90,22 +144,25 @@ def direct_only(rules: dict[str, policy.Rule]) -> frozenset[str]:
     return frozenset(rid for rid, rule in rules.items() if not rule.wrappers)
 
 
-def compute(command: str, rules: dict[str, policy.Rule]) -> Computed:
+def compute(command: str, rules: dict[str, policy.Rule], env: conditions.Env = conditions.DEFAULT) -> Computed:
     """Every rule's verdict on one command; runs in the checker child."""
     try:
         import scanner
     except ImportError as exc:
         return Computed(dict.fromkeys(rules), {}, None,
-                        f"the ast-grep-py library cannot be imported ({type(exc).__name__})", {}, 0)
+                        f"the ast-grep-py library cannot be imported ({type(exc).__name__})", {}, 0, {})
     try:
-        result = scanner.Scanner(configs_of(rules), direct_only(rules)).run(parseable(command))
+        result = scanner.Scanner(configs_of(rules), direct_only(rules), describer(rules, env)).run(parseable(command))
     except Exception as exc:  # noqa: BLE001
-        return Computed(dict.fromkeys(rules), {}, None, f"unexpected error: {type(exc).__name__}", {}, 0)
-    return Computed(result.kinds(list(rules)), result.invalid, result.limit, None, result.micros, result.parse_us)
+        return Computed(dict.fromkeys(rules), {}, None, f"unexpected error: {type(exc).__name__}", {}, 0, {})
+    return Computed(result.kinds(list(rules)), result.invalid, result.limit, None, result.micros, result.parse_us,
+                    result.details)
 
 
-def evaluate(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[], None] | None = None) -> Evaluation:
-    """How each rule's matcher selects the command: "direct", "wrapped" or None.
+def evaluate(command: str, rules: dict[str, policy.Rule], env: conditions.Env = conditions.DEFAULT,
+             after_fork: Callable[[], None] | None = None) -> Evaluation:
+    """How each rule's matcher selects the command: "direct", "wrapped" or None, and for a hit what its message
+    needs (`details`).
 
     What could not be judged (`unevaluated`) and why (`failure`, `refusal`) is kept for the caller to report. Hits
     already found always stand. Never raises. `after_fork` runs in this process once the checker child exists.
@@ -122,7 +179,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[
     started = time.monotonic()
     state = Health.HEALTHY
     try:
-        result = bounded.call(lambda: compute(command, rules)._asdict(), DEADLINE_SECONDS, after_fork)
+        result = bounded.call(lambda: compute(command, rules, env)._asdict(), DEADLINE_SECONDS, after_fork)
         if result.outcome is bounded.Outcome.CRASHED:
             state = health(started)
             ev.runtime_broken = state is Health.BROKEN
@@ -139,6 +196,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[
             case bounded.Outcome.DONE:
                 assert done is not None
                 ev.kinds |= done.kinds
+                ev.details = done.details
                 ev.invalid = dict(done.invalid)
                 ev.failure = done.failure
                 ev.micros, ev.parse_us = done.micros, done.parse_us
@@ -185,13 +243,30 @@ def ensure_engine() -> None:
 
 
 def check(rules: dict[str, policy.Rule]) -> dict[str, str]:
-    """Compile errors per rule id; raises EngineError when the library cannot run."""
+    """Compile errors per rule id, of its match and of each `matches` in its message cases; raises EngineError when
+    the library cannot run."""
     if not rules:
         return {}
     ensure_engine()
+    import rulebuilder
     import scanner
 
-    return scanner.compile_errors(configs_of(rules))
+    errors = scanner.compile_errors(configs_of(rules))
+    for rid, rule in rules.items():
+        subrules = [sub for case in rule.messages for sub in conditions.match_atoms(case.when)]
+        if rid in errors or not subrules:
+            continue
+        broken = scanner.compile_errors({str(i): {"rule": rulebuilder.built(sub)} for i, sub in enumerate(subrules)})
+        if broken:
+            at, why = min(broken.items(), key=lambda item: int(item[0]))
+            errors[rid] = f"a matches in messages, {json_compact(subrules[int(at)])}: {why}"
+    return errors
+
+
+def json_compact(value: object) -> str:
+    import json
+
+    return json.dumps(value, separators=(",", ":"))
 
 
 def tree(command: str) -> tuple[list[UnitTree], Limit | None]:

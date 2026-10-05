@@ -44,6 +44,14 @@ class Notice(NamedTuple):
     text: str
 
 
+class Detail(NamedTuple):
+    """What a rule's message needs from the node that decided its verdict: the message case that holds (None: the
+    rule's own message) and the captures its texts name."""
+
+    case: int | None
+    captures: dict[str, str]
+
+
 class UnitTree(NamedTuple):
     """One parse unit as `guardrails rule ast` shows it: (depth, kind, text or None) per named node."""
 
@@ -56,10 +64,12 @@ class UnitTree(NamedTuple):
 class Evaluation:
     """How each rule's matcher selects one command, and what kept a rule from being judged."""
 
-    __slots__ = ("failure", "fault", "invalid", "kinds", "micros", "parse_us", "refusal", "runtime_broken", "unevaluated")
+    __slots__ = ("details", "failure", "fault", "invalid", "kinds", "micros", "parse_us", "refusal", "runtime_broken",
+                 "unevaluated")
 
     def __init__(self, kinds: dict[str, Kind | None]) -> None:
         self.kinds = kinds
+        self.details: dict[str, Detail] = {}
         self.unevaluated: set[str] = set()
         self.invalid: dict[str, str] = {}
         self.failure: str | None = None

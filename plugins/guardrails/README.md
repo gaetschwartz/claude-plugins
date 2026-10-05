@@ -21,9 +21,14 @@ A rule matches a command and says what happens:
   semantics, the node kinds and the known limits.
 - `action`: `deny` (the agent gets the message and the call is blocked) or `warn` (the message arrives as context, once per
   session). `retry: same-command` lets the identical command through when re-issued in the same session.
-- `modes`: session modes that suspend the rule, e.g. `reverse-engineering` for `strings`. `requires`: only active when one of
-  these binaries is installed. `messageShort`: shown instead of `message` once the full text was seen in the session;
-  `{which:a|b}` in a message becomes the first binary on PATH.
+- `modes`: session modes that suspend the rule, e.g. `reverse-engineering` for `strings`. `messageShort`: shown instead of
+  `message` once the full text was seen in the session.
+- `when`: where the rule applies at all, checked before the command is read: `all` / `any` / `not` over `bin` (on PATH),
+  `os`, `arch`, `host`, `env`, `file` (in the project) and `tool` (Bash or Monitor), e.g. `{"bin": ["fd", "fdfind"]}`.
+  It replaced `requires`, which now makes a rule invalid (skipped and reported) until rewritten.
+- `messages`: cases `{"when": ..., "text": ...}` that pick the text by the caught command's shape (`matches`, `wrapped`);
+  the first that holds wins, else `message`. Texts take `{found}` (the `bin` name found on PATH), `{ARG}` (what `$ARG`
+  captured) and `{{` `}}` for braces. See [references/matching.md](references/matching.md#conditions-when).
 
 `guardrails rule ast '<command>'` prints the parse tree of any command; [references/writing-rules.md](references/writing-rules.md)
 is the full how-to (matcher ladder, test matrix, edge cases, pitfalls) and [references/ast/](references/ast/index.md) a cookbook
@@ -64,7 +69,7 @@ and `guardrails status --problems` lists it until it is moved to the config file
 
 Layers stack managed > global > project. A lower layer adds rules of its own, and for an id a higher layer defines it can only
 tighten: `action` to deny, `retry` off, re-enable, fewer suspending modes, reworded text (not for managed rules); never a
-different `match` or `requires`. A config with a `wrappers` key (user-defined wrappers were removed) is skipped for that key
+different `match`, `wrappers`, `when` or `messages`. A config with a `wrappers` key (user-defined wrappers were removed) is skipped for that key
 and `status` and the hook name it.
 
 **Managed scope** is for rules an organisation or machine owner wants enforced whatever a user or project configures. A

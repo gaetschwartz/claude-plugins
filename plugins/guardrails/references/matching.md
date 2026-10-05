@@ -201,20 +201,76 @@ itself start without a tool call and are not covered.
   session per rule. If something in the same command denies, warnings ride along in the deny message.
 - `retry: same-command` (deny only): the first occurrence is blocked and remembered for the session, re-running the
   identical command text passes. Any changed text is blocked again.
-- `messageShort` replaces `message` once the full text was shown in the session; `{which:a|b}` in a message becomes the
-  first binary found on PATH.
-- `enabled: false` skips the rule. `requires` skips it unless one of the binaries is installed.
+- `messageShort` replaces `message` once the full text was shown in the session (captures aside: the same text for
+  another command counts as shown). `messages` cases and placeholders pick and fill the text (below).
+- `enabled: false` skips the rule, and so does a `when` that does not hold (below).
 - `modes`: the rule is skipped while any listed mode is active. A mode is active when switched on persistently (global,
   project, or managed) or for this session. An agent may switch on a session mode only when it is declared with
   `agentMayEnable` (and a rule suspended by an agent-enabled mode is reported to the user).
 - The deny text starts with `[guardrails:<id>]`, or `<id> (managed)` for a managed rule.
 
+## Conditions: `when`
+
+`when` (optional, next to `match`) says where the rule applies at all. It is checked before the command is parsed, so a
+rule whose `when` does not hold costs nothing, writes no telemetry row, is `inactive here` in `status` and gets a
+`**Note**` in `rule test`. It is a tree built like `match`: `{"all": [...]}`, `{"any": [...]}` (non-empty lists) and
+`{"not": <condition>}` around atoms, one key per object, at most 8 levels deep and 64 objects in all. The atoms:
+
+- `{"bin": "fd"}` or `{"bin": ["fd", "fdfind"]}`: one of these names is an executable on PATH (looked up once per name
+  and PATH in a process). Names have no `/` and no spaces.
+- `{"os": "linux"}` or `{"os": "macos"}`; `{"arch": "arm64"}` or `{"arch": "x86_64"}` (`aarch64` reads as `arm64`,
+  `amd64` as `x86_64`).
+- `{"host": "box"}`: the host name, or its short form before the first dot, is exactly this.
+- `{"env": "CI"}`: the variable is set and not empty; `{"env": {"CI": "true"}}`: it equals this value (one variable per
+  atom; combine with `all`).
+- `{"file": "Cargo.toml"}`: the path exists relative to the project root (`CLAUDE_PROJECT_DIR`, else the git
+  top level). Relative only, no `..`; false outside a project.
+- `{"tool": "Bash"}` or `{"tool": "Monitor"}`: the tool that made the call. `status` and `rule test` judge a `when` as
+  for a Bash call.
+
+`when` replaced `requires`: `"requires": ["fd", "fdfind"]` is `"when": {"bin": ["fd", "fdfind"]}`. A rule that still
+has `requires` is invalid: `rule add` / `rule test` refuse it (exit 2), the hook skips it and names it once per session,
+and `status --problems` lists it. It never runs without its condition. Conditions read the environment the hook runs
+in, which `settings.json` (`env`) and the shell can change; that is trusted by design ([runtime.md](runtime.md)).
+
+## Messages: cases and placeholders
+
+`messages` (optional) is an ordered list of cases `{"when": <condition>, "text": "...", "messageShort": "..."}`. For a
+hit, the first case whose `when` holds supplies the text (and its `messageShort`; a case without one is always shown in
+full); when none holds, the rule's own `message` and `messageShort` apply, so `message` stays required. At most 16
+cases. A case's `when` takes every atom above plus two that read the hit (refused in a rule's own `when`, which runs
+before any command is read):
+
+- `{"matches": <rule>}`: the matched node also satisfies this rule, an ast-grep rule object that may use the
+  `command`, `assignment` and `wrapper` atoms and everything else `match` can (it is built the same way), tested with
+  ast-grep's own node matcher on that one node. Relations look from that node: `has` sees its children, `inside` its
+  ancestors.
+- `{"wrapped": true}` or `false`: the hit is wrapped (the `wrapped` tag of `rule test`) or direct.
+
+The matched node is the node of the hit that decided the rule's verdict: the first node the rule's `match` selected in
+scan order (the command as written first, then its wrapper variants and shell strings, breadth first), except that a
+later direct hit replaces a wrapped one. It is the node `rule test` reports as `direct` or `wrapped`; `matches`,
+`wrapped` and the captures all read it.
+
+Placeholders in `message`, `messageShort` and a case's `text` / `messageShort`:
+
+- `{found}`: the first name of a `bin` atom of the rule's own `when` that is on PATH, in document order (atoms under a
+  `not` do not count), so `{"bin": ["fd", "fdfind"]}` gives `fdfind` where only that is installed. A text that uses
+  `{found}` needs such a `bin` atom (else the rule is invalid); when `when` held through another branch it is empty.
+- `{ARG}`: what the metavariable `$ARG` of the rule's `match` patterns captured on the matched node; `$$$ARGS` gives
+  the captured words joined by one space. A capture the node did not bind (another branch of an `any`, a case's
+  `matches`, which only tests) is empty. Each capture is cut at 200 characters and a rule names at most 8.
+- `{{` and `}}` are literal braces. Anything else in braces (`{x.y}`, `{x[0]}`, `{x!r}`, `{x:>5}`, `{}`, a lowercase
+  name, an unbalanced brace) makes the rule invalid. Texts are split with Python's `string.Formatter` parser and only
+  simple names are substituted; rule text is never run through `str.format`.
+
 ## Layers
 
 Order: managed, then global, then project. A lower layer can add rules of its own, and for an id a higher layer already
 defines it can only tighten: switch `action` to deny, `retry` to none, re-enable, remove suspending `modes`, and reword
-`message` / `messageShort` / `description` (not for managed rules). It cannot change `match`, `wrappers` or `requires`,
-loosen, disable or add modes. An override that fails validation is ignored. The layers live in the managed file,
+`message` / `messageShort` / `description` (not for managed rules; a reworded text is checked like the rule's own, so
+`{found}` needs a `bin` atom in the higher layer's `when`). It cannot change `match`, `wrappers`, `when` or `messages`
+(cases are not overridable), loosen, disable or add modes. An override that fails validation is ignored. The layers live in the managed file,
 `config.json` under the XDG config dir (global) and `<project>/.claude/guardrails.json` (project). A project at the home
 directory (a session started there) has no project layer: `~/.claude/guardrails.json` is never read.
 
@@ -229,12 +285,13 @@ Check these in order when a command the matcher selects still runs:
 
 1. The global hook is disabled (`guardrails disable`): global and project rules are off, managed rules still apply.
 2. Project rules are disabled in the project config: project entries are dropped.
-3. The rule is disabled (`enabled: false`), or `requires` lists binaries and none is installed.
+3. The rule is disabled (`enabled: false`), or its `when` does not hold here (`status` says `inactive here`).
 4. A listed mode is active, so the rule is suspended.
 5. `retry: same-command` and the identical command was already blocked once this session.
 6. `action: warn`: the command runs, the agent only gets the message.
-7. The rule is invalid (an unknown field, a removed `match` key such as `program` or `ast`, a malformed atom, or a `match`
-   that does not compile): it is skipped, the session is told once and `status` names it.
+7. The rule is invalid (an unknown field, the removed `requires`, a removed `match` key such as `program` or `ast`, a
+   malformed atom or condition, a bad placeholder, or a `match` or case `matches` that does not compile): it is skipped,
+   the session is told once and `status` names it.
 8. The runtime was not installed yet, or the engine failed on this call: the command was allowed and the session got a notice
    ([runtime.md](runtime.md)).
 9. The command is one of the documented limits above, or it came through a wrapper and the rule has `"wrappers": false`.

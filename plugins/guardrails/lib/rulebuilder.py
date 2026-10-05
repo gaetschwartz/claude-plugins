@@ -207,7 +207,11 @@ def loosened(node: Any) -> Any:
     return out if found and out.get("any", True) else None
 
 
+def built(match: dict[str, Any]) -> Rule:
+    """The ast-grep rule for a match object: its single-command patterns spelling-tolerant, then its atoms expanded."""
+    return expanded(widen(loosened(match) or match))
+
+
 def config_of(rule: policy.Rule) -> Config:
-    """The ast-grep config that finds this rule's matches: its single-command patterns spelling-tolerant, then its
-    atoms expanded."""
-    return {"rule": expanded(widen(loosened(rule.match) or rule.match))}
+    """The ast-grep config that finds this rule's matches."""
+    return {"rule": built(rule.match)}

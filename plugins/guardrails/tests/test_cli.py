@@ -29,10 +29,11 @@ class RuleCommands(AstIsolated):
         self.assertEqual((rule["setBy"]["by"], rule["setBy"]["reason"]), ("user", "user asked"))
         self.assertEqual(self.set_rule("no-strings", {"action": "warn", "match": {"command": ["strings", "otool"]},
                                                       "wrappers": False})[0], 0)
-        self.assertEqual(self.set_rule("no-strings", {"messageShort": "short", "requires": ["fd", "fdfind"]})[0], 0)
+        self.assertEqual(self.set_rule("no-strings", {"messageShort": "short", "when": {"bin": ["fd", "fdfind"]}})[0], 0)
         rule = self.get(self.gpath)["rules"]["no-strings"]
-        self.assertEqual((rule["action"], rule["match"], rule["wrappers"], rule["messageShort"], rule["requires"]),
-                         ("warn", {"command": ["strings", "otool"]}, False, "short", ["fd", "fdfind"]))
+        self.assertEqual((rule["action"], rule["match"], rule["wrappers"], rule["messageShort"], rule["when"]),
+                         ("warn", {"command": ["strings", "otool"]}, False, "short", {"bin": ["fd", "fdfind"]}))
+        self.assertEqual(self.set_rule("no-strings", {"requires": ["fd"]})[0], 2)
         self.assertEqual(self.set_rule("no-strings", {"messageShort": None})[0], 0)
         self.assertNotIn("messageShort", self.get(self.gpath)["rules"]["no-strings"])
         self.assertEqual(self.cli("rule", "rm", "no-strings")[0], 0)
@@ -557,7 +558,7 @@ class RuleTest(AstIsolated):
         draft = '{"match": {"command": "pkill"}, "message": "m"'
         self.assertNotIn("**Note**", notes("--json", draft + "}"))
         self.assertIn("**Note** rule is disabled", notes("--json", draft + ', "enabled": false}'))
-        self.assertIn("none of no-such-bin-xyz is installed here", notes("--json", draft + ', "requires": ["no-such-bin-xyz"]}'))
+        self.assertIn("its when does not hold here", notes("--json", draft + ', "when": {"bin": "no-such-bin-xyz"}}'))
         self.cli("rule", "add", "r", "--json", draft + ', "modes": ["m"]}')
         self.cli("mode", "declare", "m")
         self.assertIn("suspends this rule while mode m is active (none is now)", notes("--id", "r"))

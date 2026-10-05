@@ -8,11 +8,13 @@ from typing import Any
 
 from helpers import ROOT, AstIsolated
 
+import engine
 import matching
 import policy
 
 BLOCK = re.compile(r"^```rule-example\n(.*?)\n```$", re.MULTILINE | re.DOTALL)
 REQUIRED = {"id", "title", "rule", "action", "catch", "pass"}
+OPTIONAL = {"tree", "wrappers", "when", "message", "messages", "cases", "says"}
 NEW_SKILL = ROOT / "skills" / "new" / "SKILL.md"
 
 
@@ -25,8 +27,9 @@ def examples() -> list[tuple[Path, dict[str, Any]]]:
 
 
 def rule_of(example: dict[str, Any]) -> policy.Rule:
-    return policy.Rule.from_json({"match": example["rule"], "message": "m", "action": example["action"],
-                                  "wrappers": example.get("wrappers", True)})
+    extra = {key: example[key] for key in ("when", "messages") if key in example}
+    return policy.Rule.from_json({"match": example["rule"], "message": example.get("message", "m"),
+                                  "action": example["action"], "wrappers": example.get("wrappers", True), **extra})
 
 
 class ExampleShape(unittest.TestCase):
@@ -38,7 +41,7 @@ class ExampleShape(unittest.TestCase):
         for path, e in found:
             with self.subTest(example=e.get("id"), file=path.name):
                 self.assertEqual(REQUIRED - set(e), set())
-                self.assertEqual(set(e) - REQUIRED - {"tree", "wrappers"}, set())
+                self.assertEqual(set(e) - REQUIRED - OPTIONAL, set())
                 self.assertIn(e["action"], ("deny", "warn"))
                 self.assertGreaterEqual(len(e["catch"]), 3)
                 self.assertGreaterEqual(len(e["pass"]), 3)
@@ -65,6 +68,24 @@ class ExamplesRun(AstIsolated):
                 self.assertEqual([c for c, k in caught.items() if not k], [], "must match")
                 self.assertEqual([c for c, k in passed.items() if k], [], "must not match")
                 self.assertIn("wrapped", caught.values(), "needs a wrapped catch command")
+
+    def test_message_cases_and_rendered_texts_are_what_the_example_says(self) -> None:
+        checked = 0
+        for path, e in examples():
+            rule = rule_of(e)
+            for command, case in e.get("cases", {}).items():
+                with self.subTest(example=e["id"], file=path.name, command=command):
+                    detail = matching.evaluate(command, {"r": rule}).details.get("r")
+                    self.assertEqual(detail.case + 1 if detail and detail.case is not None else None, case)
+                    checked += 1
+            for command, text in e.get("says", {}).items():
+                with self.subTest(example=e["id"], file=path.name, command=command):
+                    ev = matching.evaluate(command, {"r": rule})
+                    self.assertIsNotNone(ev.kinds["r"])
+                    self.assertEqual(engine.texts_of(rule, ev.details.get("r")).full, text)
+                    checked += 1
+        self.assertGreaterEqual(checked, 6)
+        self.assertTrue(any("when" in e for _, e in examples()))
 
     def test_tree_names_kinds_the_engine_prints(self) -> None:
         for path, e in examples():

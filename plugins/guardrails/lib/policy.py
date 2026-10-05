@@ -3,18 +3,23 @@
 from __future__ import annotations
 
 import json
-import re
 from collections.abc import Mapping
 from enum import StrEnum
-from typing import Any, NamedTuple, Self
+from typing import TYPE_CHECKING, Any, NamedTuple, Self
+
+if TYPE_CHECKING:
+    from messages import Case
 
 MAX_AST_BYTES = 16384  # bounds nesting too: ast-grep overflows its stack past about 4000 levels
-RULE_KEYS = ("match", "wrappers", "message", "messageShort", "action", "retry", "enabled", "modes", "requires",
+RULE_KEYS = ("match", "wrappers", "message", "messageShort", "messages", "action", "retry", "enabled", "modes", "when",
              "description", "setBy", "id")
+REMOVED_FIELDS = {
+    "requires": ("'requires' was replaced by 'when': write \"when\": {\"bin\": [<names>]} (true when any of them is on "
+                 "PATH), or reinstall the preset that added it (`guardrails preset install <name>`)"),
+}
 UNKNOWN_FIELD_HINT = ("this version does not know it; reinstall the preset that added it (`guardrails preset install "
                       "<name>`) or remove the field")
 LAYERS = ("managed", "global", "project")
-PLACEHOLDER = re.compile(r"\{which:([^{}]+)\}")
 
 
 class Invalid(Exception):
@@ -46,10 +51,9 @@ def view(mapping: object, key: str) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
-def text_list(value: object, what: str, *, required: bool = False) -> tuple[str, ...]:
-    if not (isinstance(value, list) and all(isinstance(x, str) and x for x in value)) or (required and not value):
-        raise Invalid(f"'{what}' must be a {'non-empty ' if required else ''}list of "
-                      f"{'binary' if what == 'requires' else 'mode'} names")
+def mode_list(value: object) -> tuple[str, ...]:
+    if not (isinstance(value, list) and all(isinstance(x, str) and x for x in value)):
+        raise Invalid("'modes' must be a list of mode names")
     return tuple(value)
 
 
@@ -75,15 +79,21 @@ class Rule(NamedTuple):
     retry: Retry = Retry.NONE
     enabled: bool = True
     modes: tuple[str, ...] = ()
-    requires: tuple[str, ...] = ()
     message_short: str | None = None
     description: str | None = None
     wrappers: bool = True
+    when: dict[str, Any] | None = None
+    messages: tuple[Case, ...] = ()
 
     @classmethod
     def from_json(cls, raw: object) -> Self:
+        import conditions
+        import messages as texts
+
         if not isinstance(raw, dict):
             raise Invalid("a rule must be a JSON object")
+        if removed := next((key for key in REMOVED_FIELDS if key in raw), None):
+            raise Invalid(REMOVED_FIELDS[removed])
         if unknown := set(raw) - set(RULE_KEYS):
             raise Invalid(f"unknown field {min(unknown)}: {UNKNOWN_FIELD_HINT}")
         message = raw.get("message")
@@ -97,14 +107,19 @@ class Rule(NamedTuple):
         except ValueError:
             raise Invalid(f"'action' must be one of {', '.join(Action)} and 'retry' one of "
                           f"{', '.join(Retry)}") from None
-        modes = text_list(raw.get("modes", []), "modes")
-        requires = text_list(raw["requires"], "requires", required=True) if "requires" in raw else ()
+        modes = mode_list(raw.get("modes", []))
         for key in ("enabled", "wrappers"):
             if key in raw and not isinstance(raw[key], bool):
                 raise Invalid(f"'{key}' must be true or false")
+        when = raw.get("when")
+        if "when" in raw:
+            conditions.check(when, "when")
+        cases = texts.cases_of(raw["messages"]) if "messages" in raw else ()
         description = raw.get("description")
-        return cls(match, message, action, retry, raw.get("enabled", True), modes, requires, raw.get("messageShort"),
-                   description if isinstance(description, str) else None, raw.get("wrappers", True))
+        rule = cls(match, message, action, retry, raw.get("enabled", True), modes, raw.get("messageShort"),
+                   description if isinstance(description, str) else None, raw.get("wrappers", True), when, cases)
+        texts.check_texts(texts.rule_texts(rule), any(conditions.bin_atoms(when)))
+        return rule
 
 
 class Mode(NamedTuple):
@@ -183,15 +198,22 @@ def ast_size(ast: object) -> int:
 def merge_rule(base: Rule, override: Mapping[str, Any], reword: bool = True) -> Rule:
     """Layer a lower-precedence entry onto a rule from a higher layer; only tightening changes apply.
 
-    An override can never change what the rule matches: 'match', 'wrappers' and 'requires' are ignored, and an
-    override whose texts are malformed leaves the base rule unchanged. With reword=False the texts
-    are ignored too.
+    An override can never change what the rule matches or when it applies: 'match', 'wrappers', 'when' and 'messages'
+    are ignored, and an override whose texts are malformed (placeholders included) leaves the base rule unchanged.
+    With reword=False the texts are ignored too.
     """
+    import conditions
+    import messages
+
     changes: dict[str, Any] = {}
     if reword:
         texts = {attribute: override[key] for key, attribute in (("message", "message"), ("messageShort", "message_short"),
                                                                  ("description", "description")) if key in override}
         if not all(isinstance(text, str) for text in texts.values()) or not str(texts.get("message", base.message)).strip():
+            return base
+        try:
+            messages.check_texts(messages.rule_texts(base._replace(**texts)), any(conditions.bin_atoms(base.when)))
+        except Invalid:
             return base
         changes.update(texts)
     if override.get("action") == "deny":
@@ -323,21 +345,3 @@ def active_modes(modes: Mapping[str, Mode], session: Session) -> dict[str, Activ
             continue
         active[name] = record
     return active
-
-
-def requirements_met(rule: Rule) -> bool:
-    import shutil
-
-    return not rule.requires or any(shutil.which(b) for b in rule.requires)
-
-
-def render(text: str) -> str:
-    """Substitute {which:a|b} with the first candidate found on PATH, else the first candidate."""
-
-    def pick(m: re.Match[str]) -> str:
-        candidates = [c.strip() for c in m.group(1).split("|") if c.strip()]
-        import shutil
-
-        return next((c for c in candidates if shutil.which(c)), candidates[0] if candidates else "")
-
-    return PLACEHOLDER.sub(pick, text)

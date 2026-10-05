@@ -81,7 +81,11 @@ class Card(AstIsolated):
         out = self.card(PKILL, GOLDEN_EXAMPLES, "--intent", "stop killing processes by name, suggest kill by PID",
                         "--id-name", "no-pkill")
         self.assertEqual(out.rstrip("\n"), doc_block("### no-pkill"))
-        rules = [render.RuleRow("kill-9", "warn", ["managed"], "always enforced"),
+        rules = [render.RuleRow("find-fd", "deny", ["global"], "enabled",
+                                'when `{"bin":["fd","fdfind"]}` · 1 message case'),
+                 render.RuleRow("grep-rg", "deny", ["global"], "inactive here: its when does not hold",
+                                'when `{"bin":"rg"}`'),
+                 render.RuleRow("kill-9", "warn", ["managed"], "always enforced"),
                  render.RuleRow("no-pkill", "deny", ["global", "project"], "enabled"),
                  render.RuleRow("no-strings", "deny", ["global"], "suspended by reverse-engineering"),
                  render.RuleRow("old-rule", "deny", ["global"], "disabled")]
@@ -163,12 +167,14 @@ class Card(AstIsolated):
                       self.card({"match": {"command": "grep"}, "wrappers": False, "message": "m"}, [{"cmd": "ls"}]))
         self.assertNotIn("**Intent**", self.card(PKILL, [{"cmd": "ls"}]))
         self.assertIn("\n**Intent** stop it\n", self.card(PKILL, [{"cmd": "ls"}], "--intent", "stop it"))
-        placeholder = {"match": {"command": "x"}, "message": "use {which:definitely-missing-a|definitely-missing-b}"}
-        self.assertIn("**Message** use definitely-missing-a\n", self.card(placeholder, [{"cmd": "x"}]))
-        out = self.card({**PKILL, "enabled": False, "requires": ["no-such-bin-xyz"]}, [{"cmd": "pkill a"}])
+        placeholder = {"match": {"pattern": "x $ARG"}, "message": "use {ARG} not {{x}}"}
+        self.assertIn("**Message** use {ARG} not {x}\n", self.card(placeholder, [{"cmd": "x"}]))
+        out = self.card({**PKILL, "enabled": False, "when": {"bin": "no-such-bin-xyz"}}, [{"cmd": "pkill a"}])
         notes = [line for line in out.splitlines() if line.startswith("**Note**")]
         self.assertEqual(len(notes), 1)
-        self.assertIn("rule is disabled; none of no-such-bin-xyz is installed here", notes[0])
+        self.assertIn("rule is disabled; its when does not hold here (for a Bash call), so the hook skips this rule",
+                      notes[0])
+        self.assertIn('\n**When** `{"bin":"no-such-bin-xyz"}` · does not hold here\n', out)
         self.assertNotIn("**Note**", self.card(PKILL, [{"cmd": "pkill a"}]))
 
     def test_whole_text_regex_matches_are_direct_and_unbalanced_quotes_fall_back_to_direct(self) -> None:

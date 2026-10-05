@@ -19,7 +19,9 @@ from typing import NamedTuple
 
 import rulebuilder
 from ast_grep_py import Config, SgNode, SgRoot
-from verdict import MAX_COMMAND_BYTES, Kind, Limit, UnitTree
+from verdict import MAX_COMMAND_BYTES, Detail, Kind, Limit, UnitTree
+
+type Describe = Callable[[str, SgNode, Kind], Detail | None]
 
 MAX_DEPTH = 8
 MAX_UNITS = 64
@@ -70,6 +72,7 @@ class Scan(NamedTuple):
     limit: Limit | None
     micros: dict[str, int]
     parse_us: int
+    details: dict[str, Detail]
 
     def kinds(self, rule_ids: Sequence[str]) -> dict[str, Kind | None]:
         found = {hit.rule: hit.kind for hit in self.hits}
@@ -255,14 +258,22 @@ def statement_variants(text: str, spans: Sequence[Span]) -> Iterator[str]:
 
 
 class Scanner:
-    """One evaluation: the rules and what has been found so far."""
+    """One evaluation: the rules and what has been found so far. `describe` reads what a rule's message needs from the
+    node of each hit that becomes the rule's verdict."""
 
-    def __init__(self, rules: dict[str, Config], direct_only: frozenset[str] = frozenset()) -> None:
+    def __init__(self, rules: dict[str, Config], direct_only: frozenset[str] = frozenset(),
+                 describe: Describe | None = None) -> None:
         self.active = dict(rules)
         self.direct_only = direct_only
+        self.describe = describe
         self.invalid: dict[str, str] = {}
         self.found: dict[str, Hit] = {}
+        self.details: dict[str, Detail] = {}
         self.spent: defaultdict[str, int] = defaultdict(int)
+
+    def drop(self, rid: str, exc: Exception) -> None:
+        del self.active[rid]
+        self.invalid[rid] = clean_error(str(exc))
 
     def matches(self, rid: str, root: SgNode, first_only: bool) -> list[SgNode]:
         """The nodes a rule selects; a rule whose config does not compile is dropped with the reason."""
@@ -272,9 +283,28 @@ class Scanner:
                 return [one] if one is not None else []
             return root.find_all(self.active[rid])
         except Exception as exc:  # noqa: BLE001
-            del self.active[rid]
-            self.invalid[rid] = clean_error(str(exc))
+            self.drop(rid, exc)
             return []
+
+    def record(self, rid: str, node: SgNode, kind: Kind) -> bool:
+        """Make this node the rule's verdict; False when its message case cannot be evaluated (the rule is dropped)."""
+        where = node.range()
+        self.found[rid] = Hit(rid, kind, where.start.index, where.end.index)
+        if self.describe is None:
+            return True
+        began = time.perf_counter_ns()
+        try:
+            detail = self.describe(rid, node, kind)
+        except Exception as exc:  # noqa: BLE001
+            self.drop(rid, exc)
+            self.found.pop(rid)
+            self.details.pop(rid, None)
+            return False
+        finally:
+            self.spent[rid] += time.perf_counter_ns() - began
+        if detail is not None:
+            self.details[rid] = detail
+        return True
 
     def kind_of(self, unit: Unit, node: SgNode) -> Kind | None:
         """None when the hit does not count: outside the substitutions of a restricted unit."""
@@ -298,8 +328,9 @@ class Scanner:
                 kind = Kind.WRAPPED if first_only else self.kind_of(unit, node)
                 if kind is None or (known is not None and kind is Kind.WRAPPED):
                     continue
-                where = node.range()
-                self.found[rid] = known = Hit(rid, kind, where.start.index, where.end.index)
+                if not self.record(rid, node, kind):
+                    break
+                known = self.found[rid]
                 if kind is Kind.DIRECT:
                     break
 
@@ -310,7 +341,7 @@ class Scanner:
         limit = walk(command, True, self.judge, bool(self.direct_only))
         parse_ns = time.perf_counter_ns() - began - sum(self.spent.values())
         return Scan(tuple(self.found.values()), dict(self.invalid), limit,
-                    {rid: ns // 1000 for rid, ns in self.spent.items()}, max(parse_ns, 0) // 1000)
+                    {rid: ns // 1000 for rid, ns in self.spent.items()}, max(parse_ns, 0) // 1000, dict(self.details))
 
 
 def walk(command: str, with_variants: bool, visit: Callable[[Unit, SgNode], None],

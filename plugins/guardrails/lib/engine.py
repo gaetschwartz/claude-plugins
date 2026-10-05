@@ -10,11 +10,13 @@ from pathlib import Path
 from typing import IO, NamedTuple, TypedDict
 
 import bootstrap
+import conditions
 import matching
+import messages
 import policy
 import store
 import telemetry
-from verdict import FAILED_PREFIX, Evaluation
+from verdict import FAILED_PREFIX, Detail, Evaluation
 
 
 class HookDecision(TypedDict, total=False):
@@ -76,19 +78,36 @@ def hints(rule: policy.Rule, modes: dict[str, policy.Mode], session_id: str) -> 
     return text
 
 
+class Texts(NamedTuple):
+    full: str
+    short: str | None
+    shown_key: str
+
+
+def texts_of(rule: policy.Rule, detail: Detail | None) -> Texts:
+    """The rendered message of a hit: its case's texts or the rule's, placeholders filled. `shown_key` leaves the
+    captures out, so the short text follows once the same full text was shown for any command."""
+    full, short = messages.chosen(rule, detail.case if detail else None)
+    found = {messages.FOUND: conditions.found(rule.when) or ""}
+    values = {**(detail.captures if detail else {}), **found}
+    return Texts(messages.fill(full, values), messages.fill(short, values) if short else None,
+                 digest(messages.fill(full, found)))
+
+
 def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode], session: policy.Session,
-            shown_before: set[str], session_id: str, managed_ids: frozenset[str] = frozenset()) -> tuple[str, bool]:
+            shown_before: set[str], session_id: str, managed_ids: frozenset[str] = frozenset(),
+            details: dict[str, Detail] | None = None) -> tuple[str, bool]:
     """Render texts (messageShort once the full message was shown), merging rules that render identically."""
     changed = False
     groups: dict[str, list[str]] = {}
     tails: dict[str, str] = {}
     for rid, rule in items:
-        full = policy.render(rule.message)
+        full, short, key = texts_of(rule, (details or {}).get(rid))
         text = full
-        if rule.message_short:
-            if digest(full) in shown_before:
-                text = policy.render(rule.message_short)
-            elif remember(session.shown, digest(full)):
+        if short:
+            if key in shown_before:
+                text = short
+            elif remember(session.shown, key):
                 changed = True
         groups.setdefault(text, []).append(f"{rid} (managed)" if rid in managed_ids else rid)
         tails.setdefault(text, hints(rule, modes, session_id))
@@ -96,12 +115,10 @@ def compose(items: list[tuple[str, policy.Rule]], modes: dict[str, policy.Mode],
     return "\n\n".join(paragraphs), changed
 
 
-TOOLS = ("Bash", "Monitor")
-
-
-def candidates_of(rules: dict[str, policy.Rule]) -> dict[str, policy.Rule]:
-    """The rules that could act on this command here: enabled and with their binaries installed."""
-    return {rid: rules[rid] for rid in sorted(rules) if rules[rid].enabled and policy.requirements_met(rules[rid])}
+def candidates_of(rules: dict[str, policy.Rule], env: conditions.Env) -> dict[str, policy.Rule]:
+    """The rules that could act on this call here: enabled, and their `when` holds (checked before any parsing)."""
+    return {rid: rules[rid] for rid in sorted(rules)
+            if rules[rid].enabled and conditions.holds(rules[rid].when, env)}
 
 
 def report_broken() -> None:
@@ -113,8 +130,9 @@ def report_broken() -> None:
     hostcli.spawn_ensure()
 
 
-def judge(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[], None] | None = None) -> Evaluation:
-    evaluation = matching.evaluate(command, rules, after_fork)
+def judge(command: str, rules: dict[str, policy.Rule], env: conditions.Env,
+          after_fork: Callable[[], None] | None = None) -> Evaluation:
+    evaluation = matching.evaluate(command, rules, env, after_fork)
     if evaluation.runtime_broken:
         report_broken()
     return evaluation
@@ -123,7 +141,8 @@ def judge(command: str, rules: dict[str, policy.Rule], after_fork: Callable[[], 
 def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, policy.Mode],
              session: policy.Session, session_id: str, managed_ids: frozenset[str] = frozenset(),
              warnings: tuple[str, ...] = (), pre: Evaluation | None = None,
-             outcomes: dict[str, telemetry.Outcome] | None = None) -> tuple[Output | None, bool]:
+             outcomes: dict[str, telemetry.Outcome] | None = None,
+             env: conditions.Env = conditions.DEFAULT) -> tuple[Output | None, bool]:
     outcomes = {} if outcomes is None else outcomes
     active = policy.active_modes(modes, session)
     shown_before = set(session.shown)
@@ -136,9 +155,9 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     denies: list[tuple[str, policy.Rule]] = []
     warns: list[tuple[str, policy.Rule]] = []
 
-    candidates = candidates_of(rules)
+    candidates = candidates_of(rules, env)
     evaluation = pre if pre is not None and all(rid in pre.kinds for rid in candidates) \
-        else judge(command, candidates)
+        else judge(command, candidates, env)
     agent_notes: list[str] = []
     for key, warning in evaluation.warnings(managed_ids):
         if due(session, key):
@@ -189,7 +208,8 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
     output: Output = {}
     extra = "\n\n" + "\n".join(agent_notes) if agent_notes else ""
     if denies or refused:
-        text, composed = compose(denies + warns, modes, session, shown_before, session_id, managed_ids)
+        text, composed = compose(denies + warns, modes, session, shown_before, session_id, managed_ids,
+                                 evaluation.details)
         changed = changed or composed
         if refused:
             refusal = (f"[guardrails] Denied: {evaluation.refusal}. Rules cannot be evaluated on it. Split it up or put "
@@ -201,7 +221,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], modes: dict[str, polic
         fresh = [(rid, rule) for rid, rule in warns if remember(session.warned, rid)]
         if fresh:
             changed = True
-            text, _ = compose(fresh, modes, session, shown_before, session_id, managed_ids)
+            text, _ = compose(fresh, modes, session, shown_before, session_id, managed_ids, evaluation.details)
             output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "additionalContext": text + extra}
         elif agent_notes:
             output["hookSpecificOutput"] = {"hookEventName": "PreToolUse", "additionalContext": extra.strip()}
@@ -214,6 +234,7 @@ class Call(NamedTuple):
     command: str
     cwd: Path | None
     session_id: str
+    tool: str
 
 
 def parse_call(text: str) -> Call | None:
@@ -222,14 +243,14 @@ def parse_call(text: str) -> Call | None:
         payload = json.loads(text)
     except ValueError:
         return None
-    if not isinstance(payload, dict) or payload.get("tool_name") not in TOOLS:
+    if not isinstance(payload, dict) or (tool := payload.get("tool_name")) not in conditions.TOOLS:
         return None
     tool_input = payload.get("tool_input")
     command = tool_input.get("command") if isinstance(tool_input, dict) else None
     if not isinstance(command, str) or not command.strip():
         return None
     cwd = payload.get("cwd")
-    return Call(command, Path(cwd) if isinstance(cwd, str) else None, bootstrap.session_id(payload))
+    return Call(command, Path(cwd) if isinstance(cwd, str) else None, bootstrap.session_id(payload), str(tool))
 
 
 def samples_of(outcomes: dict[str, telemetry.Outcome], evaluation: Evaluation,
@@ -285,7 +306,8 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> telemetry.Recorder | None:
     output: Output | None = None
     recorder = telemetry.Recorder(bootstrap.data_dir())
     outcomes: dict[str, telemetry.Outcome] = {}
-    pre = judge(command, candidates_of(found.rules), recorder.start)
+    env = conditions.Env(call.tool, root)
+    pre = judge(command, candidates_of(found.rules, env), env, recorder.start)
     modes = policy.effective_modes(*layers)
     stateless = not state_ok
     if state_ok:
@@ -295,7 +317,7 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> telemetry.Recorder | None:
                 sessions = policy.view(state, "sessions")
                 session = policy.Session.from_json(sessions.get(sid))
                 output, changed = evaluate(command, found.rules, modes, session, sid, managed_ids, warnings, pre,
-                                           outcomes)
+                                           outcomes, env)
                 if changed:
                     sessions[sid] = session.to_json(store.now())
                     state["sessions"] = sessions
@@ -304,7 +326,8 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> telemetry.Recorder | None:
             stateless = True
     if stateless:
         outcomes.clear()
-        output, _ = evaluate(command, found.rules, modes, policy.Session(), sid, managed_ids, warnings, pre, outcomes)
+        output, _ = evaluate(command, found.rules, modes, policy.Session(), sid, managed_ids, warnings, pre, outcomes,
+                             env)
     if output:
         json.dump(output, stdout)
     recorder.samples = samples_of(outcomes, pre, (time.perf_counter_ns() - began) // 1000)

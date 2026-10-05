@@ -44,7 +44,10 @@ in full unless the rule is a bare `command` atom (with or without `args`). In sh
 a rule with relations run `guardrails rule ast '<a command it must catch>'` and use the
 kinds it prints, never guessed ones; at least 3 commands that must be caught (one wrapped: `sudo X`, `bash -c 'X'`, a pipe
 or `$( )`) and at least 3 that must pass (a look-alike, `man X`, `echo "X"`, a heredoc mentioning X); tighten to zero
-mismatches; a `message` that names the alternative.
+mismatches; a `message` that names the alternative. When the alternative is a tool that may be missing or installed
+under another name, add `"when": {"bin": [...]}` and write `{found}` for its name; when the advice differs by command
+shape, add `messages` cases rather than a second rule with the same matcher; `{ARG}` puts a pattern's `$ARG` in the text,
+and literal braces are `{{` `}}` (writing-rules.md, step 8).
 
 Three examples (each block is machine-checked: every `catch` command matches, every `pass` command does not).
 
@@ -116,7 +119,8 @@ A negation with an exception. `not` + `has` looks inside the matched command, so
 }
 ```
 
-More examples, by shape (context, pipelines, flags, lists, wrappers): `${CLAUDE_PLUGIN_ROOT}/references/ast/index.md`.
+More examples, by shape (context, pipelines, flags, lists, wrappers, conditions and message cases):
+`${CLAUDE_PLUGIN_ROOT}/references/ast/index.md`.
 Read only the file that matches the shape you need.
 
 ## Step 1: understand the intent (loop until the user confirms)
@@ -184,6 +188,8 @@ defaults, unless something is ambiguous. Ask for message wording in chat only wh
    verdict yourself.
 4. A `⚠` row or a mismatch count above 0 means the rule and the user's intent disagree: fix the rule (or ask which
    example is wrong), re-run, and paste the new output instead. A `**Note**` line is part of the output: leave it in.
+   With message cases, check each caught row's ` · case N` / ` · default message` tag against the text the user wants
+   for that command.
 
 **1.d** AskUserQuestion: `header` `Confirm`, question "Does this match what you want?", options `Looks good
 (Recommended)` and `Change something`. `Looks good` goes to step 2. `Change something` returns to 1.a, asking in chat

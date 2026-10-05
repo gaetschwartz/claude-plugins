@@ -161,7 +161,7 @@ class Hook(AstIsolated):
     def test_a_disabled_hook_a_disabled_rule_or_a_missing_binary_is_silent(self) -> None:
         for name, edit in (("hook", lambda state: state.update(enabled=False)),
                            ("rule", lambda state: state["rules"]["no-strings"].update(enabled=False)),
-                           ("requires", lambda state: state["rules"]["no-strings"].update(requires=["no-such-bin-xyz"]))):
+                           ("when", lambda state: state["rules"]["no-strings"].update(when={"bin": "no-such-bin-xyz"}))):
             with self.subTest(name):
                 state = {"rules": {"no-strings": dict(STRINGS)}, "modes": dict(MODES)}
                 edit(state)
@@ -169,11 +169,11 @@ class Hook(AstIsolated):
                 self.assertIsNone(self.hook("strings a", session=name))
 
     def test_message_short_after_first_display_and_dedupe(self) -> None:
-        sheet = {"message": "SHEET for {which:zz-none|zz-other}", "messageShort": "terse", "retry": "same-command"}
+        sheet = {"message": "SHEET for {{x}}", "messageShort": "terse", "retry": "same-command"}
         self.put(self.gpath, {"rules": {"find-fd": {**sheet, "match": {"command": "find"}},
                                         "grep-rg": {**sheet, "match": GREP_RECURSIVE}}})
         first = reason(self.hook("find . | xargs grep -r x"))
-        self.assertEqual(first.count("SHEET for zz-none"), 1)
+        self.assertEqual(first.count("SHEET for {x}"), 1)
         self.assertIn("[guardrails:find-fd, grep-rg]", first)
         second = reason(self.hook("find /tmp"))
         self.assertIn("terse", second)

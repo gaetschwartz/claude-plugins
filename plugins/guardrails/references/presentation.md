@@ -64,7 +64,11 @@ The layout contract, all of it computed by the CLI:
   that define an installed rule (`global+project`). A draft has no id yet: `--id-name`, else the rule's own `id`
   field, else `new-rule`.
 - `**Intent**` (only with `--intent`), `**Match**` (the `match` object as compact one-line JSON, then
-  ` · not through wrappers` when the rule has `"wrappers": false`), `**Message**` (with `{which:a|b}` resolved).
+  ` · not through wrappers` when the rule has `"wrappers": false`), `**When**` (only when the rule has one: the
+  condition as compact JSON, then ` · holds here` or ` · does not hold here`, judged for a Bash call in this
+  environment), `**Message**` (with `{found}` filled, or left as `{found}` when no binary of the `when` is found here;
+  capture placeholders such as `{TARGET}` stay as written, since they differ per command), then one
+  `**Case N** when <condition> · <text>` line per message case, in order.
 - Groups, each omitted when empty: `**Block**` (the matcher catches it, action deny), `**Warn**` (catches it, action
   warn), `**Allow**` (it does not), `**Not evaluated**` (a rule that needs the engine while it is missing or failing, or a
   command over the size limit; glyph `?`, never to be read as allowed). Rows: `- ✗ <span> <source>` or `- ✓ …`, then ` · wrapped` when only a look-through
@@ -73,6 +77,8 @@ The layout contract, all of it computed by the CLI:
   substitution; that includes a substitution glued to a word or assignment (`foo$(…)`, `x=$(…)`) and `<(…)`. A
   whole-text regex (`kind: program`) that matches the command as written is never `wrapped`. A command reached inside
   a list (`;`, `&&`, `||`, a newline), a subshell `( … )` or a `{ …; }` group is not a wrapper, so it is not `wrapped`.
+  For a rule with message cases, each caught row ends with ` · case N` (the first case whose condition held for that
+  command) or ` · default message` (none did, so the rule's `message` applies).
 - Spans: every command is an inline-code span right-padded inside the backticks to one width W, the display width of
   the longest command across all groups, capped at 40 (East Asian wide characters and most emoji count two columns, combining marks zero). A command
   wider than W is not padded, sits at the end of its group, and its source tag follows one space as usual. A command
@@ -80,8 +86,8 @@ The layout contract, all of it computed by the CLI:
   strips. A newline is shown as `⏎`.
 - Mismatch: a row whose verdict contradicts its `expect` gets `⚠ ` right before the span. `**Verified**` counts all
   commands and the mismatches. With any mismatch, do not present the card as done: fix the rule or ask the user.
-- `**Note**` (only when there is one): what `rule test` also reports about the real effect: the rule is disabled, a
-  required binary is missing, a mode suspends it, the hook or project rules are off. Relay it as printed.
+- `**Note**` (only when there is one): what `rule test` also reports about the real effect: the rule is disabled, its
+  `when` does not hold here, a mode suspends it, the hook or project rules are off. Relay it as printed.
 - `**Raw**` (only when the match has a `pattern`, a `regex` or `args`): the `pattern` strings in document order joined
   by ` | `; with none, the `regex` and `args` strings the same way. One span, newlines shown as `⏎`.
 - Untrusted text: every field (commands, ids, reasons, messages, problems) is made single-line and safe. A newline
@@ -111,9 +117,11 @@ Output:
     **Global** config `/Users/me/.config/dev.gaetans.guardrails/claude-plugin/config.json` present
     **Project** config `/Users/me/src/app/.claude/guardrails.json` absent
 
-    ### Guardrails · 4 rules · hook on
+    ### Guardrails · 6 rules · hook on
 
     **Rules**
+    - `find-fd   ` deny · global · enabled · when `{"bin":["fd","fdfind"]}` · 1 message case
+    - `grep-rg   ` deny · global · inactive here: its when does not hold · when `{"bin":"rg"}`
     - `kill-9    ` warn · managed · always enforced
     - `no-pkill  ` deny · global+project · enabled
     - `no-strings` deny · global · suspended by reverse-engineering
@@ -129,8 +137,10 @@ Output:
 - The first three lines name each layer's config file and whether it is present, absent or unreadable: the platform
   managed file (absent: no managed rules), the global config, and the project config (`**Project** none` outside a
   project or when the project is the home directory).
-- Rule state is one of `always enforced`, `suspended by <modes>` (only modes that are on now), `disabled`, `enabled`.
-  Ids are padded to the longest id (capped at 40), modes to the longest mode name.
+- Rule state is one of `always enforced`, `suspended by <modes>` (only modes that are on now), `disabled`,
+  `inactive here: its when does not hold` (judged for a Bash call here; the hook skips the rule), `enabled`. A rule with
+  a `when` adds ` · when <condition as compact JSON>`, one with message cases ` · N message cases`. Ids are padded to
+  the longest id (capped at 40), modes to the longest mode name.
 - `--scope` keeps only rules, modes and problems that belong to that layer. `--problems` prints only the `**Problems**` group,
   or `No problems.`. `--rule <id>` prints just that rule's row (used after a write). A `**Note**` line follows the
   header when the hook is off.

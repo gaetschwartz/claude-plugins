@@ -14,8 +14,10 @@ from pathlib import Path
 from typing import Any, NamedTuple
 
 import bootstrap
+import conditions
 import hostcli
 import matching
+import messages
 import policy
 import render
 import store
@@ -25,8 +27,8 @@ from verdict import Evaluation
 
 PRESETS_DIR = store.HERE.parent / "presets"
 SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description", "match", "wrappers",
-            "requires")
-MATCHING = ("match", "wrappers", "requires")
+            "when", "messages")
+MATCHING = ("match", "wrappers", "when", "messages")
 SCOPES = ("global", "project", "managed")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
@@ -193,6 +195,7 @@ class Snapshot:
     problems: list[str]
     problem_layers: list[frozenset[str]]
     blind: frozenset[str] = frozenset()
+    env: conditions.Env = conditions.DEFAULT
 
     def problems_in(self, scope: str | None) -> list[str]:
         return [p for p, layers in zip(self.problems, self.problem_layers) if scope is None or scope in layers]
@@ -268,12 +271,15 @@ def snapshot(args: Args) -> Snapshot:
                    f"while the engine cannot run ({exc}).{fails_open}", *where)
     return Snapshot(mconfig, gconfig, pconfig, gpath, ppath, gconfig.get("enabled", True) is not False,
                     rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers,
-                    frozenset(blind))
+                    frozenset(blind), conditions.Env(root=root))
 
 
-def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, policy.Activation], blind: bool = False) -> str:
+def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, policy.Activation], blind: bool = False,
+               env: conditions.Env = conditions.DEFAULT) -> str:
     if not rule.enabled:
         return "disabled"
+    if not conditions.holds(rule.when, env):
+        return "inactive here: its when does not hold"
     suspended = [m for m in rule.modes if m in active]
     if suspended:
         return "suspended by " + ", ".join(suspended)
@@ -300,7 +306,8 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
         return scope is None or scope in origins.get(name, [])
 
     rules = [render.RuleRow(rid, str(snap.rules[rid].action), snap.rule_origins.get(rid, []),
-                            rule_state(snap.rules[rid], snap.rule_origins.get(rid, []), snap.active, rid in snap.blind))
+                            rule_state(snap.rules[rid], snap.rule_origins.get(rid, []), snap.active, rid in snap.blind,
+                                       snap.env), render.describe_conditions(snap.rules[rid]))
              for rid in sorted(snap.rules) if keep(snap.rule_origins, rid)]
     modes = []
     for name in sorted(snap.modes):
@@ -489,12 +496,12 @@ def cmd_rule_rm(args: Args) -> int:
 
 
 def effect_notes(args: Args, rule: policy.Rule, layers: list[str], mconfig: store.Doc,
-                 gconfig: store.Doc, pconfig: store.Doc) -> list[str]:
+                 gconfig: store.Doc, pconfig: store.Doc, env: conditions.Env) -> list[str]:
     notes = []
     if not rule.enabled:
         notes.append("rule is disabled")
-    if rule.requires and not policy.requirements_met(rule):
-        notes.append(f"none of {'|'.join(rule.requires)} is installed here, so the hook skips this rule")
+    if not conditions.holds(rule.when, env):
+        notes.append(f"its when does not hold here (for a {env.tool} call), so the hook skips this rule")
     if "managed" not in layers and gconfig.get("enabled", True) is False:
         notes.append("the global hook is disabled, so the hook does not enforce this rule")
     listed = list(rule.modes)
@@ -559,6 +566,11 @@ def outcome_of(ev: Evaluation, rid: str) -> render.Outcome:
     return render.Outcome(kind) if kind else render.Outcome.ALLOWED
 
 
+def case_of(ev: Evaluation, rid: str) -> int | None:
+    detail = ev.details.get(rid)
+    return detail.case if detail else None
+
+
 def cannot_evaluate_note(ev: Evaluation) -> str:
     """Why this rule's match could not be judged, when it could not."""
     if ev.refusal:
@@ -603,19 +615,28 @@ def cmd_rule_test(args: Args) -> int:
 
     if not examples:
         raise Invalid("give at least one command or --examples")
-    notes = effect_notes(args, rule, layers, mconfig, gconfig, pconfig)
-    evaluations = [matching.evaluate(cmd, {rid: rule}) for cmd, _, _ in examples]
+    env = conditions.Env(root=store.project_root())
+    notes = effect_notes(args, rule, layers, mconfig, gconfig, pconfig, env)
+    evaluations = [matching.evaluate(cmd, {rid: rule}, env) for cmd, _, _ in examples]
     broken = {rid_: why for ev in evaluations for rid_, why in ev.invalid.items()}
     if broken:
         raise Invalid(f"the rule does not compile: {broken[rid]}")
     unjudged = next((ev for ev in evaluations if rid in ev.unevaluated), None)
     if unjudged:
         notes.append(cannot_evaluate_note(unjudged))
-    results = [render.Result(cmd, source, outcome_of(ev, rid), expect)
+    results = [render.Result(cmd, source, outcome_of(ev, rid), expect, case_of(ev, rid))
                for (cmd, source, expect), ev in zip(examples, evaluations)]
-    print(render.rule_card(rid, rule, policy.render(rule.message), scope,
-                           args.intent or "", results, notes))
+    print(render.rule_card(rid, rule, shown_text(rule, rule.message), scope, args.intent or "", results, notes,
+                           conditions.holds(rule.when, env), tuple(shown_text(rule, c.text) for c in rule.messages)))
     return 0
+
+
+def shown_text(rule: policy.Rule, template: str) -> str:
+    """A message template as the card shows it: `{found}` filled when a binary is found, capture placeholders kept
+    as written."""
+    names = messages.captures_wanted((template, None))
+    return messages.fill(template, {**{name: f"{{{name}}}" for name in names},
+                                    messages.FOUND: conditions.found(rule.when) or f"{{{messages.FOUND}}}"})
 
 
 def cmd_rule_ast(args: Args) -> int:

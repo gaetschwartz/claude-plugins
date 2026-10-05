@@ -120,9 +120,22 @@ the user; do not stack special cases.
 ## 8. Message
 
 The message is the only thing the agent reads when it is denied. Name the alternative and keep it short: what was
-wrong, what to run instead. `{which:a|b}` becomes the first binary found on PATH; `messageShort` replaces `message`
-after the first time it was shown in a session. Good: "Do not kill by name. Look the PID up with `pgrep -xl <name>`
-as its own command, then `kill <pid>`." Bad: "Blocked."
+wrong, what to run instead. `messageShort` replaces `message` after the first time it was shown in a session. Good: "Do
+not kill by name. Look the PID up with `pgrep -xl <name>` as its own command, then `kill <pid>`." Bad: "Blocked."
+
+Make the text fit the command rather than writing one vague text for every shape:
+
+- Name what was caught with a capture: a pattern `chmod 777 $TARGET $$$` and a message "... chmod 755 {TARGET} ..."
+  ([ast/messages.md](ast/messages.md)). An unbound capture is empty, so write the sentence so it still reads.
+- When the advice differs by shape (`find -exec` versus `find -name`, a wrapped versus a direct call), add `messages`
+  cases with `matches` / `wrapped` conditions instead of splitting the rule, as long as the action and the matcher
+  stay the same; the rule's `message` is the default.
+- When the alternative is a tool that may be missing or installed under another name, give the rule a `when` with a
+  `bin` atom (`{"bin": ["fd", "fdfind"]}`) and write `{found}` where the binary's name goes.
+- Literal braces are `{{` and `}}`; every other `{...}` is a placeholder and a typo makes the rule invalid, which
+  `rule test` reports. Placeholder rules are in [matching.md](matching.md#messages-cases-and-placeholders).
+
+Check every case with `rule test`: each caught row says which case it picked (`case N` or `default message`).
 
 ## 9. Settings
 
@@ -135,6 +148,9 @@ as its own command, then `kill <pid>`." Bad: "Blocked."
   never enables a mode on its own because of a denial.
 - **Scopes**: global by default, `--scope project` for one repository, `--scope managed` for enforced rules; a lower layer
   can only tighten an existing id ([matching.md](matching.md#layers)).
+- **`when`**: only for a fact about where the rule makes sense (the alternative is installed, a kind of project, an
+  OS, the calling tool), never to switch a rule off for a session (that is a mode). Atoms in
+  [matching.md](matching.md#conditions-when).
 
 ## 10. Edge-case checklist
 
