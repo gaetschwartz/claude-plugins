@@ -58,7 +58,7 @@ plain chat what to explain instead.)
    not fire" list, a `when` that does not hold here (the card's `**When**` line and `**Note**`, `inactive here` in
    `status`), the limits of the `command` atom and its `args`, wrappers and `"wrappers": false`, a redirect around the command and the
    `statement`, `redirect` and `discards` atoms); when the question is
-   why a command got a particular text, the row's ` · case N` / ` · default message` tag and the `**Case N**` lines
+   why a command got a particular text (a `{NAME}` in it is a `capture` atom or a pattern metavariable of the match), the row's ` · case N` / ` · default message` tag and the `**Case N**` lines
    answer it; do not hedge and
    do not say "possibly". For a rule with relations, run `guardrails rule ast '<cmd>'` to show the tree and the
    shell-string units. If the engine was

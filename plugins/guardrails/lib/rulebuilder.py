@@ -22,6 +22,11 @@ ASSIGNMENTS = 3
 WRAPPERS = ("sudo", "doas", "env", "timeout", "nice", "nohup", "time", "command", "exec", "builtin", "stdbuf", "setsid",
             "ionice", "xargs", "watch")
 ATOMS = ("command", "wrapper", "assignment", "statement", "redirect", "discards")
+CAPTURE_KEYS = frozenset({"capture", "name", "field"})
+CAPTURE_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
+FIELD_NAME = re.compile(r"[a-z][a-z0-9_]*")
+METAVARIABLE = re.compile(r"\${1,3}([A-Z][A-Z0-9_]*)")
+RELATIONS = ("not", "has", "inside", "follows", "precedes", "stopBy", "statement", "capture")
 NESTED = ("not", "all", "any", "stopBy", "inside", "has", "follows", "precedes")
 SIBLINGS = ("precedes", "follows")
 POSITIONS = (*SIBLINGS, "inside", "nthChild")
@@ -123,6 +128,8 @@ def stance(rule: object) -> set[str]:
         return set().union(*(stance(item) for item in rule))
     if not isinstance(rule, dict):
         return {"content"}
+    if "capture" in rule:
+        return stance(rule["capture"])
     found: set[str] = set()
     for key, value in rule.items():
         if key in PARAMS:
@@ -165,6 +172,79 @@ def transparent(node: dict[str, Any], out: dict[str, Any], atoms: Sequence[Any],
     return {**kept, "all": [*atoms, *kept.get("all", []), placed]}
 
 
+def binding(name: str, field: str | None) -> Any:
+    """The rule that binds `$NAME` to the node it is tried on, or to its `field` child (through the body of a redirect
+    wrapper, which has none of its own)."""
+    if field is None:
+        return {"pattern": f"${name}"}
+    child: dict[str, Any] = {"field": field, "pattern": f"${name}"}
+    wrapped: dict[str, Any] = {"kind": redirects.WRAPPER, "has": {"field": "body", "has": child}}
+    return {"any": [{"has": child}, wrapped]}
+
+
+def captured(node: dict[str, Any], where: str, at: str) -> Rule:
+    """A `capture` atom: the sub-rule, and the same node (or its field) bound to the name for message placeholders."""
+    if unknown := set(node) - CAPTURE_KEYS:
+        raise policy.Invalid(f"unknown field {where}.{min(unknown)}: a capture has 'capture', 'name' and optional "
+                             "'field'")
+    name, field, inner = node.get("name"), node.get("field"), node["capture"]
+    if name == "found":
+        raise policy.Invalid(f"'{where}.name' cannot be 'found': {{found}} is reserved for the binary that was found")
+    if not (isinstance(name, str) and CAPTURE_NAME.fullmatch(name)):
+        raise policy.Invalid(f"'{where}.name' is required and must be an upper-case name such as LAST (letters, digits "
+                             "and _, starting with a letter)")
+    if "field" in node and not (isinstance(field, str) and FIELD_NAME.fullmatch(field)):
+        raise policy.Invalid(f"'{where}.field' must be a lower-case ast-grep field name such as name")
+    if not isinstance(inner, dict) or not inner:
+        raise policy.Invalid(f"'{where}.capture' must be a non-empty rule object")
+    return {"all": [expanded(inner, f"{where}.capture", at), binding(name, field)]}
+
+
+def binds(node: object, where: str = "match", taken: frozenset[str] = frozenset(), negated: bool = False) -> frozenset[str]:
+    """The names the captures in a rule bind; raises policy.Invalid for a capture under `not` and for a name bound
+    twice on one path (ast-grep would demand both be the same node). The branches of an `any` are alternatives."""
+    if not isinstance(node, dict):
+        return frozenset()
+    found: set[str] = set()
+    for key, value in node.items():
+        at = f"{where}.{key}"
+        if key == "any" and isinstance(value, list):
+            before = frozenset(taken | found)
+            for i, member in enumerate(value):
+                found |= binds(member, f"{at}[{i}]", before, negated)
+        elif key == "all" and isinstance(value, list):
+            for i, member in enumerate(value):
+                found |= binds(member, f"{at}[{i}]", frozenset(taken | found), negated)
+        elif key in RELATIONS:
+            found |= binds(value, at, frozenset(taken | found), negated or key == "not")
+    if "capture" in node:
+        name = node["name"]
+        if negated:
+            raise policy.Invalid(f"'{where}': a capture under 'not' binds nothing, since a negated match has no node")
+        if name in taken | found:
+            raise policy.Invalid(f"'{where}.name': {name} is bound twice on one path; use a different name (the same "
+                                 "name is fine in different branches of an 'any')")
+        found.add(name)
+    return frozenset(found)
+
+
+def metavariables(node: object) -> set[str]:
+    """The names of the metavariables written in the patterns of a rule."""
+    if isinstance(node, list):
+        return set().union(*(metavariables(item) for item in node))
+    if not isinstance(node, dict):
+        return set()
+    found = set().union(*(metavariables(value) for key, value in node.items() if key != "pattern"))
+    pattern = node.get("pattern")
+    text = pattern.get("context") if isinstance(pattern, dict) else pattern
+    return found | set(METAVARIABLE.findall(text)) if isinstance(text, str) else found
+
+
+def bound_names(match: dict[str, Any]) -> frozenset[str]:
+    """Every name a message placeholder can read from this match: its captures and its pattern metavariables."""
+    return binds(match) | metavariables(match)
+
+
 def expanded(node: object, where: str = "match", at: str = "node") -> Any:
     """The rule object with every atom replaced by the ast-grep rule it stands for; raises policy.Invalid on a key that
     is neither ast-grep's nor an atom, or on a malformed atom. `at` is what the node is for its parent: "sibling" (the
@@ -173,6 +253,8 @@ def expanded(node: object, where: str = "match", at: str = "node") -> Any:
         return [expanded(item, f"{where}[{i}]", at) for i, item in enumerate(node)]
     if not isinstance(node, dict):
         return node
+    if "capture" in node:
+        return captured(node, where, at)
     if unknown := set(node) - GRAMMAR_KEYS - set(ATOMS) - {"args"}:
         raise policy.Invalid(f"unknown field {where}.{min(unknown)}: {policy.UNKNOWN_FIELD_HINT}")
     if "args" in node and "command" not in node:
@@ -211,6 +293,7 @@ def checked(match: object) -> dict[str, Any]:
     if not isinstance(match, dict) or not match:
         raise policy.Invalid("'match' must be a non-empty rule object")
     expanded(match)
+    binds(match)
     return match
 
 
@@ -258,6 +341,9 @@ def loosened(node: Any) -> Any:
     for ast-grep as written."""
     if not isinstance(node, dict):
         return None
+    if "capture" in node:
+        inner = loosened(node["capture"])
+        return {**node, "capture": inner} if inner is not None else None
     out = dict(node)
     found = False
     for key in ("any", "all"):

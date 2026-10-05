@@ -220,9 +220,10 @@ class Placeholders(unittest.TestCase):
                 policy.Rule.from_json(rule(**fields))
             self.assertIn("{found}", str(raised.exception))
         eight = " ".join(f"{{A{i}}}" for i in range(8))
-        policy.Rule.from_json(rule(message=eight))
+        nine = {"pattern": "echo " + " ".join(f"$A{i}" for i in range(9))}
+        policy.Rule.from_json(rule(match=nine, message=eight))
         with self.assertRaises(policy.Invalid):
-            policy.Rule.from_json(rule(message=eight, messageShort="{A8}"))
+            policy.Rule.from_json(rule(match=nine, message=eight, messageShort="{A8}"))
 
     def test_found_is_the_first_bin_name_on_path_in_document_order(self) -> None:
         tmp = Path(self.enterContext(__import__("tempfile").TemporaryDirectory()))
@@ -254,7 +255,7 @@ class Placeholders(unittest.TestCase):
 
 
 CASES: dict[str, Any] = {
-    "match": {"pattern": "rm -rf $DIR $$$REST"},
+    "match": {"any": [{"pattern": "rm -rf $DIR $$$REST"}, {"pattern": "mv $UNBOUND"}]},
     "message": "default for {DIR} then {REST} ({{literal}}) {UNBOUND}.",
     "messageShort": "short {DIR}",
     "messages": [

@@ -100,8 +100,11 @@ class Checker:
             if not isinstance(value, bool):
                 raise policy.Invalid(f"'{where}' must be true or false")
             return
+        import rulebuilder
+
         try:
-            policy.match_of(value)
+            if rulebuilder.binds(policy.match_of(value)):
+                raise policy.Invalid("a capture here binds nothing for the message: put it in the rule's match")
         except policy.Invalid as exc:
             raise policy.Invalid(f"'{where}': {exc}") from None
 

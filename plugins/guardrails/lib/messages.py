@@ -7,6 +7,7 @@ field names only; rule text never goes through `str.format`.
 from __future__ import annotations
 
 import string
+from collections.abc import Collection
 from typing import TYPE_CHECKING, Any, NamedTuple
 
 import policy
@@ -54,12 +55,16 @@ def fields(text: str, where: str) -> list[str]:
     return names
 
 
-def check_texts(texts: list[tuple[str, str]], has_bin: bool) -> None:
-    """Validate every template of one rule together: `{found}` needs a `bin` atom in the rule's `when`."""
+def check_texts(texts: list[tuple[str, str]], has_bin: bool, bound: Collection[str]) -> None:
+    """Validate every template of one rule together: `{found}` needs a `bin` atom in the rule's `when`, and every
+    other placeholder must be one of the names the rule's match `bound`."""
     captures: set[str] = set()
     for where, text in texts:
         for name in fields(text, where):
             if name != FOUND:
+                if name not in bound:
+                    raise policy.Invalid(f"'{where}': placeholder {{{name}}} is never bound by the match; bind it "
+                                         f"with a capture atom or a ${name} metavariable in a pattern")
                 captures.add(name)
             elif not has_bin:
                 raise policy.Invalid(f"'{where}' uses {{found}}, which needs a bin atom (outside not) in the rule's "
@@ -129,6 +134,7 @@ def capture(node: SgNode, name: str) -> str | None:
         if not many:
             return None
         text = " ".join(part.text() for part in many)
+    text = " ".join(line.strip() for line in text.splitlines())
     return text if len(text) <= MAX_CAPTURE_CHARS else text[:MAX_CAPTURE_CHARS] + "…"
 
 

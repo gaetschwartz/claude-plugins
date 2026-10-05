@@ -90,6 +90,7 @@ class Rule(NamedTuple):
     def from_json(cls, raw: object) -> Self:
         import conditions
         import messages as texts
+        import rulebuilder
 
         if not isinstance(raw, dict):
             raise Invalid("a rule must be a JSON object")
@@ -119,7 +120,7 @@ class Rule(NamedTuple):
         description = raw.get("description")
         rule = cls(match, message, action, retry, raw.get("enabled", True), modes, raw.get("messageShort"),
                    description if isinstance(description, str) else None, raw.get("wrappers", True), when, cases)
-        texts.check_texts(texts.rule_texts(rule), any(conditions.bin_atoms(when)))
+        texts.check_texts(texts.rule_texts(rule), any(conditions.bin_atoms(when)), rulebuilder.bound_names(match))
         return rule
 
 
@@ -214,6 +215,7 @@ def merge_rule(base: Rule, override: Mapping[str, Any], reword: bool = True) -> 
     """
     import conditions
     import messages
+    import rulebuilder
 
     changes: dict[str, Any] = {}
     if reword:
@@ -222,7 +224,8 @@ def merge_rule(base: Rule, override: Mapping[str, Any], reword: bool = True) -> 
         if not all(isinstance(text, str) for text in texts.values()) or not str(texts.get("message", base.message)).strip():
             return base
         try:
-            messages.check_texts(messages.rule_texts(base._replace(**texts)), any(conditions.bin_atoms(base.when)))
+            messages.check_texts(messages.rule_texts(base._replace(**texts)), any(conditions.bin_atoms(base.when)),
+                                 rulebuilder.bound_names(base.match))
         except Invalid:
             return base
         changes.update(texts)

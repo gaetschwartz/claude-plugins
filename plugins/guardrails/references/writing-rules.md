@@ -34,6 +34,7 @@ Take the first rung that separates your examples. Each rung down costs precision
 | `command` | the command name alone decides | `{"command": "pkill"}` |
 | `command` + `args` | one command's own words decide (regex over its text) | `{"command": "docker", "args": "\\bsystem prune\\b"}` |
 | `statement`, `redirect`, `discards` | a redirect decides, or a sibling relation must see through one | [ast/redirects.md](ast/redirects.md) |
+| `capture` | the message must quote a node the atoms matched (the last stage of a pipeline, an argument) | [ast/captures.md](ast/captures.md) |
 | relations | structure decides: nesting, pipelines, order, a flag on one command among several, a wrapper or shell itself | [ast/index.md](ast/index.md) |
 | whole-text regex | only raw text can say it, across nodes the tree cannot relate | `{"kind": "program", "regex": "..."}` |
 
@@ -127,7 +128,10 @@ not kill by name. Look the PID up with `pgrep -xl <name>` as its own command, th
 Make the text fit the command rather than writing one vague text for every shape:
 
 - Name what was caught with a capture: a pattern `chmod 777 $TARGET $$$` and a message "... chmod 755 {TARGET} ..."
-  ([ast/messages.md](ast/messages.md)). An unbound capture is empty, so write the sentence so it still reads.
+  ([ast/messages.md](ast/messages.md)), or, in a rule built from atoms, a `capture` atom around the node (`{"capture":
+  {...}, "name": "LAST", "field": "name"}`, [ast/captures.md](ast/captures.md)). An unbound capture is empty, so write
+  the sentence so it still reads (a `messages` case on the shape that binds it is the clean way); a placeholder nothing
+  binds is a validation error.
 - When the advice differs by shape (`find -exec` versus `find -name`, a wrapped versus a direct call), add `messages`
   cases with `matches` / `wrapped` conditions instead of splitting the rule, as long as the action and the matcher
   stay the same; the rule's `message` is the default.

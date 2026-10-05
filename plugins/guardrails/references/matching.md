@@ -6,7 +6,7 @@ ast-grep rules built from a guardrails rule), `lib/scanner.py` (parse units, wra
 The runtime, its trust model and what happens when the engine fails are in [runtime.md](runtime.md).
 
 ast-grep does all the lexing and parsing, in process through the `ast-grep-py` library: guardrails writes no shell parser.
-A rule's `match` is one ast-grep rule object, plus six guardrails atoms (`command`, `assignment`, `wrapper`, `statement`, `redirect`, `discards`) that are
+A rule's `match` is one ast-grep rule object, plus seven guardrails atoms (`command`, `assignment`, `wrapper`, `statement`, `redirect`, `discards`, `capture`) that are
 expanded into plain ast-grep rules when the rule is compiled. It is matched on the tree-sitter Bash parse of the command
 as written, of its wrapper variants and of each shell string, in a bounded checker.
 
@@ -71,6 +71,19 @@ tested or loaded, exit 2):
   levels deep; redirects of a heredoc (`<<EOF >/dev/null`) are not seen. It compiles to a static ast-grep rule, so the
   order is encoded with sibling relations between the redirect nodes. Put it next to `statement`, which gives the wrapper:
   `{"statement": {"command": "cargo"}, "discards": "all"}`.
+
+- `{"capture": <rule>, "name": "LAST"}`: the rule, and the node it matched bound to `LAST`, which the message writes as
+  `{LAST}`. It stands for `{"all": [<rule>, {"pattern": "$LAST"}]}` (a bare metavariable matches any node, so it binds
+  exactly the node the rule matched, at that position of the tree), so it works wherever a rule goes: under `has`,
+  `inside`, `follows`, `precedes`, `statement`, in `all` and `any`. `"field": "name"` binds that field child of the
+  matched node instead (a command's name; a redirect wrapper has none of its own, so there it reads the command in its
+  `body`). A capture binds one node: no word lists, no text transforms. Names are upper-case (`[A-Z][A-Z0-9_]*`, never
+  `found`) and the object has no other keys. A capture under `not` is an error (a negated match binds nothing), and so is
+  one name bound twice on a path (ast-grep would require both to be the same node); the same name in different branches
+  of an `any` is allowed and binds the branch that matched. A capture around a `command` that carries `precedes` /
+  `follows` keeps the redirect transparency below; as the rule of a sibling relation it binds the statement (`make
+  >o`), with `field` the command's name. A capture in a message case's `matches` binds nothing and is refused. See
+  [ast/captures.md](ast/captures.md).
 
 ### Redirects wrap statements
 
@@ -295,9 +308,11 @@ Placeholders in `message`, `messageShort` and a case's `text` / `messageShort`:
 - `{found}`: the first name of a `bin` atom of the rule's own `when` that is on PATH, in document order (atoms under a
   `not` do not count), so `{"bin": ["fd", "fdfind"]}` gives `fdfind` where only that is installed. A text that uses
   `{found}` needs such a `bin` atom (else the rule is invalid); when `when` held through another branch it is empty.
-- `{ARG}`: what the metavariable `$ARG` of the rule's `match` patterns captured on the matched node; `$$$ARGS` gives
-  the captured words joined by one space. A capture the node did not bind (another branch of an `any`, a case's
-  `matches`, which only tests) is empty. Each capture is cut at 200 characters and a rule names at most 8.
+- `{ARG}`: what the metavariable `$ARG` of a `match` pattern, or a `capture` atom named `ARG`, bound on the matched node;
+  `$$$ARGS` gives the captured words joined by one space. A capture the node did not bind (another branch of an `any`, a
+  case's `matches`, which only tests) is empty. Each capture has its lines joined by one space, is cut at 200 characters,
+  and a rule names at most 8. A placeholder that no `capture` and no pattern metavariable of the `match` names makes the
+  rule invalid ("placeholder {X} is never bound by the match").
 - `{{` and `}}` are literal braces. Anything else in braces (`{x.y}`, `{x[0]}`, `{x!r}`, `{x:>5}`, `{}`, a lowercase
   name, an unbalanced brace) makes the rule invalid. Texts are split with Python's `string.Formatter` parser and only
   simple names are substituted; rule text is never run through `str.format`.
@@ -307,7 +322,7 @@ Placeholders in `message`, `messageShort` and a case's `text` / `messageShort`:
 Order: managed, then global, then project. A lower layer can add rules of its own, and for an id a higher layer already
 defines it can only tighten: switch `action` to deny, `retry` to none, re-enable, remove suspending `modes`, and reword
 `message` / `messageShort` / `description` (not for managed rules; a reworded text is checked like the rule's own, so
-`{found}` needs a `bin` atom in the higher layer's `when`). It cannot change `match`, `wrappers`, `when` or `messages`
+`{found}` needs a `bin` atom in the higher layer's `when`, and every other placeholder must be bound by its `match`). It cannot change `match`, `wrappers`, `when` or `messages`
 (cases are not overridable), loosen, disable or add modes. An override that fails validation is ignored. The layers live in the managed file,
 `config.json` under the XDG config dir (global) and `<project>/.claude/guardrails.json` (project). A project at the home
 directory (a session started there) has no project layer: `~/.claude/guardrails.json` is never read.

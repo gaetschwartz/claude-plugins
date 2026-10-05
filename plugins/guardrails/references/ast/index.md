@@ -1,7 +1,7 @@
 # AST rule cookbook
 
 Worked `match` rules, each tested against the real engine. Read only the file whose shape matches your rule; rule
-syntax and semantics (the atoms `command`, `assignment`, `wrapper`, `statement`, `redirect`, `discards`, composition, `wrappers`) are in
+syntax and semantics (the atoms `command`, `assignment`, `wrapper`, `statement`, `redirect`, `discards`, `capture`, composition, `wrappers`) are in
 [matching.md](../matching.md) and the full procedure (when to reach for relations at all, the test matrix, the pitfalls)
 in [writing-rules.md](../writing-rules.md).
 
@@ -13,6 +13,7 @@ in [writing-rules.md](../writing-rules.md).
 | depend on order in `&&` / `;` lists (`cd x && git ...`); understand subshells, groups and what `wrapped` means | [lists.md](lists.md) |
 | see through a redirect (`pgrep -f X >/dev/null \|\| ...`, `2>&1`, `&>file`); the `statement`, `redirect` and `discards` atoms; tell `>/dev/null 2>&1` from `2>&1 >/dev/null` | [redirects.md](redirects.md) |
 | match `sudo`, `bash -c`, `eval`; the `wrapper` atom; a rule NOT through wrappers (`"wrappers": false`); `LD_PRELOAD=` prefixes (the `assignment` atom); how wrappers and shell strings are looked through; single versus double quotes; heredocs and `<<-` as data | [wrappers.md](wrappers.md) |
+| quote a matched node in the message through a `capture` atom (the last stage of a pipeline, a command's name, an argument), under `has`, `any` or a redirect-transparent `command` | [captures.md](captures.md) |
 | apply a rule only where a tool is installed or in some projects (`when`); give a different message per command shape (`messages` cases); put the installed binary (`{found}`) or a captured word (`{TARGET}`) in the text | [messages.md](messages.md) |
 
 ## Method in three lines

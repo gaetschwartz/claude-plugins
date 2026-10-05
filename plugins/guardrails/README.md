@@ -16,8 +16,8 @@ A rule matches a command and says what happens:
   `has`, `follows`, `precedes`, `not`, `any`, `all`, ...; every `regex` is Rust regex syntax: linear time, no
   backreferences or look-around), plus atoms usable anywhere in it: `{"command": "pkill"}` (a command by name in
   any spelling, optionally with `args`, a regex over its text, and transparent to a redirect around it),
-  `{"assignment": {"name": "LD_PRELOAD"}}`, `{"wrapper": true}`, `{"statement": ...}`, `{"redirect": ...}` and
-  `{"discards": "all"}`. Its keys are ANDed; `any` says "either". `wrappers: false` keeps the rule off commands reached
+  `{"assignment": {"name": "LD_PRELOAD"}}`, `{"wrapper": true}`, `{"statement": ...}`, `{"redirect": ...}`,
+  `{"discards": "all"}` and `{"capture": ..., "name": "LAST"}` (binds the matched node to a `{LAST}` placeholder of the message). Its keys are ANDed; `any` says "either". `wrappers: false` keeps the rule off commands reached
   through `sudo`, `env`, `xargs` and the other wrappers. [references/matching.md](references/matching.md) has the
   semantics, the node kinds and the known limits.
 - `action`: `deny` (the agent gets the message and the call is blocked) or `warn` (the message arrives as context, once per
