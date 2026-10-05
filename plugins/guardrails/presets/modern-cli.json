@@ -1,5 +1,5 @@
 {
-  "description": "Prefer fd over find and rg over grep -r when they are installed (fd may be named fdfind), with a cheat sheet shown once per session.",
+  "description": "Prefer fd over find, rg over grep -r, cargo nextest over cargo test and dust over du when they are installed (fd may be named fdfind), with a cheat sheet shown once per session.",
   "rules": {
     "find-fd": {
       "description": "find when fd is installed",
@@ -90,7 +90,142 @@
       "retry": "same-command",
       "message": "grep -r is blocked in favour of rg: much faster, and it respects .gitignore.\n\n── rg cheat sheet (`rg -h` prints the short help) ──\nTRAPS — read first:\n  rg skips .gitignore'd paths AND dot-files/dirs by default; grep -r doesn't.\n    Want everything?  rg -uu (= --no-ignore --hidden; -uuu adds --binary, but only -a prints binary matches)\n  rg's first non-flag arg is the PATTERN: `rg src/` searches for the text \"src/\" (exit 0, no warning) → rg PAT src/\n  rg silently skips binary files (grep prints \"Binary file matches\"); -a searches them as text\n  Under sudo, brew binaries are not on secure_path:  sudo \"$(command -v rg)\" …\n\nrg [flags] PATTERN [path…]       case-sensitive by default; line numbers + per-file headings automatic; -w -x -F -v -o -A -B -C as in grep\n  grep -rn foo .                   →  rg foo              (-N no line numbers, -H/-I force/suppress filenames)\n  grep -ri foo                     →  rg -i foo           (-S smart-case, -s force sensitive)\n  grep -r --include='*.py' foo     →  rg -t py foo   or   rg -g '*.py' foo      (rg --type-list; -g beats -t)\n  grep -r --exclude-dir=vendor     →  rg -g '!vendor' foo       (include-globs for dirs need /**: -g 'src/**'; later globs win; -T py = not type)\n  grep -rl / -rL / -rc             →  rg -l / --files-without-match / -c    (-c omits 0-count files: --include-zero; --count-matches = per match)\n  grep -rE … / -rP …               →  rg …  / rg -P …     (-P for look-around and backreferences);  `rg -e -foo` for patterns starting with -\n  grep -ro foo                     →  rg -o foo           (-r REPL rewrites output only, never files)\n  grep -rz … / multi-line          →  rg -z … (decompressor must be on PATH; silent if missing) / rg -U 'a\\nb' (`.` needs --multiline-dotall to cross lines)\n  find . -type f | …               →  rg --files [path]   (candidate files under the same ignore rules; a real search additionally skips binaries)\n  -m N max per file, --max-filesize 5M, --sort path for stable order\n\nCombine: rg walks the tree itself, so `find … | xargs grep` is usually just `rg PAT [path]`.\n  Filters rg lacks (size, mtime, owner, depth, file type) → list the files with fd (fdfind on Debian and Ubuntu): fd … -X rg -n PAT   or   fd -0 … | xargs -0 rg PAT",
       "messageShort": "grep -r is blocked in favour of rg: much faster, and it respects .gitignore.\n\nrg PATTERN [path]              (-t py / -g '*.py', -l, -i, -w, -F, -C3, -uu = ignored+hidden)\n   first arg is the PATTERN — `rg src/` searches for the text \"src/\"; pass the dir as the 2nd arg\n(The full cheat sheet was shown earlier in this session; `rg -h` prints the short help.)"
+    },
+    "cargo-nextest": {
+      "description": "cargo test when cargo-nextest is installed (doctests exempt)",
+      "match": {
+        "command": "cargo",
+        "args": "(^|\\s)(\\S*/)?cargo(\\s+(\\+\\S+|--?(locked|offline|frozen|q|quiet|v|vv|verbose)))*\\s+test(\\s|$)",
+        "not": {
+          "has": {
+            "regex": "^--doc$"
+          }
+        }
+      },
+      "when": {
+        "bin": "cargo-nextest"
+      },
+      "action": "deny",
+      "retry": "same-command",
+      "message": "cargo test is blocked in favour of cargo nextest run (installed): every test runs in its own process, so one failing or hanging test cannot disturb the others, and the run is faster. The usual flags carry over: `--workspace`, `-p NAME`, `--no-run`, a test-name filter (`cargo nextest run my_test`), `--no-capture` to see test output.\nDoctests are the exception: nextest cannot run them, so `cargo test --doc` is the one case that needs plain cargo test (it is not blocked); run it separately when the crate has doctests.",
+      "messages": [
+        {
+          "when": {
+            "matches": {
+              "has": {
+                "regex": "^--nocapture$"
+              }
+            }
+          },
+          "text": "cargo test … --nocapture is blocked in favour of cargo nextest run (installed): drop the `--` and the libtest flag, write `--no-capture`, and keep the rest as it is (`--workspace`, `-p NAME`, a test-name filter): `cargo test -p foo my_test -- --nocapture` becomes `cargo nextest run -p foo my_test --no-capture`. --no-capture also runs the tests one at a time.\nDoctests need plain `cargo test --doc` (not blocked).",
+          "messageShort": "cargo test is blocked in favour of cargo nextest run; `-- --nocapture` is `--no-capture` (`cargo nextest run -p foo my_test --no-capture`). Only `cargo test --doc` needs plain cargo test."
+        }
+      ],
+      "messageShort": "cargo test is blocked in favour of cargo nextest run (same flags: `--workspace`, `-p NAME`, a test-name filter, `--no-capture`); only `cargo test --doc` needs plain cargo test."
+    },
+    "du-dust": {
+      "description": "du when dust is installed",
+      "match": {
+        "command": "du"
+      },
+      "when": {
+        "bin": "dust"
+      },
+      "action": "deny",
+      "retry": "same-command",
+      "message": "du is blocked in favour of dust (installed): it sorts by size and draws a bar chart, so no `| sort -h | head` is needed.\n  dust -d 1 PATH   the biggest entries one level down (the biggest is last; -r puts it first)\n  dust -n 20 PATH  only the 20 biggest lines\n  dust -d 0 PATH   just the total, one line, like du -sh PATH\n  dust -s PATH     apparent size (file length) instead of disk blocks\n  -b hides the percent bars and -c the colours (use both when you read or pipe the output); -o k|m|g|si sets the unit.\ndust cannot replace du where another program parses the output (byte-exact `du -sk` / `-sb`, `du --max-depth` in a pipeline): if you really need du, repeat the same command and it will run.",
+      "messages": [
+        {
+          "when": {
+            "matches": {
+              "has": {
+                "regex": "^(-[A-Za-z]*s[A-Za-z]*|--summarize|--max-depth=0)$"
+              }
+            }
+          },
+          "text": "du -s is blocked in favour of `dust -d 0 PATH` (installed): it prints the same one total line; add `-s` for apparent size and `-o k|m|g|si` for the unit. For a breakdown use `dust -d 1 PATH` (biggest entries one level down, the biggest last; -r puts it first, -n 20 limits the lines).\ndust cannot replace du where another program parses the output (byte-exact `du -sk` / `-sb`, `du --max-depth` in a pipeline): if you really need du, repeat the same command and it will run.",
+          "messageShort": "du -s is blocked in favour of `dust -d 0 PATH` (one total line; `-s` apparent size); `dust -d 1 PATH` for a breakdown. If you really need du (byte-exact `du -sk`, parsed output), repeat the same command."
+        },
+        {
+          "when": {
+            "matches": {
+              "has": {
+                "regex": "^(-d[0-9]*|--max-depth(=[0-9]+)?)$"
+              }
+            }
+          },
+          "text": "du with a depth limit is blocked in favour of `dust -d N PATH` (installed): the same depth, the entries sorted by size (the biggest last; -r puts it first), `-n 20` limits the lines, `-s` is apparent size, `-b -c` drop the bars and colours.\ndust cannot replace du where another program parses the output (byte-exact `du -sk` / `-sb`, `du --max-depth` in a pipeline): if you really need du, repeat the same command and it will run.",
+          "messageShort": "du -d is blocked in favour of `dust -d N PATH` (sorted by size; `-n 20` limits the lines). If you really need du (parsed output), repeat the same command."
+        }
+      ],
+      "messageShort": "du is blocked in favour of dust: `dust -d 1 PATH` (biggest entries one level down), `dust -d 0 PATH` (total only), `-n 20` limits lines, `-s` apparent size, `-b -c` no bars or colours. If you really need du (byte-exact `du -sk`, parsed output), repeat the same command."
     }
   },
-  "modes": {}
+  "modes": {},
+  "examples": {
+    "find-fd": {
+      "catch": [
+        "find . -name x",
+        "sudo find /tmp -type f",
+        "find . -exec rm {} \\;",
+        "cd src && find . -name '*.rs'"
+      ],
+      "pass": [
+        "fd x",
+        "echo find",
+        "ls -la",
+        "man find"
+      ]
+    },
+    "grep-rg": {
+      "catch": [
+        "grep -r x .",
+        "egrep -R y src",
+        "grep -d recurse z .",
+        "sudo grep -rn x /var/log"
+      ],
+      "pass": [
+        "rg x",
+        "grep x file",
+        "grep -- -r file",
+        "echo grep -r"
+      ]
+    },
+    "cargo-nextest": {
+      "catch": [
+        "cargo test",
+        "cargo test --workspace",
+        "cargo test -p foo my_test -- --nocapture",
+        "cd crates/x && cargo test",
+        "RUST_BACKTRACE=1 cargo +nightly test",
+        "sudo cargo test -q",
+        "cargo test 2>&1 | tail -20"
+      ],
+      "pass": [
+        "cargo test --doc",
+        "cargo test --workspace --doc -p foo",
+        "cargo nextest run",
+        "cargo nextest run test",
+        "cargo build --features test",
+        "echo cargo test",
+        "man cargo-test"
+      ]
+    },
+    "du-dust": {
+      "catch": [
+        "du -sh .",
+        "du -h --max-depth=1 /var",
+        "sudo du -sk /Users",
+        "du -sh * | sort -h",
+        "du -d 1 ~"
+      ],
+      "pass": [
+        "dust -d 1 .",
+        "df -h",
+        "echo du",
+        "man du",
+        "duplicity status"
+      ]
+    }
+  }
 }

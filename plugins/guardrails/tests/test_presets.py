@@ -1,10 +1,13 @@
 from __future__ import annotations  # noqa: I001
 
 import os
+from typing import Any
 
 from helpers import AstIsolated, plain
 
 import cli
+import engine
+import matching
 import policy
 
 
@@ -130,3 +133,70 @@ class Presets(AstIsolated):
         assert text is not None
         self.assertIn("── fd cheat sheet", text)
         self.assertIn("find . -exec cmd {} \\;", text)
+
+
+def rule_of(preset: str, rid: str) -> policy.Rule:
+    return policy.Rule.from_json(cli.load_preset(preset)["rules"][rid])
+
+
+class Examples(AstIsolated):
+    def test_every_rule_of_the_tool_presets_has_catch_and_pass_examples_that_hold(self) -> None:
+        for name in ("modern-cli",):
+            preset = cli.load_preset(name)
+            self.assertEqual(sorted(preset["examples"]), sorted(preset["rules"]))
+            for rid, example in preset["examples"].items():
+                rule = policy.Rule.from_json(preset["rules"][rid])
+                self.assertGreaterEqual(len(example["catch"]), 3)
+                self.assertGreaterEqual(len(example["pass"]), 3)
+                for kind, expected in (("catch", True), ("pass", False)):
+                    for command in example[kind]:
+                        with self.subTest(preset=name, rule=rid, kind=kind, command=command):
+                            self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"] is not None, expected)
+
+    def says(self, preset: str, rid: str, command: str) -> str:
+        rule = rule_of(preset, rid)
+        evaluation = matching.evaluate(command, {"r": rule})
+        self.assertIsNotNone(evaluation.kinds["r"], command)
+        return engine.texts_of(rule, evaluation.details.get("r")).full
+
+    def test_cargo_nextest_cases_and_text(self) -> None:
+        plain_text = self.says("modern-cli", "cargo-nextest", "cargo test -p foo my_test")
+        self.assertIn("cargo nextest run", plain_text)
+        self.assertIn("cargo test --doc", plain_text)
+        for command in ("cargo test -- --nocapture", "cargo test -p foo x -- --nocapture --test-threads=1"):
+            self.assertIn("--no-capture", self.says("modern-cli", "cargo-nextest", command))
+        self.assertNotIn("becomes `cargo nextest run -p foo", plain_text)
+
+    def test_du_dust_cases(self) -> None:
+        self.assertIn("dust -d 0 PATH", self.says("modern-cli", "du-dust", "du -sh /tmp"))
+        self.assertIn("dust -d N PATH", self.says("modern-cli", "du-dust", "du --max-depth=1 /tmp"))
+        self.assertIn("dust -d N PATH", self.says("modern-cli", "du-dust", "du -h -d 1 /tmp"))
+        default = self.says("modern-cli", "du-dust", "du -h /tmp")
+        self.assertIn("dust -n 20 PATH", default)
+        self.assertIn("repeat the same command", default)
+
+
+class Installed(AstIsolated):
+    def denied(self, command: str, tool: str = "Bash", tool_input: Any = None) -> str | None:
+        out = self.hook(command, session=f"s-{tool}-{command}-{tool_input}", tool=tool, tool_input=tool_input)
+        return None if out is None else out["hookSpecificOutput"]["permissionDecisionReason"]
+
+    def stub_path(self, *names: str) -> str:
+        folder = self.tmp / ("bin-" + "-".join(names))
+        folder.mkdir()
+        for name in names:
+            (folder / name).write_text("#!/bin/sh\n")
+            (folder / name).chmod(0o755)
+        return str(folder)
+
+    def test_nextest_and_dust_rules_need_their_tools(self) -> None:
+        self.cli("preset", "install", "modern-cli")
+        os.environ["PATH"] = self.stub_path("fd")
+        self.assertIsNone(self.denied("cargo test"))
+        self.assertIsNone(self.denied("du -sh ."))
+        os.environ["PATH"] = self.stub_path("cargo-nextest", "dust")
+        self.assertIn("[guardrails:cargo-nextest]", plain(self.denied("cargo test -p x") or ""))
+        self.assertIn("[guardrails:du-dust]", plain(self.denied("du -sh .") or ""))
+        self.assertIsNone(self.denied("cargo test --doc"))
+        self.assertIsNotNone(self.denied("du -sk ."))
+        self.assertIsNone(self.denied("du -sk ."))
