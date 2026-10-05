@@ -20,16 +20,20 @@ that text.
   "message": "A pipeline's status is its last command's (`{LAST}`), so a failure of the first command goes unseen.",
   "catch": ["make | tail -3", "make 2>&1 | grep x | head -5", "bash -c 'make | tail'", "make | tail -2 >log"],
   "pass": ["tail -f x", "make | grep x", "tail x | make", "make"],
-  "says": {"make | tail -3": "A pipeline's status is its last command's (`tail`), so a failure of the first command goes unseen.",
+  "says": {"make | foo | tail -3 && x": "A pipeline's status is its last command's (`tail`), so a failure of the first command goes unseen.",
+           "make | tail -3": "A pipeline's status is its last command's (`tail`), so a failure of the first command goes unseen.",
            "a | b | c | head": "A pipeline's status is its last command's (`head`), so a failure of the first command goes unseen.",
            "make | tail -2 >log": "A pipeline's status is its last command's (`tail`), so a failure of the first command goes unseen."}
 }
 ```
 
 The capture sits under `has` of the pipeline, around the last stage (`nthChild` 1 counted from the end). `field:
-"name"` binds the stage's name instead of the whole stage, so `{LAST}` is `tail`, not `tail -3`. With three or more
-stages the pipeline that matches first is the outermost one, so `{LAST}` is the last stage of the whole pipeline. A
-redirect on the last stage (`>log`) does not change the name.
+"name"` binds the stage's name instead of the whole stage, so `{LAST}` is `tail`, not `tail -3`. A redirect on the
+last stage (`>log`) does not change the name. When `&&`, `||` or `;` follows a pipeline of three or more stages,
+tree-sitter nests every stage after the first, and what follows, in a `list` inside the first stage's pipeline; the
+pipeline that matches is then that inner one, and its last stage is still the real last stage. A rule that must judge
+the first stage (`pipe-status` exempts display-only first commands) goes up from the inner pipeline through those
+lists: `{"inside": {"kind": "pipeline", "stopBy": {"not": {"kind": "list"}}}}`.
 
 ## A field of the matched node
 

@@ -38,27 +38,78 @@
               "inside": {
                 "statement": {
                   "kind": "pipeline",
-                  "not": {
-                    "has": {
-                      "kind": "command",
-                      "nthChild": 1,
-                      "any": [
+                  "any": [
+                    {
+                      "all": [
                         {
-                          "has": {
-                            "field": "name",
-                            "regex": "^(\\S*/)?(echo|printf|ls|cat|grep|egrep|fgrep|rg|fd|fdfind|find|jq|awk|sed|sort|wc|head|tail|tr|cut|stat|file|which|tree|date|pwd|env|printenv|ps|pgrep|du|df|dust|column|basename|dirname|realpath|readlink|seq|true)$"
+                          "not": {
+                            "inside": {
+                              "kind": "pipeline",
+                              "stopBy": {
+                                "not": {
+                                  "kind": "list"
+                                }
+                              }
+                            }
                           }
                         },
                         {
-                          "has": {
-                            "field": "name",
-                            "regex": "^git$"
-                          },
-                          "regex": "^git(\\s+-\\S+(\\s+\\S+)?)*\\s+(log|diff|show|status|branch|ls-files|rev-parse|remote|config|blame|tag|rev-list|shortlog|describe)(\\s|$)"
+                          "not": {
+                            "has": {
+                              "kind": "command",
+                              "nthChild": 1,
+                              "any": [
+                                {
+                                  "has": {
+                                    "field": "name",
+                                    "regex": "^(\\S*/)?(echo|printf|ls|cat|pwd|date|ps|du|df)$"
+                                  }
+                                },
+                                {
+                                  "has": {
+                                    "field": "name",
+                                    "regex": "^git$"
+                                  },
+                                  "regex": "^git(\\s+-\\S+(\\s+\\S+)?)*\\s+(log|show|status|diff|branch|remote|ls-files|rev-parse|describe|shortlog|blame)(\\s|$)"
+                                }
+                              ]
+                            }
+                          }
                         }
                       ]
+                    },
+                    {
+                      "inside": {
+                        "kind": "pipeline",
+                        "stopBy": {
+                          "not": {
+                            "kind": "list"
+                          }
+                        },
+                        "not": {
+                          "has": {
+                            "kind": "command",
+                            "nthChild": 1,
+                            "any": [
+                              {
+                                "has": {
+                                  "field": "name",
+                                  "regex": "^(\\S*/)?(echo|printf|ls|cat|pwd|date|ps|du|df)$"
+                                }
+                              },
+                              {
+                                "has": {
+                                  "field": "name",
+                                  "regex": "^git$"
+                                },
+                                "regex": "^git(\\s+-\\S+(\\s+\\S+)?)*\\s+(log|show|status|diff|branch|remote|ls-files|rev-parse|describe|shortlog|blame)(\\s|$)"
+                              }
+                            ]
+                          }
+                        }
+                      }
                     }
-                  }
+                  ]
                 },
                 "stopBy": {
                   "statement": {
@@ -429,7 +480,12 @@
         "bash -c 'make | tail && echo ok'",
         "(make | tail) && echo ok",
         "(make | tail >log) && echo ok",
-        "make | tail >/dev/null 2>&1 || echo failed"
+        "make | tail >/dev/null 2>&1 || echo failed",
+        "grep pat f | head && echo found",
+        "find . -name x | head && echo ok",
+        "make | tail | wc && echo ok",
+        "make | sort -u | tee out && echo ok",
+        "make 2>&1 | grep err | tail -5 && echo ok"
       ],
       "pass": [
         "make | tail",
@@ -450,10 +506,12 @@
         "make > out.log && tail out.log",
         "ls | head -3 && echo ---",
         "git log | head -5 && git status",
-        "grep -r x . | head && echo found",
         "cat f | wc -l && echo done",
         "bash -c 'set -o pipefail; make | tail && echo ok'",
-        "make | tail >log; echo done"
+        "make | tail >log; echo done",
+        "ls | sort | head && echo ok",
+        "git log | sort | head -3 && git status",
+        "echo a | tr a b | wc && echo ok"
       ]
     },
     "tail-follow": {

@@ -182,7 +182,10 @@ class Examples(AstIsolated):
     def test_pipe_status_names_the_last_command_of_the_whole_pipeline(self) -> None:
         for command, last in (("make | tail -5 && echo ok", "tail"), ("a | b | sort && echo ok", "sort"),
                               ("a | b | c | wc -l && echo ok", "wc"), ("make | cat > o 2>&1 && echo ok", "cat"),
-                              ("make | /usr/bin/sort && echo ok", "/usr/bin/sort")):
+                              ("make | /usr/bin/sort && echo ok", "/usr/bin/sort"),
+                              ("make | tail | wc && echo ok", "wc"), ("make | sort -u | tee out && echo ok", "tee"),
+                              ("make 2>&1 | grep err | tail -5 && echo ok", "tail"),
+                              ("grep pat f | wc -l && echo found", "wc")):
             with self.subTest(command=command):
                 self.assertIn(f"last command's (`{last}`)", self.says("shell-hygiene", "pipe-status", command))
 
