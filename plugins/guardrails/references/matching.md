@@ -204,21 +204,20 @@ compile (exit 2); the hook skips it and warns once per session.
 
 ### Parser repairs
 
-tree-sitter-bash sometimes does not end a statement at a newline after a multi-stage pipeline: in `a | b | cat`
-newline `foo && bar` it parses `foo` as an argument of `cat`, so every rule sees a bogus argument and a bogus `&&` that
-consumes the pipeline's status ([tree-sitter-bash#347](https://github.com/tree-sitter/tree-sitter-bash/issues/347),
-open; it also appears with any 3+ stage pipeline followed by a later statement). The symptom is a newline between two
-children of one `command` node (comments aside, and not after a backslash). `lib/repair.py` inserts `;` right after the
-last real token before each such newline (before any trailing comment), parses again, and loops up to 6 times.
+`lib/repair.py` fixes two tree-sitter-bash quirks in the text of a unit (a command or a shell string, including ssh, watch
+and eval strings), parses again, and loops up to 6 times; they compose in either order.
 
-The repaired text is accepted only when no such newline remains and it has more `command` nodes than the original;
-otherwise the unit stays as written. When accepted it replaces the original as the text of that unit (the command, or a
-shell string), so the broken tree is never matched; wrapper variants are cut from the repaired text. A text without a
-newline is parsed once and never repaired; each extra parse counts against a budget of 64 per command (`MAX_REPAIR_PARSES`),
-and a repair that cannot finish within it is skipped. `guardrails rule ast` reports it (`units: 1 (1 as written, 0 from
-shell strings, 1 repaired)`) and prints the repaired text. Rules, `{LAST}` captures and `matching.matched_statement` all
-work on the repaired text, so a replayed statement is the statement of the repaired text (`foo && pkill x`, not the
-pipeline that swallowed it); the command text that is hashed, shown or audited is always the original.
+- **Swallowed newline** ([tree-sitter-bash#347](https://github.com/tree-sitter/tree-sitter-bash/issues/347)): after a
+  multi-stage pipeline, `a | b | cat` newline `foo && bar` parses `foo` as an argument of `cat`. A newline between two
+  children of one `command` (not after a backslash) gets `;` after the last real token before it.
+- **Heredoc marker with more on its line**: `python3 - <<'E' 2>&1 | tail -3` parses with an ERROR node. A redirect that
+  holds the ERROR moves before the `<<`; an ERROR directly in the heredoc cuts the line there and moves the rest after
+  the heredoc. Single-line symptoms only.
+
+The repaired text is kept only when no symptom remains and it has more `command` nodes or fewer ERROR nodes; it then
+replaces the unit's text, so rules, `{LAST}` and `matching.matched_statement` see it, while the hashed, shown and audited
+command stays the original. Each extra parse is charged to a budget of 64 per command (`MAX_REPAIR_PARSES`); texts
+without a newline are parsed once. `guardrails rule ast` shows `units: 1 (1 as written, 0 from shell strings, 1 repaired)`.
 
 ### Tree-sitter Bash node kinds that matter
 
