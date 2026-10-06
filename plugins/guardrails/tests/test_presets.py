@@ -189,6 +189,44 @@ class Examples(AstIsolated):
             with self.subTest(command=command):
                 self.assertIn(f"last command's (`{last}`)", self.says("shell-hygiene", "pipe-status", command))
 
+    def fires(self, command: str) -> bool:
+        return matching.evaluate(command, {"r": rule_of("shell-hygiene", "pipe-status")}).kinds["r"] is not None
+
+    def test_pipe_status_ignores_a_pipeline_that_only_feeds_a_separator_or_label_echo(self) -> None:
+        for consumer in ("echo ---", 'echo "---"', 'echo "====="', 'echo "=====PYPROJECT====="', 'echo "--- listing ---"',
+                         'echo "### Section"', 'echo ""', "echo ''", "echo", "echo -n ---", "echo -e '\\n--- x ---'",
+                         "echo ===== PYPROJECT =====", "echo --- >&2", "printf '\\n'", "printf '=== %s ===\\n' x",
+                         'printf "\\n=== x ===\\n"', "/bin/echo ---"):
+            for form in ("make | tail && {}", "make | tail || {}", "a | b | sort && {}", "make | tail >o && {}",
+                         "(make | tail) && {}", "x && make | tail && {}", "{{ make | tail; }} && {}",
+                         "if make | tail && {}; then y; fi"):
+                with self.subTest(command=form.format(consumer)):
+                    self.assertFalse(self.fires(form.format(consumer)))
+
+    def test_pipe_status_still_denies_an_echo_that_reports_or_expands(self) -> None:
+        for consumer in ("echo found", "echo ok", 'echo "done"', 'echo "exit=$?"', 'echo "--- $x ---"', 'echo "--- $(date) ---"',
+                         'echo "ok ---"', "echo ok ---", 'echo "- ok"', 'echo "x" "---"', "printf '%s\\n' done",
+                         "printf '--- %s ---\\n' \"$x\"", "echo ---; echo $?", "git status", "true"):
+            with self.subTest(consumer=consumer):
+                self.assertTrue(self.fires(f"make | tail && {consumer}"))
+        for command in ("make | tail && echo --- ; echo $?", "make | tail && echo --- && make | tail && git status",
+                        "cargo build 2>&1 | tail -3 && echo \"exit=$?\"", "git push 2>&1 | tail -2 && git status",
+                        "grep pat f | head && echo found", "make | tail && echo done", 'make | tail && echo "done"'):
+            with self.subTest(command=command):
+                self.assertTrue(self.fires(command))
+
+    def test_pipe_status_ignores_a_deliberately_discarded_status(self) -> None:
+        for command in ("make | tail || true", "make | tail || :", "make | tail >log 2>&1 || true", "a | b | sort || true",
+                        "x && make | tail || true", "(make | tail) || true", "{ make | tail; } || true",
+                        "make | tail || true; echo $?", "make | tail || true && echo ok",
+                        "if make | tail || true; then y; fi"):
+            with self.subTest(command=command):
+                self.assertFalse(self.fires(command))
+        for command in ("make | tail && true", "make | tail || false", "make | tail || true foo", "make | tail && git status || true",
+                        "make | tail || echo failed", "make | tail && echo ok || true"):
+            with self.subTest(command=command):
+                self.assertTrue(self.fires(command))
+
     def test_du_dust_quotes_the_first_path_and_reads_fine_without_one(self) -> None:
         for command, path in (("du -sh /tmp/x", "/tmp/x"), ("du -d 1 ~", "~"), ("sudo du -sh a b", "a"),
                               ("du --max-depth=1 ./src | sort -h", "./src")):

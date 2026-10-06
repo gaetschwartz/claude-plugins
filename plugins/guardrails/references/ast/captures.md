@@ -35,6 +35,20 @@ pipeline that matches is then that inner one, and its last stage is still the re
 the first stage (`pipe-status` exempts display-only first commands) goes up from the inner pipeline through those
 lists: `{"inside": {"kind": "pipeline", "stopBy": {"not": {"kind": "list"}}}}`.
 
+`pipe-status` also leaves a status alone when the consumer is not a verdict. Two consumers are exempt, judged on the
+node after the `&&`/`||` that follows the pipeline (the exemption is written twice: from the pipeline, and from a
+pipeline that ends a list, subshell or `{ }` group that the operator follows):
+
+- A display echo: an `echo` or `printf` with no expansion (`simple_expansion`, `expansion`, `command_substitution`,
+  `arithmetic_expansion`, none below it), whose arguments are a separator or a label, by regex on the command's text. A
+  separator is two or more of `-=*_~`, or one to six `#`. The argument is empty (`echo`, `echo ""`, `printf '\n'`), or
+  starts (after `\n` escapes and spaces) with a separator and continues with any text that has no quote, backslash
+  (other than `\n`, `\t`) or backtick, quoted or not: `echo ---`, `echo "====="`, `echo "=====PYPROJECT====="`,
+  `echo "--- listing ---"`, `echo "### Section"`, `printf '=== %s ===\n' x` (extra `printf` arguments must be plain
+  words). Words with no separator in front (`echo done`, `echo "ok ---"`) report a result and stay denied, as does a
+  `$?` anywhere in the command.
+- `|| true` and `|| :`: the status is discarded on purpose.
+
 ## A field of the matched node
 
 ```rule-example

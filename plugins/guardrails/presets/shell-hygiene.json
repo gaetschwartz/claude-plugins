@@ -199,6 +199,148 @@
                 "not": {
                   "any": [
                     {
+                      "precedes": {
+                        "regex": "^(&&|\\|\\|)$",
+                        "precedes": {
+                          "command": [
+                            "echo",
+                            "printf"
+                          ],
+                          "regex": "^(?:(?:\\S*/)?echo(?:\\s+-[neE]+)*(?:\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?'|(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*))?\\s*|(?:\\S*/)?printf(?:\\s+--)?\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?')(?:\\s+(?:[^\\s\\\"'`$\\\\]+|\\\"[^\\\"`$\\\\]*\\\"|'[^']*'))*\\s*)$",
+                          "not": {
+                            "has": {
+                              "any": [
+                                {
+                                  "kind": "simple_expansion"
+                                },
+                                {
+                                  "kind": "expansion"
+                                },
+                                {
+                                  "kind": "command_substitution"
+                                },
+                                {
+                                  "kind": "arithmetic_expansion"
+                                }
+                              ],
+                              "stopBy": "end"
+                            }
+                          }
+                        }
+                      },
+                      "not": {
+                        "inside": {
+                          "kind": "program",
+                          "stopBy": "end",
+                          "has": {
+                            "kind": "special_variable_name",
+                            "regex": "^\\?$",
+                            "stopBy": "end"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "precedes": {
+                        "regex": "^\\|\\|$",
+                        "precedes": {
+                          "command": [
+                            "true",
+                            ":"
+                          ],
+                          "regex": "^(true|:)$"
+                        }
+                      }
+                    },
+                    {
+                      "nthChild": {
+                        "position": 1,
+                        "reverse": true
+                      },
+                      "inside": {
+                        "any": [
+                          {
+                            "kind": "list"
+                          },
+                          {
+                            "kind": "subshell"
+                          },
+                          {
+                            "kind": "compound_statement"
+                          }
+                        ],
+                        "precedes": {
+                          "regex": "^(&&|\\|\\|)$",
+                          "precedes": {
+                            "command": [
+                              "echo",
+                              "printf"
+                            ],
+                            "regex": "^(?:(?:\\S*/)?echo(?:\\s+-[neE]+)*(?:\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?'|(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*))?\\s*|(?:\\S*/)?printf(?:\\s+--)?\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?')(?:\\s+(?:[^\\s\\\"'`$\\\\]+|\\\"[^\\\"`$\\\\]*\\\"|'[^']*'))*\\s*)$",
+                            "not": {
+                              "has": {
+                                "any": [
+                                  {
+                                    "kind": "simple_expansion"
+                                  },
+                                  {
+                                    "kind": "expansion"
+                                  },
+                                  {
+                                    "kind": "command_substitution"
+                                  },
+                                  {
+                                    "kind": "arithmetic_expansion"
+                                  }
+                                ],
+                                "stopBy": "end"
+                              }
+                            }
+                          }
+                        }
+                      },
+                      "not": {
+                        "inside": {
+                          "kind": "program",
+                          "stopBy": "end",
+                          "has": {
+                            "kind": "special_variable_name",
+                            "regex": "^\\?$",
+                            "stopBy": "end"
+                          }
+                        }
+                      }
+                    },
+                    {
+                      "nthChild": {
+                        "position": 1,
+                        "reverse": true
+                      },
+                      "inside": {
+                        "any": [
+                          {
+                            "kind": "list"
+                          },
+                          {
+                            "kind": "subshell"
+                          },
+                          {
+                            "kind": "compound_statement"
+                          }
+                        ],
+                        "precedes": {
+                          "regex": "^\\|\\|$",
+                          "precedes": {
+                            "command": [
+                              "true",
+                              ":"
+                            ],
+                            "regex": "^(true|:)$"
+                          }
+                        }
+                      }
+                    },
+                    {
                       "follows": {
                         "any": [
                           {
@@ -460,7 +602,17 @@
         "find . -name x | head && echo ok",
         "make | tail | wc && echo ok",
         "make | sort -u | tee out && echo ok",
-        "make 2>&1 | grep err | tail -5 && echo ok"
+        "make 2>&1 | grep err | tail -5 && echo ok",
+        "make | tail && echo done",
+        "make | tail && echo \"done\"",
+        "make | tail && echo \"--- $x ---\"",
+        "make | tail && echo \"ok ---\"",
+        "make | tail && printf '%s\\n' done",
+        "cargo build 2>&1 | tail -3 && echo \"exit=$?\"",
+        "git push 2>&1 | tail -2 && git status",
+        "make | tail && echo ---; echo $?",
+        "make | tail || false",
+        "make | tail && git status || true"
       ],
       "pass": [
         "make | tail",
@@ -486,7 +638,23 @@
         "make | tail >log; echo done",
         "ls | sort | head && echo ok",
         "git log | sort | head -3 && git status",
-        "echo a | tr a b | wc && echo ok"
+        "echo a | tr a b | wc && echo ok",
+        "ls | head -3 && echo ---",
+        "fd -t f . tests | sort && echo \"=====\"",
+        "make | tail && echo \"=====PYPROJECT=====\"",
+        "make | tail && echo \"--- listing ---\"",
+        "make | tail && echo \"### Section\"",
+        "make | tail && echo \"\"",
+        "make | tail && echo",
+        "make | tail && printf '\\n'",
+        "make | tail && printf '=== %s ===\\n' x",
+        "make | tail || echo \"---\"",
+        "make | tail || true",
+        "make | tail || :",
+        "make | tail >log || true",
+        "a | b | sort || true",
+        "(make | tail) && echo ---",
+        "x && make | tail || true"
       ]
     },
     "ps-grep-self-match": {
