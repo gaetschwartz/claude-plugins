@@ -96,6 +96,126 @@ class WrapperAtom(AstIsolated):
                                  "curl x | sh": None, "sudo ls | sh": None, "sudo curl x > f": None})
 
 
+class ViaAtom(AstIsolated):
+    COMMANDS: ClassVar[list[str]] = [f"{K} x", f"sudo {K} x", f"ssh h {K} x", f"bash -c '{K} x'", f"sudo ssh h '{K} x'",
+                                     f"sudo bash -c '{K} x'", f"ssh a 'ssh b {K} x'", f"watch {K} x", f"{K} x | cat"]
+
+    def test_a_unit_is_matched_by_the_names_it_was_reached_through(self) -> None:
+        cases = {
+            "ssh": {1: None, 2: "wrapped", 3: None, 4: "wrapped", 5: None, 6: "wrapped"},
+            "sudo": {1: "wrapped", 4: "wrapped", 5: "wrapped"},
+            "bash": {3: "wrapped", 5: "wrapped"},
+            "wrapper": {1: "wrapped", 4: "wrapped", 5: "wrapped"},
+            "runner": {2: "wrapped", 3: "wrapped", 4: "wrapped", 5: "wrapped", 6: "wrapped", 7: "wrapped"},
+            "watch": {7: "wrapped"},
+        }
+        for name, expected in cases.items():
+            self.assert_kinds(rule_of({"command": K, "via": name}),
+                              {c: expected.get(i) for i, c in enumerate(self.COMMANDS)})
+        self.assert_kinds(rule_of({"command": K, "via": ["ssh", "sudo"]}),
+                          {c: "wrapped" if i in (1, 2, 4, 5, 6) else None for i, c in enumerate(self.COMMANDS)})
+
+    def test_via_composes_under_not_any_and_all(self) -> None:
+        self.assert_kinds(rule_of({"command": K, "not": {"via": "ssh"}}), {
+            f"{K} x": "direct", f"sudo {K} x": "wrapped", f"bash -c '{K} x'": "wrapped", f"ssh h {K} x": None,
+            f"sudo ssh h '{K} x'": None, f"ssh a 'ssh b {K} x'": None, f"{K} x | cat": "wrapped"})
+        self.assert_kinds(rule_of({"command": K, "not": {"any": [{"via": "ssh"}, {"via": "sudo"}]}}), {
+            f"{K} x": "direct", f"sudo {K} x": None, f"ssh h {K} x": None, f"bash -c '{K} x'": "wrapped"})
+        self.assert_kinds(rule_of({"command": K, "all": [{"via": "wrapper"}, {"not": {"via": "ssh"}}]}), {
+            f"sudo {K} x": "wrapped", f"sudo ssh h '{K} x'": None, f"{K} x": None, f"ssh h {K} x": None})
+        self.assert_kinds(rule_of({"any": [{"command": K, "via": "ssh"}, {"command": "ls"}]}), {
+            f"ssh h {K} x": "wrapped", f"{K} x": None, "ls": "direct"})
+
+    def test_every_wrapper_crossed_is_in_the_chain(self) -> None:
+        self.assert_kinds(rule_of({"command": K, "via": "env"}), {
+            f"sudo env {K} x": "wrapped", f"env sudo {K} x": "wrapped", f"bash -c 'sudo env A=1 {K} x'": "wrapped",
+            f"sudo {K} x": None})
+
+    def test_a_message_case_does_not_depend_on_which_chain_is_scanned_first(self) -> None:
+        rule = policy.Rule.from_json({"match": {"command": K}, "message": "plain", "messages": [
+            {"when": {"matches": {"via": "ssh"}}, "text": "remote"}]})
+        for command in (f"bash -c '{K} x'; ssh h {K} x", f"ssh h {K} x; bash -c '{K} x'"):
+            with self.subTest(command=command):
+                self.assertEqual(matching.evaluate(command, {"r": rule}).details["r"].case, 0)
+
+    def test_the_first_declared_case_that_holds_on_any_unit_wins_whatever_the_names_or_the_order(self) -> None:
+        for first, second in (("sudo", "ssh"), ("ssh", "sudo")):
+            rule = policy.Rule.from_json({"match": {"command": K}, "message": "plain", "messages": [
+                {"when": {"matches": {"via": first}}, "text": first}, {"when": {"matches": {"via": second}}, "text": second}]})
+            for command in (f"ssh h '{K} x'; sudo {K} x", f"sudo {K} x; ssh h '{K} x'"):
+                with self.subTest(first=first, command=command):
+                    self.assertEqual(matching.evaluate(command, {"r": rule}).details["r"].case, 0)
+
+    def test_the_captures_come_from_the_unit_that_satisfied_the_chosen_case(self) -> None:
+        match = {"command": K, "has": {"capture": {"kind": "word", "regex": "^[a-z]$"}, "name": "ARG"}}
+        rule = policy.Rule.from_json({"match": match, "message": "plain {ARG}", "messages": [
+            {"when": {"matches": {"via": "ssh"}}, "text": "remote {ARG}"}]})
+        for command in (f"sudo {K} a; ssh h {K} b", f"ssh h {K} b; sudo {K} a"):
+            with self.subTest(command=command):
+                detail = matching.evaluate(command, {"r": rule}).details["r"]
+                self.assertEqual((detail.case, detail.captures), (0, {"ARG": "b"}))
+
+    def test_a_directly_typed_command_has_an_empty_chain(self) -> None:
+        self.assert_kinds(rule_of({"command": K, "via": ["wrapper", "runner"]}), {f"{K} x": None})
+        self.assert_kinds(rule_of({"command": K, "not": {"via": ["wrapper", "runner"]}}), {f"{K} x": "direct"})
+
+    def test_via_works_in_message_cases_and_next_to_wrappers_false(self) -> None:
+        rule = policy.Rule.from_json({"match": {"command": K}, "message": "plain", "messages": [
+            {"when": {"matches": {"via": "ssh"}}, "text": "remote"}]})
+        for command, case in ((f"ssh h {K} x", 0), (f"sudo {K} x", None)):
+            with self.subTest(command=command):
+                self.assertEqual(matching.evaluate(command, {"r": rule}).details["r"].case, case)
+        self.assert_kinds(rule_of({"command": K, "not": {"via": "ssh"}}, wrappers=False), {
+            f"sudo {K} x": None, f"ssh h {K} x": None, f"bash -c '{K} x'": "wrapped", f"{K} x": "direct"})
+
+    def test_unknown_names_and_empty_lists_are_rejected(self) -> None:
+        for value in ("rsync", [], ["ssh", "nope"], True, "sh -c", ""):
+            with self.subTest(value=value), self.assertRaises(policy.Invalid):
+                rule_of({"command": K, "via": value})
+
+
+class FlagAtom(AstIsolated):
+    def test_a_short_flag_is_found_in_any_cluster_of_letters_and_a_long_one_with_or_without_a_value(self) -> None:
+        self.assert_kinds(rule_of({"command": "tail", "flag": "f"}), {
+            "tail -f x": "direct", "tail -nf x": "direct", "tail -fq x": "direct", "tail x -f": "direct",
+            "/usr/bin/tail -f x": "direct", "FOO=1 tail -f x": "direct", "tail -f x > o": "direct",
+            "sudo tail -f x": "wrapped", "tail -F x": None, "tail -n 5 x": None, "tail -n5f x": "direct",
+            "tail -fn5 x": "direct", "tail --f x": None, "tail f": None, "tail '-f' x": "direct",
+            "tail \"-nf\" x": "direct", "tail -n5 x": None, "tail -5 x": None, "echo -f": None, "tail -f": "direct"})
+        self.assert_kinds(rule_of({"command": "tail", "flag": "follow"}), {
+            "tail --follow x": "direct", "tail --follow=name x": "direct", "tail --follow='a b' x": "direct",
+            "tail --followx x": None, "tail --follo x": None, "tail -follow x": None, "tail -f x": None})
+
+    def test_nothing_after_a_double_dash_word_is_a_flag(self) -> None:
+        self.assert_kinds(rule_of({"command": "tail", "flag": ["f", "follow"]}), {
+            "tail -f -- x": "direct", "tail -- -f": None, "tail x -- -f": None, "tail -- --follow": None,
+            "tail --follow -- -f": "direct"})
+
+    def test_a_list_is_any_of_its_names_and_distinct_options_combine_with_all_any_not(self) -> None:
+        self.assert_kinds(rule_of({"command": "tail", "flag": ["f", "F", "follow"]}), {
+            "tail -f x": "direct", "tail -n0 -F x": "direct", "tail --follow x": "direct", "tail x": None,
+            "tail -n 3 x": None})
+        both = rule_of({"command": "x", "all": [{"flag": "a"}, {"flag": "b"}]})
+        self.assert_kinds(both, {"x -a -b": "direct", "x -ab": "direct", "x -ba": "direct", "x -a": None})
+        self.assert_kinds(rule_of({"command": "x", "not": {"flag": "a"}}), {"x -b": "direct", "x -ba": None})
+        self.assert_kinds(rule_of({"command": "x", "any": [{"flag": "a"}, {"flag": "verbose"}]}), {
+            "x -a": "direct", "x --verbose": "direct", "x -b": None})
+
+    def test_flag_alone_matches_any_command_that_carries_it(self) -> None:
+        self.assert_kinds(rule_of({"flag": "v"}), {"ls -v": "direct", "grep -iv x": "direct", "ls": None,
+                                                   "echo -v": "direct", "ls -- -v": None})
+
+    def test_the_cluster_reading_is_coarse_about_values_and_digits(self) -> None:
+        self.assert_kinds(rule_of({"command": "ssh", "flag": "o"}), {"ssh -sofoo h": "direct", "ssh -p22 h": None})
+
+    def test_names_with_a_dash_or_of_the_wrong_shape_and_empty_lists_are_rejected(self) -> None:
+        for value in ("-f", "--follow", [], "", "1", "a b", "fo o", ["f", "-F"], 3, [3], ["f", ""], "a=b"):
+            with self.subTest(value=value), self.assertRaises(policy.Invalid):
+                rule_of({"command": "tail", "flag": value})
+        with self.assertRaisesRegex(policy.Invalid, "without the dash"):
+            rule_of({"flag": "-f"})
+
+
 class NotThroughWrappers(AstIsolated):
     def test_wrapper_variants_are_skipped_and_every_other_look_through_stays(self) -> None:
         rule = rule_of({"command": K}, wrappers=False)

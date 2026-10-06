@@ -67,6 +67,15 @@ Two `has` clauses under `all`: a recursive flag in any spelling (`-rf`, `-fr`, `
 `simple_expansion` and quoted `string` nodes both work. `rm -f /` has no recursive flag and passes; `rm -rf /tmp/x`
 passes because the whole word is anchored.
 
+```rule-example
+{
+  "id": "tail-follow", "title": "tail -f in any spelling, by the flag atom", "rule": {"command": "tail", "flag": ["f", "F", "follow"]},
+  "action": "warn",
+  "catch": ["tail -f x", "tail -n0 -F x", "tail --follow=name x", "sudo tail -fq x"],
+  "pass": ["tail x", "tail -n 5 x", "tail -- -f", "echo tail -f"]
+}
+```
+
 ## Any of several dangerous arguments
 
 ```rule-example

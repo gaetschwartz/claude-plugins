@@ -6,7 +6,7 @@ ast-grep rules built from a guardrails rule), `lib/scanner.py` (parse units, wra
 The runtime, its trust model and what happens when the engine fails are in [runtime.md](runtime.md).
 
 ast-grep does all the lexing and parsing, in process through the `ast-grep-py` library: guardrails writes no shell parser.
-A rule's `match` is one ast-grep rule object, plus seven guardrails atoms (`command`, `assignment`, `wrapper`, `statement`, `redirect`, `discards`, `capture`) that are
+A rule's `match` is one ast-grep rule object, plus nine guardrails atoms (`command`, `assignment`, `wrapper`, `statement`, `redirect`, `discards`, `via`, `flag`, `capture`) that are
 expanded into plain ast-grep rules when the rule is compiled. It is matched on the tree-sitter Bash parse of the command
 as written, of its wrapper variants and of each shell string, in a bounded checker.
 
@@ -17,8 +17,8 @@ Before writing a rule with relations, run `guardrails rule ast '<command>'` to s
 ## What `rule test` does and does not check
 
 `rule test` answers one question per command: does the rule's matcher select it (a `Block` or `Warn` row), not (an `Allow`
-row), or could it not be judged (a `Not evaluated` row: the rule needs the engine and it is missing or failing, or the hook
-would refuse the command). It does not apply modes, retry acknowledgements, `warn` versus `deny` or hook-level switches; it
+row), or could it not be judged (a `Not evaluated` row: the rule needs the engine and it is missing or failing, or the
+command is too complex to check and the hook would only add a notice). It does not apply modes, retry acknowledgements, `warn` versus `deny` or hook-level switches; it
 prints a `**Note**` line when the hook would not act on a match. Report those notes next to any verdict; never call a matcher
 result "blocked" on its own, and never read a `Not evaluated` row as "no match". The card is described in
 [presentation.md](presentation.md); its `wrapped` tag means the command reached the rule only through a look-through (a
@@ -71,6 +71,13 @@ tested or loaded, exit 2):
   levels deep; redirects of a heredoc (`<<EOF >/dev/null`) are not seen. It compiles to a static ast-grep rule, so the
   order is encoded with sibling relations between the redirect nodes. Put it next to `statement`, which gives the wrapper:
   `{"statement": {"command": "cargo"}, "discards": "all"}`.
+- `{"via": "ssh"}` or a list (any of): the matched unit was reached through one of these wrappers or runners, every one crossed on the way (`sudo`,
+  `bash`, `ssh`, ...; `"wrapper"` and `"runner"` stand for any argv wrapper or any shell, `eval`, `ssh`, `watch`). It is a
+  property of the unit, not of a node, so it composes like any atom: `{"command": "find", "not": {"via": "ssh"}}`. A
+  command typed directly has an empty chain.
+- `{"flag": ["f", "follow"]}`: a command with any of these flags after its name, written without the dash. One letter is
+  a short flag inside any `-abc` cluster (digits are skipped; value-taking options are not told apart: `-sofoo` reads as s,
+  o, f, o), a longer name is `--name` or `--name=...`, the word may be quoted; a word after `--` is no flag.
 
 - `{"capture": <rule>, "name": "LAST"}`: the rule, and the node it matched bound to `LAST`, which the message writes as
   `{LAST}`. It stands for `{"all": [<rule>, {"pattern": "$LAST"}]}` (a bare metavariable matches any node, so it binds
@@ -110,7 +117,8 @@ A rule field next to `match` and `action`, default `true`. With `"wrappers": fal
 matched, nor the shell strings reached only through them: `{"command": "pkill"}` with `"wrappers": false` matches
 `pkill x`, `a | pkill x`, `echo $(pkill x)` and `bash -c 'pkill x'`, not `sudo pkill x`, `env A=1 pkill x` or
 `sudo bash -c 'pkill x'`. Pipelines, substitutions and shell strings are looked through either way, and the `wrapped`
-tag keeps its meaning.
+tag keeps its meaning. Known gap: it also matches `ssh h sudo pkill x` (any word may start the remote command), not
+`ssh h 'sudo pkill x'`.
 
 ### Removed keys
 
@@ -140,8 +148,8 @@ Every rule is matched on the parse of the command as written, then on each wrapp
 `command` atom (or a `pattern`) reaches the command in a list, loop, `if`, subshell or group, in a pipeline, in `$(...)`
 or backticks (also inside double quotes), in `<(...)`.
 
-**Wrapper variants.** A command that contains a wrapper command (`sudo doas env timeout nice nohup time command exec builtin
-stdbuf setsid ionice xargs watch`; the list is fixed) is also matched as text variants of the top-level statement (a direct
+**Wrapper variants.** A command that contains an argv wrapper, which runs the next word directly (`sudo doas env timeout nice
+nohup time command exec builtin stdbuf setsid ionice xargs`; the list is fixed) is also matched as text variants of the top-level statement (a direct
 child of the program) that holds it, in which that wrapper command is replaced by the text from each of its own non-option
 words onward: `sudo -u bob pkill x` also reads as `bob pkill x`, `pkill x` and `x` (the words come from the parse, never
 split by guardrails; leading assignments such as `A=1 sudo x` are dropped with it). Nested wrappers need no recursion, because
@@ -149,8 +157,8 @@ a later word starts the inner command directly. Several wrappers in one statemen
 together while there are at most 64 (else each k-th word of all of them), so `sudo curl x | sudo sh` reads as `curl x | sh`.
 Every rule (unless `"wrappers": false`) is matched on each variant and a hit found in one is wrapped. Because a variant is
 one statement, its cost does not grow with the script around it, and repeated lines collapse. Variants are not unwrapped
-again, are de-duplicated and are bounded: 2048 variants, 512 KiB of variant text parsed in total per command, 2048 wrapper
-commands or words per unit and the 5 s deadline; past that the command is denied unparsed ("command too complex to check").
+again, are de-duplicated and are bounded: 2048 variants, 1 MiB of variant text parsed in total per command, 2048 wrapper
+commands or words per unit and the 5 s deadline; past that the command is allowed with a notice that it was not fully checked.
 
 There is no table of which flags take a value: any word counts as a start, so `sudo grep pkill file` and `command -v pkill`
 also match `{"command": "pkill"}` (known false positives; `retry: same-command` lets a deliberate repeat through, and
@@ -159,21 +167,21 @@ curl f | sh` matches a `curl $$$ | sh` rule. The accepted loss: a relation BETWE
 across `;` or a newline) is judged only on the text as written, not through the wrapper; inside one statement (pipelines,
 lists, subshells, loops, substitutions, an attached heredoc) relations are kept.
 
-**Shell strings.** The script of `bash|sh|zsh|dash|ksh|script [flags] -c '<script>'` (also behind a wrapper and in a cluster
-such as `-lc`), the arguments of `eval`, and a heredoc or here-string fed to a shell (`bash <<EOF`, `sh -s <<< 'cmd'`) are
+**Shell strings.** The script of `bash|sh|zsh|dash|ksh|script|su [flags] -c '<script>'` (also behind a wrapper and in a cluster
+such as `-lc`), the words of `eval`, `ssh` and `watch` (runners that join them with spaces for a shell, quoted or not; for
+`ssh` and `watch` every non-option word may start the script, since there is no option table), and a heredoc or here-string fed to a shell (`bash <<EOF`, `sh -s <<< 'cmd'`) are
 unquoted (one shell word: single quotes as is, double quotes with the `\"` `\\` `\$` and backtick escapes, no ANSI-C
 decoding) and scanned as units of their own, recursively; every hit in a unit counts as wrapped. The body of an unquoted
 heredoc that contains `$(` or a backtick is scanned too, but only what lies inside those substitutions counts. Units are
-de-duplicated and bounded: depth 8, 64 distinct units, 256 KiB of script text, with a budget apart from the variants.
+de-duplicated and bounded: depth 8, 128 distinct units, 256 KiB of script text, with a budget apart from the variants.
 
 **Never matched by a `command` atom:** heredoc bodies, redirect targets (`> pkill`), the arguments of other commands (`echo
 pkill`, `man pkill`), quoted data.
 
 **Cannot be analysed statically, so not matched:** obfuscated or dynamic names (`$'p\x6bill'`, `p''kill`, `p\kill`, a name
 held in a variable, an alias or a function), scripts written as ANSI-C literals (`bash -c $'pkill x'`, `eval $'pkill x'`),
-`ssh host pkill x`, `find . -exec pkill {} ;`, a script file (`bash script.sh`), `python -c '...'`, `echo pkill | sh` and
-`cat <<EOF | sh`, `source <(echo pkill)`, `su -c`, `env -S '...'`, `watch 'pkill x'`, and a wrapper the fixed list does not
-know. When a rule must not miss these, use a whole-text regex (`{"kind": "program", "regex": "..."}`) and accept its false
+`find . -exec pkill {} ;`, a script file (`bash script.sh`), `python -c '...'`, `echo pkill | sh` and
+`cat <<EOF | sh`, `source <(echo pkill)`, `env -S '...'`, and a wrapper the fixed list does not know. When a rule must not miss these, use a whole-text regex (`{"kind": "program", "regex": "..."}`) and accept its false
 positives.
 
 **After a syntax error** the tree is partial: a `command` atom still reads the bare words the parser left behind, but a
@@ -306,7 +314,7 @@ before any command is read):
 
 The matched node is the node of the hit that decided the rule's verdict: the first node the rule's `match` selected in
 scan order (the command as written first, then its wrapper variants and shell strings, breadth first), except that a
-later direct hit replaces a wrapped one. It is the node `rule test` reports as `direct` or `wrapped`; `matches`,
+later direct hit replaces a wrapped one, and a wrapped hit whose message case comes earlier replaces a later case's. It is the node `rule test` reports as `direct` or `wrapped`; `matches`,
 `wrapped` and the captures all read it.
 
 Placeholders in `message`, `messageShort` and a case's `text` / `messageShort`:

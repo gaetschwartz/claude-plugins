@@ -247,7 +247,8 @@ class Examples(AstIsolated):
 
     def test_ps_grep_is_a_warning_and_the_others_deny(self) -> None:
         actions = {rid: str(rule_of("shell-hygiene", rid).action) for rid in cli.load_preset("shell-hygiene")["rules"]}
-        self.assertEqual(actions, {"pipe-status": "deny", "ps-grep-self-match": "warn"})
+        self.assertEqual(actions, {"pipe-status": "deny", "ps-grep-self-match": "warn", "tail-pipe-buffered": "warn",
+                                   "http-wait-exact-status": "warn"})
 
 
 class Installed(AstIsolated):
@@ -263,6 +264,30 @@ class Installed(AstIsolated):
         assert warned is not None
         self.assertIn("additionalContext", warned["hookSpecificOutput"])
         self.assertNotIn("permissionDecision", warned["hookSpecificOutput"])
+
+    def test_tail_pipe_buffered_warns_in_a_monitor_only_and_the_modern_tools_are_not_asked_of_a_remote_host(self) -> None:
+        self.cli("preset", "install", "shell-hygiene")
+        piped = "tail -n0 -F log | grep -E --line-buffered 'x|y' | cut -c1-220"
+        monitor = self.hook(piped, session="m", tool="Monitor")
+        assert monitor is not None
+        self.assertIn("[guardrails:tail-pipe-buffered]", plain(monitor["hookSpecificOutput"]["additionalContext"]))
+        self.assertIn("grep --line-buffered", monitor["hookSpecificOutput"]["additionalContext"])
+        self.assertIsNone(self.hook(piped, session="b", tool="Bash"))
+        self.assertIsNone(self.hook("tail -f log | sed -u 's/a/b/'", session="m2", tool="Monitor"))
+        self.cli("preset", "install", "modern-cli")
+        os.environ["PATH"] = self.stub_path("fd", "rg", "dust", "cargo-nextest")
+        for command in ("ssh host find . -name x", "ssh host 'grep -r x .'", "ssh host du -sh /var", "ssh host cargo test"):
+            self.assertIsNone(self.warned(command), command)
+        self.assertIsNotNone(self.warned("find . -name x"))
+
+    def test_http_wait_exact_status_warns_with_the_curl_retry_alternative(self) -> None:
+        self.cli("preset", "install", "shell-hygiene")
+        out = self.hook("until [ \"$(curl -s -o /dev/null -w %{http_code} URL)\" = 200 ]; do sleep 5; done")
+        assert out is not None
+        text = out["hookSpecificOutput"]["additionalContext"]
+        self.assertIn("[guardrails:http-wait-exact-status]", plain(text))
+        self.assertIn("-w '%{http_code}'", text)
+        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
 
     def stub_path(self, *names: str) -> str:
         folder = self.tmp / ("bin-" + "-".join(names))

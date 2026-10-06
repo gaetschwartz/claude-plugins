@@ -1,9 +1,10 @@
 """Evaluate rules against a command with ast-grep-py, in process.
 
-The command is parsed as written. The commands behind each wrapper (sudo, env, xargs, ...) and the scripts handed to
-shells (`bash -c '...'`, `eval`, heredocs) are text variants and units of their own, parsed and matched the same way;
-a hit inside one of them counts as wrapped. A variant is one top-level statement with its wrappers replaced, never the
-whole text, so its cost does not grow with the size of the script around it.
+The command is parsed as written. The commands behind each argv wrapper (sudo, env, xargs, ...) and the scripts handed
+to a shell or joined by a runner (`bash -c '...'`, `eval`, `ssh host '...'`, heredocs) are text variants and units of
+their own, parsed and matched the same way; a hit inside one of them counts as wrapped. A variant is one top-level
+statement with its wrappers replaced, never the whole text, so its cost does not grow with the size of the script around
+it.
 """
 
 from __future__ import annotations
@@ -11,9 +12,10 @@ from __future__ import annotations
 import itertools
 import math
 import re
+import sys
 import time
 from collections import defaultdict, deque
-from collections.abc import Callable, Iterator, Sequence
+from collections.abc import Callable, Hashable, Iterator, Sequence
 from enum import StrEnum
 from typing import NamedTuple
 
@@ -21,14 +23,13 @@ import rulebuilder
 from ast_grep_py import Config, SgNode, SgRoot
 from verdict import MAX_COMMAND_BYTES, Detail, Kind, Limit, UnitTree
 
-type Describe = Callable[[str, SgNode, Kind], Detail | None]
+type Describe = Callable[[str, SgNode, Kind, tuple[str, ...]], Detail | None]
 
 MAX_DEPTH = 8
-MAX_UNITS = 64
+MAX_UNITS = 128
 MAX_VARIANTS = 2048
-MAX_VARIANT_BYTES = 512 << 10
+MAX_VARIANT_BYTES = 4 * MAX_COMMAND_BYTES
 MAX_COMBINATIONS = 64
-SHELLS = ("bash", "sh", "zsh", "dash", "ksh", "script")
 CONTEXT_KINDS = frozenset({"pipeline", "command_substitution", "process_substitution"})
 ARGUMENT_KINDS = frozenset({"raw_string", "string", "word", "number", "concatenation", "simple_expansion", "expansion",
                             "command_substitution", "arithmetic_expansion", "process_substitution"})
@@ -39,10 +40,18 @@ SELF_TEST_COMMAND = "echo a | cat"
 
 
 class Script(NamedTuple):
-    """A script a unit hands to a shell; `restricted` scripts only count inside their own substitutions."""
+    """A script a unit hands to a shell; `restricted` scripts only count inside their own substitutions. `runner` is
+    the command that runs it (None for a heredoc body that is no command's script); a script with a `group` is one of
+    several starts of that runner command's words."""
 
     text: str
     restricted: bool
+    runner: str | None
+    group: int | None = None
+
+    @property
+    def candidate(self) -> bool:
+        return self.group is not None
 
 
 class Origin(StrEnum):
@@ -56,7 +65,20 @@ class Unit(NamedTuple):
     origin: Origin
     depth: int
     restricted: bool
-    via_wrapper: bool = False
+    via: tuple[str, ...] = ()
+    group: tuple[int, int] | None = None
+
+    @property
+    def candidate(self) -> bool:
+        return self.group is not None
+
+    @property
+    def through_wrapper(self) -> bool:
+        return through_wrapper(self.via)
+
+
+def through_wrapper(via: tuple[str, ...]) -> bool:
+    return any(name in rulebuilder.WRAPPERS for name in via)
 
 
 class Hit(NamedTuple):
@@ -73,6 +95,7 @@ class Scan(NamedTuple):
     micros: dict[str, int]
     parse_us: int
     details: dict[str, Detail]
+    unparsed: bool
 
     def kinds(self, rule_ids: Sequence[str]) -> dict[str, Kind | None]:
         found = {hit.rule: hit.kind for hit in self.hits}
@@ -87,7 +110,14 @@ class Span(NamedTuple):
     start: int
     end: int
     words: tuple[int, ...]
+    name: str
+    crossed: tuple[tuple[str, ...], ...]
     statement: tuple[int, int] = (0, 0)
+
+
+class Variant(NamedTuple):
+    text: str
+    via: tuple[str, ...]
 
 
 def unquote(word: str) -> str:
@@ -101,6 +131,11 @@ def unquote(word: str) -> str:
         return next(text for text in (single, escaped, bare) if text is not None)
 
     return WORD_PIECE.sub(piece, word)
+
+
+def case_rank(detail: Detail | None) -> int:
+    """Position of the message case a hit satisfies; the rule's own message comes after every case."""
+    return detail.case if detail is not None and detail.case is not None else sys.maxsize
 
 
 def clean_error(text: str) -> str:
@@ -124,6 +159,12 @@ def commands_named(root: SgNode, names: Sequence[str]) -> list[SgNode]:
 def is_command_flag(word: str) -> bool:
     """`-c`, `-lc`, `-ec`: a short-option cluster that contains c."""
     return word.startswith("-") and word[1:].isalpha() and word.isascii() and "c" in word[1:]
+
+
+def command_word(command: SgNode) -> str:
+    """The name the command is run as, unquoted and without its directory."""
+    name = command.field("name")
+    return unquote(name.text()).rsplit("/", 1)[-1] if name is not None else ""
 
 
 def arguments(command: SgNode) -> list[SgNode]:
@@ -166,18 +207,28 @@ def shell_scripts(command: SgNode) -> list[str]:
     return found
 
 
-def scripts_in(root: SgNode, restricted: bool) -> list[Script]:
-    """(text, restricted) of each script a unit hands to a shell: `bash -c` strings, `eval` arguments (joined like
-    the shell does), heredocs and here-strings fed to a shell, and the bodies of unquoted heredocs that contain a
+def joined_scripts(command: SgNode, runner: str, index: int) -> Iterator[Script]:
+    """What a runner that joins its words with spaces hands to a shell: `eval` all of them, `ssh` and `watch` the words
+    from each non-option word on (no option table says which one starts the remote command)."""
+    words = [unquote(arg.text()) for arg in arguments(command) if arg.kind() in ARGUMENT_KINDS]
+    starts = [0] if runner == "eval" else [at for at, word in enumerate(words) if not word.startswith("-")]
+    if len(starts) > MAX_VARIANTS:
+        raise TooManyVariants
+    return (Script(" ".join(words[at:]), False, runner, None if runner == "eval" else index) for at in starts)
+
+
+def scripts_in(root: SgNode, restricted: bool) -> Iterator[Script]:
+    """Each script a unit hands to a shell: `bash -c` strings, the words of `eval`, `ssh` and `watch` (joined like the
+    shell does), heredocs and here-strings fed to a shell, and the bodies of unquoted heredocs that contain a
     substitution, which only count inside their substitutions. A restricted unit only yields scripts inside its own."""
-    found: list[Script] = []
-    for command in commands_named(root, SHELLS):
+    found: list[Iterator[Script]] = []
+    for command in commands_named(root, rulebuilder.SHELLS):
         if not restricted or inside_substitution(command):
-            found += [Script(script, False) for script in shell_scripts(command)]
-    for command in commands_named(root, ["eval"]):
+            runner = command_word(command)
+            found.append(iter([Script(script, False, runner) for script in shell_scripts(command)]))
+    for index, command in enumerate(commands_named(root, rulebuilder.JOINED_RUNNERS)):
         if not restricted or inside_substitution(command):
-            words = [unquote(arg.text()) for arg in arguments(command) if arg.kind() in ARGUMENT_KINDS]
-            found.append(Script(" ".join(words), False))
+            found.append(joined_scripts(command, command_word(command), index))
     for redirect in root.find_all(kind="heredoc_redirect"):
         start = next((n for n in redirect.named_children() if n.kind() == "heredoc_start"), None)
         if start is None or not (start.text().isascii() and start.text().replace("_", "").isalnum()):
@@ -187,8 +238,8 @@ def scripts_in(root: SgNode, restricted: bool) -> list[Script]:
         for body in (n for n in redirect.named_children() if n.kind() == "heredoc_body"):
             text = body.text()
             if "`" in text or "$(" in text:
-                found.append(Script(text, True))
-    return [script for script in found if script.text.strip()]
+                found.append(iter([Script(text, True, None)]))
+    return (script for scripts in found for script in scripts if script.text.strip())
 
 
 def statement_node(node: SgNode) -> SgNode:
@@ -218,12 +269,14 @@ def wrapper_spans(root: SgNode, wrappers: Sequence[str]) -> list[Span]:
         words = [word for word in nodes if not word.text().startswith("-")]
         if words:
             where = command.range()
+            names = [unquote(word.text()).rsplit("/", 1)[-1] for word in words]
+            crossed = tuple(tuple(name for name in names[:at] if name in wrappers) for at in range(len(words)))
             spans.append(Span(where.start.index, where.end.index, tuple(w.range().start.index for w in words),
-                              statement_range(command)))
+                              command_word(command), crossed, statement_range(command)))
     return spans
 
 
-def variants_of(text: str, spans: Sequence[Span]) -> Iterator[str]:
+def variants_of(text: str, spans: Sequence[Span]) -> Iterator[Variant]:
     """The text of each top-level statement that holds a wrapper, with the wrappers replaced (see statement_variants).
     Lazy, so the caller's caps stop the work before the copies are made."""
     by_statement: dict[tuple[int, int], list[Span]] = {}
@@ -231,18 +284,21 @@ def variants_of(text: str, spans: Sequence[Span]) -> Iterator[str]:
         by_statement.setdefault(span.statement, []).append(span)
     for (first, last), group in by_statement.items():
         yield from statement_variants(text[first:last], [Span(s.start - first, s.end - first,
-                                                             tuple(w - first for w in s.words)) for s in group])
+                                                             tuple(w - first for w in s.words), s.name, s.crossed)
+                                      for s in group])
 
 
-def statement_variants(text: str, spans: Sequence[Span]) -> Iterator[str]:
+def statement_variants(text: str, spans: Sequence[Span]) -> Iterator[Variant]:
     """The statement text with one wrapper replaced by the text from each of its words on, and with several outermost
     wrappers replaced together: every combination while there are few, else each k-th word of all of them at once."""
 
-    def replaced(chosen: Sequence[tuple[Span, int]]) -> str:
+    def replaced(chosen: Sequence[tuple[Span, int]]) -> Variant:
         out = text
         for span, word in sorted(chosen, key=lambda pair: pair[0].start, reverse=True):
             out = out[:span.start] + text[word:span.end] + out[span.end:]
-        return out
+        via = [name for span, word in sorted(chosen, key=lambda pair: pair[0].start)
+               for name in (span.name, *span.crossed[span.words.index(word)])]
+        return Variant(out, tuple(via))
 
     for span in spans:
         for word in span.words:
@@ -255,7 +311,7 @@ def statement_variants(text: str, spans: Sequence[Span]) -> Iterator[str]:
         if math.prod(len(span.words) + 1 for span in outermost) <= MAX_COMBINATIONS:
             options = [[(span, word) for word in (*span.words, None)] for span in outermost]
             for combination in itertools.product(*options):
-                if (variant := replaced([(span, word) for span, word in combination if word is not None])) != text:
+                if (variant := replaced([(span, word) for span, word in combination if word is not None])).text != text:
                     yield variant
         else:
             for k in range(max(len(span.words) for span in outermost)):
@@ -267,10 +323,15 @@ class Scanner:
     node of each hit that becomes the rule's verdict."""
 
     def __init__(self, rules: dict[str, Config], direct_only: frozenset[str] = frozenset(),
-                 describe: Describe | None = None) -> None:
+                 describe: Describe | None = None, watched: frozenset[str] = frozenset()) -> None:
         self.active = dict(rules)
         self.direct_only = direct_only
         self.describe = describe
+        self.watched = watched.union(*(rulebuilder.via_names(config["rule"]) for config in rules.values()))
+        self.resolved: dict[tuple[str, frozenset[str]], Config] = {}
+        self.unparsed = False
+        self.clean_groups: set[tuple[int, int]] = set()
+        self.broken_groups: set[tuple[int, int]] = set()
         self.invalid: dict[str, str] = {}
         self.found: dict[str, Hit] = {}
         self.details: dict[str, Detail] = {}
@@ -280,35 +341,48 @@ class Scanner:
         del self.active[rid]
         self.invalid[rid] = clean_error(str(exc))
 
-    def matches(self, rid: str, root: SgNode, first_only: bool) -> list[SgNode]:
+    def config_for(self, rid: str, via: tuple[str, ...]) -> Config:
+        """The rule's config for a unit reached through this chain: its `via` placeholders settled."""
+        key = (rid, rulebuilder.facts(self.watched, via))
+        if key not in self.resolved:
+            self.resolved[key] = {**self.active[rid], "rule": rulebuilder.resolve_via(self.active[rid]["rule"], via)}
+        return self.resolved[key]
+
+    def matches(self, rid: str, root: SgNode, first_only: bool, via: tuple[str, ...] = ()) -> list[SgNode]:
         """The nodes a rule selects; a rule whose config does not compile is dropped with the reason."""
         try:
+            config = self.config_for(rid, via)
             if first_only:
-                one = root.find(self.active[rid])
+                one = root.find(config)
                 return [one] if one is not None else []
-            return root.find_all(self.active[rid])
+            return root.find_all(config)
         except Exception as exc:  # noqa: BLE001
             self.drop(rid, exc)
             return []
 
-    def record(self, rid: str, node: SgNode, kind: Kind) -> bool:
-        """Make this node the rule's verdict; False when its message case cannot be evaluated (the rule is dropped)."""
+    def consider(self, rid: str, node: SgNode, kind: Kind, via: tuple[str, ...], keep_first: bool) -> bool:
+        """Offer this node as the rule's verdict: it replaces a wrapped one only when its message case comes earlier.
+        False when the case cannot be evaluated (the rule is dropped)."""
+        detail = None
+        if self.describe is not None:
+            began = time.perf_counter_ns()
+            try:
+                detail = self.describe(rid, node, kind, via)
+            except Exception as exc:  # noqa: BLE001
+                self.drop(rid, exc)
+                self.found.pop(rid, None)
+                self.details.pop(rid, None)
+                return False
+            finally:
+                self.spent[rid] += time.perf_counter_ns() - began
+        if keep_first and case_rank(detail) >= case_rank(self.details.get(rid)):
+            return True
         where = node.range()
         self.found[rid] = Hit(rid, kind, where.start.index, where.end.index)
-        if self.describe is None:
-            return True
-        began = time.perf_counter_ns()
-        try:
-            detail = self.describe(rid, node, kind)
-        except Exception as exc:  # noqa: BLE001
-            self.drop(rid, exc)
-            self.found.pop(rid)
-            self.details.pop(rid, None)
-            return False
-        finally:
-            self.spent[rid] += time.perf_counter_ns() - began
         if detail is not None:
             self.details[rid] = detail
+        else:
+            self.details.pop(rid, None)
         return True
 
     def kind_of(self, unit: Unit, node: SgNode) -> Kind | None:
@@ -321,19 +395,27 @@ class Scanner:
         return Kind.DIRECT
 
     def judge(self, unit: Unit, root: SgNode) -> None:
+        if not (unit.restricted or unit.origin is Origin.VARIANT):
+            if unit.group is not None:
+                (self.broken_groups if broken(root) else self.clean_groups).add(unit.group)
+            elif not self.unparsed:
+                self.unparsed = broken(root)
         for rid in list(self.active):
             known = self.found.get(rid)
-            if (known is not None and known.kind is Kind.DIRECT) or (unit.via_wrapper and rid in self.direct_only):
+            if (known is not None and known.kind is Kind.DIRECT) or (unit.through_wrapper and rid in self.direct_only):
                 continue
             first_only = unit.origin is not Origin.COMMAND and not unit.restricted
             began = time.perf_counter_ns()
-            nodes = self.matches(rid, root, first_only)
+            nodes = self.matches(rid, root, first_only, unit.via)
             self.spent[rid] += time.perf_counter_ns() - began
             for node in nodes:
                 kind = Kind.WRAPPED if first_only else self.kind_of(unit, node)
-                if kind is None or (known is not None and kind is Kind.WRAPPED):
+                if kind is None:
                     continue
-                if not self.record(rid, node, kind):
+                later = known is not None and kind is Kind.WRAPPED
+                if later and self.describe is None:
+                    continue
+                if not self.consider(rid, node, kind, unit.via, later):
                     break
                 known = self.found[rid]
                 if kind is Kind.DIRECT:
@@ -343,52 +425,65 @@ class Scanner:
         """Scan the command, then its variants and scripts level by level. Hits found before a cap is reached stand."""
 
         began = time.perf_counter_ns()
-        limit = walk(command, True, self.judge, bool(self.direct_only))
+
+        def distinct(via: tuple[str, ...]) -> Hashable:
+            return rulebuilder.facts(self.watched, via), bool(self.direct_only) and through_wrapper(via)
+
+        limit = walk(command, True, self.judge, distinct)
         parse_ns = time.perf_counter_ns() - began - sum(self.spent.values())
         return Scan(tuple(self.found.values()), dict(self.invalid), limit,
-                    {rid: ns // 1000 for rid, ns in self.spent.items()}, max(parse_ns, 0) // 1000, dict(self.details))
+                    {rid: ns // 1000 for rid, ns in self.spent.items()}, max(parse_ns, 0) // 1000, dict(self.details),
+                    self.unparsed or bool(self.broken_groups - self.clean_groups))
 
 
 def walk(command: str, with_variants: bool, visit: Callable[[Unit, SgNode], None],
-         split_via_wrapper: bool = False) -> Limit | None:
+         distinct: Callable[[tuple[str, ...]], Hashable] = lambda via: False) -> Limit | None:
     """Visit the command, then its shell-string scripts (and wrapper variants) breadth first; the bound that stopped the
-    walk, if any. A unit reached through a wrapper variant is `via_wrapper`; with split_via_wrapper the same text
-    reached without one is visited again, for the rules that skip such units."""
+    walk, if any. Only a new text is charged to the bounds. The same text reached through chains that `distinct` tells
+    apart is visited again, uncharged, for the rules that look at the chain."""
     queue = deque([Unit(command, Origin.COMMAND, 0, False)])
-    seen = {(command, False, False, False)}
-    scripts = variants = script_bytes = variant_bytes = 0
+    charged = {(command, False, False)}
+    visited = {(command, False, False, distinct(()))}
+    scripts = variants = script_bytes = variant_bytes = serial = 0
     while queue:
         unit = queue.popleft()
+        serial += 1
         root = SgRoot(unit.text, "bash").root()
         visit(unit, root)
         found: Iterator[Unit] = iter(())
-        if with_variants and unit.origin is not Origin.VARIANT:
-            try:
+        try:
+            if with_variants and unit.origin is not Origin.VARIANT:
                 spans = wrapper_spans(root, rulebuilder.WRAPPERS)
-            except TooManyVariants:
-                return Limit.VARIANTS
-            found = (Unit(text, Origin.VARIANT, unit.depth, unit.restricted, True)
-                     for text in variants_of(unit.text, spans) if text != unit.text)
-        found = itertools.chain(found, (Unit(text, Origin.SCRIPT, unit.depth + 1, only, unit.via_wrapper)
-                                        for text, only in scripts_in(root, unit.restricted)))
-        for new in found:
-            key = (new.text, new.restricted, new.origin is Origin.VARIANT, split_via_wrapper and new.via_wrapper)
-            if key in seen:
-                continue
-            if new.origin is Origin.VARIANT:
-                variants += 1
-                variant_bytes += len(new.text)
-                limit = Limit.VARIANTS if variants > MAX_VARIANTS else (
-                    Limit.VARIANT_BYTES if variant_bytes > MAX_VARIANT_BYTES else None)
-            else:
-                scripts += 1
-                script_bytes += len(new.text)
-                limit = (Limit.DEPTH if new.depth > MAX_DEPTH else Limit.UNITS if scripts > MAX_UNITS
-                         else Limit.SIZE if script_bytes > MAX_COMMAND_BYTES else None)
-            if limit is not None:
-                return limit
-            seen.add(key)
-            queue.append(new)
+                found = (Unit(variant.text, Origin.VARIANT, unit.depth, unit.restricted, (*unit.via, *variant.via))
+                         for variant in variants_of(unit.text, spans) if variant.text != unit.text)
+            found = itertools.chain(found, (
+                Unit(script.text, Origin.SCRIPT, unit.depth + 1, script.restricted,
+                     unit.via if script.runner is None else (*unit.via, script.runner),
+                     None if script.group is None else (serial, script.group))
+                for script in scripts_in(root, unit.restricted)))
+            for new in found:
+                text_key = (new.text, new.restricted, new.origin is Origin.VARIANT)
+                key = (*text_key, distinct(new.via))
+                if key in visited:
+                    continue
+                if text_key not in charged:
+                    if new.origin is Origin.VARIANT or new.candidate:
+                        variants += 1
+                        variant_bytes += len(new.text)
+                        limit = (Limit.DEPTH if new.depth > MAX_DEPTH else Limit.VARIANTS if variants > MAX_VARIANTS
+                                 else Limit.VARIANT_BYTES if variant_bytes > MAX_VARIANT_BYTES else None)
+                    else:
+                        scripts += 1
+                        script_bytes += len(new.text)
+                        limit = (Limit.DEPTH if new.depth > MAX_DEPTH else Limit.UNITS if scripts > MAX_UNITS
+                                 else Limit.SIZE if script_bytes > MAX_COMMAND_BYTES else None)
+                    if limit is not None:
+                        return limit
+                    charged.add(text_key)
+                visited.add(key)
+                queue.append(new)
+        except TooManyVariants:
+            return Limit.VARIANTS
     return None
 
 

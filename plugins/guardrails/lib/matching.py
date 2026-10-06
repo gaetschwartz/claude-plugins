@@ -42,6 +42,7 @@ class Computed(NamedTuple):
     micros: dict[str, int]
     parse_us: int
     details: dict[str, Detail]
+    unparsed: bool
 
     @classmethod
     def from_json(cls, raw: object) -> Computed:
@@ -50,7 +51,8 @@ class Computed(NamedTuple):
             raise TypeError("not an object")
         return cls({rid: Kind(kind) if kind else None for rid, kind in raw["kinds"].items()}, dict(raw["invalid"]),
                    Limit(raw["limit"]) if raw["limit"] else None, raw["failure"], dict(raw["micros"]),
-                   int(raw["parse_us"]), {rid: detail_of(value) for rid, value in raw["details"].items()})
+                   int(raw["parse_us"]), {rid: detail_of(value) for rid, value in raw["details"].items()},
+                   bool(raw["unparsed"]))
 
 
 def detail_of(raw: object) -> Detail:
@@ -70,16 +72,17 @@ def detail_of(raw: object) -> Detail:
 class NodeHit:
     """The node that decided a rule's verdict, for the hit atoms of message cases."""
 
-    __slots__ = ("node", "wrapped")
+    __slots__ = ("node", "via", "wrapped")
 
-    def __init__(self, node: SgNode, wrapped: bool) -> None:
+    def __init__(self, node: SgNode, wrapped: bool, via: tuple[str, ...]) -> None:
         self.node = node
         self.wrapped = wrapped
+        self.via = via
 
     def matches(self, rule: Mapping[str, Any]) -> bool:
         import rulebuilder
 
-        return self.node.matches(**rulebuilder.built(dict(rule)))
+        return self.node.matches(**rulebuilder.resolve_via(rulebuilder.built(dict(rule)), self.via))
 
 
 def describer(rules: dict[str, policy.Rule], env: conditions.Env) -> Describe | None:
@@ -90,11 +93,11 @@ def describer(rules: dict[str, policy.Rule], env: conditions.Env) -> Describe | 
     if not wanted:
         return None
 
-    def describe(rid: str, node: SgNode, kind: Kind) -> Detail | None:
+    def describe(rid: str, node: SgNode, kind: Kind, via: tuple[str, ...]) -> Detail | None:
         rule = wanted.get(rid)
         if rule is None:
             return None
-        hit = NodeHit(node, kind is Kind.WRAPPED)
+        hit = NodeHit(node, kind is Kind.WRAPPED, via)
         case = next((i for i, c in enumerate(rule.messages) if conditions.holds(c.when, env, hit)), None)
         names = messages.captures_wanted(messages.chosen(rule, case))
         captures = {name: text for name in names if (text := messages.capture(node, name)) is not None}
@@ -140,6 +143,14 @@ def configs_of(rules: dict[str, policy.Rule]) -> dict[str, Config]:
     return {rid: rulebuilder.config_of(rule) for rid, rule in rules.items()}
 
 
+def watched_by(rules: dict[str, policy.Rule]) -> frozenset[str]:
+    """The `via` names of the rules' message cases (the match itself is read from its config)."""
+    import rulebuilder
+
+    return frozenset().union(*(rulebuilder.via_names(sub) for rule in rules.values() for case in rule.messages
+                               for sub in conditions.match_atoms(case.when)))
+
+
 def direct_only(rules: dict[str, policy.Rule]) -> frozenset[str]:
     return frozenset(rid for rid, rule in rules.items() if not rule.wrappers)
 
@@ -150,13 +161,14 @@ def compute(command: str, rules: dict[str, policy.Rule], env: conditions.Env = c
         import scanner
     except ImportError as exc:
         return Computed(dict.fromkeys(rules), {}, None,
-                        f"the ast-grep-py library cannot be imported ({type(exc).__name__})", {}, 0, {})
+                        f"the ast-grep-py library cannot be imported ({type(exc).__name__})", {}, 0, {}, False)
     try:
-        result = scanner.Scanner(configs_of(rules), direct_only(rules), describer(rules, env)).run(parseable(command))
+        result = scanner.Scanner(configs_of(rules), direct_only(rules), describer(rules, env),
+                                 watched_by(rules)).run(parseable(command))
     except Exception as exc:  # noqa: BLE001
-        return Computed(dict.fromkeys(rules), {}, None, f"unexpected error: {type(exc).__name__}", {}, 0, {})
+        return Computed(dict.fromkeys(rules), {}, None, f"unexpected error: {type(exc).__name__}", {}, 0, {}, False)
     return Computed(result.kinds(list(rules)), result.invalid, result.limit, None, result.micros, result.parse_us,
-                    result.details)
+                    result.details, result.unparsed)
 
 
 class Matched(NamedTuple):
@@ -180,17 +192,25 @@ def locate(command: str, rule: policy.Rule) -> object:
         import scanner
     except ImportError as exc:
         return f"the ast-grep-py library cannot be imported ({type(exc).__name__})"
-    found: list[list[object]] = []
+    found: list[tuple[int, list[object]]] = []
+    case_of = describer({"rule": rule}, conditions.DEFAULT)
 
-    def describe(rid: str, node: SgNode, kind: Kind) -> None:
+    def describe(rid: str, node: SgNode, kind: Kind, via: tuple[str, ...]) -> Detail | None:
+        detail = case_of(rid, node, kind, via) if case_of is not None else None
         top = scanner.statement_node(node)
         where = top.range()
-        found.append([top.text(), where.start.index, where.end.index, kind.value])
+        found.append((scanner.case_rank(detail), [top.text(), where.start.index, where.end.index, kind.value]))
+        return detail
 
-    result = scanner.Scanner(configs_of({"rule": rule}), direct_only({"rule": rule}), describe).run(parseable(command))
+    result = scanner.Scanner(configs_of({"rule": rule}), direct_only({"rule": rule}), describe,
+                             watched_by({"rule": rule})).run(parseable(command))
     if result.invalid:
         return f"the rule does not compile here ({result.invalid['rule']})"
-    return found[-1] if found else None
+    best: tuple[int, list[object]] | None = None
+    for rank, entry in found:
+        if best is None or entry[3] == Kind.DIRECT.value or rank < best[0]:
+            best = (rank, entry)
+    return best[1] if best else None
 
 
 def matched_statement(command: str, rule: policy.Rule) -> Replay:
@@ -221,7 +241,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], env: conditions.Env = 
     """How each rule's matcher selects the command: "direct", "wrapped" or None, and for a hit what its message
     needs (`details`).
 
-    What could not be judged (`unevaluated`) and why (`failure`, `refusal`) is kept for the caller to report. Hits
+    What could not be judged (`unevaluated`) and why (`failure`, `unchecked`) is kept for the caller to report. Hits
     already found always stand. Never raises. `after_fork` runs in this process once the checker child exists.
     """
     ev = Evaluation(kinds=dict.fromkeys(rules))
@@ -229,7 +249,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], env: conditions.Env = 
         return ev
     size = len(command.encode("utf-8", "replace"))
     if size > MAX_COMMAND_BYTES:
-        ev.refusal = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND_BYTES // 1024} KiB)"
+        ev.unchecked = f"command too large to check ({size} bytes, the limit is {MAX_COMMAND_BYTES // 1024} KiB)"
         ev.unevaluated = set(rules)
         ev.fault = Fault.OVERSIZE
         return ev
@@ -257,17 +277,18 @@ def evaluate(command: str, rules: dict[str, policy.Rule], env: conditions.Env = 
                 ev.invalid = dict(done.invalid)
                 ev.failure = done.failure
                 ev.micros, ev.parse_us = done.micros, done.parse_us
+                ev.unparsed = done.unparsed
                 if done.limit is not None:
-                    ev.refusal = f"command too complex to check (it {done.limit})"
+                    ev.unchecked = f"command too complex to check (it {done.limit})"
                     ev.fault = Fault.COMPLEXITY
             case bounded.Outcome.TIMEOUT:
-                ev.refusal = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "
+                ev.unchecked = (f"command too complex to check (it did not finish within {DEADLINE_SECONDS:g} seconds); "
                               "split it up or write it to a script file and run that")
                 ev.fault = Fault.TIMEOUT
             case bounded.Outcome.CRASHED:
                 match state:
                     case Health.HEALTHY:
-                        ev.refusal = "this command crashes the parser"
+                        ev.unchecked = "this command crashes the parser"
                         ev.fault = Fault.CRASH
                     case Health.BROKEN:
                         ev.failure = ("the ast-grep-py library crashes even on a trivial command; the runtime is being "
@@ -282,7 +303,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], env: conditions.Env = 
                 assert_never(outcome)
     if ev.failure is not None:
         ev.fault = ev.fault or Fault.ENGINE
-    if ev.failure is not None or ev.refusal:
+    if ev.failure is not None or ev.unchecked:
         ev.unevaluated = {rid for rid in rules if ev.kinds.get(rid) is None}
     ev.unevaluated |= {rid for rid in ev.invalid if ev.kinds.get(rid) is None}
     return ev

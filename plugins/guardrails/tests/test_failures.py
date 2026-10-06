@@ -136,33 +136,56 @@ class FailurePolicy(AstIsolated):
         super().setUp()
         self.put(self.gpath, {"rules": {"z": {"match": {"command": "zap"}, "message": "No zap."}}})
 
-    def test_a_checker_that_does_not_finish_denies_any_command_that_needs_the_parser(self) -> None:
+    def test_a_checker_that_does_not_finish_allows_any_command_that_needs_the_parser_with_a_notice(self) -> None:
         with mock.patch.object(bounded, "call", timed_out):
             big = self.hook("sudo " * (self.BIG // 5) + "zap x", "big")
             small = self.hook("sudo " * 20 + "zap x", "small")
         for out in (big, small):
-            self.assertTrue(is_denied(out))
-            self.assertIn("command too complex to check (it did not finish within", deny_text(out))
-            self.assertIn("script file", deny_text(out))
+            assert out is not None
+            self.assertFalse(is_denied(out))
+            self.assertEqual(out["hookSpecificOutput"]["additionalContext"], engine.UNCHECKED)
+            self.assertNotIn("systemMessage", out)
 
     def test_a_hit_stands_when_a_cap_is_hit_later(self) -> None:
-        command = "zap x; " + "; ".join(f"bash -c 'echo {n}'" for n in range(80))
+        command = "zap x; " + "; ".join(f"bash -c 'echo {n}'" for n in range(140))
         ev = matching.evaluate(command, {"z": policy.Rule.from_json({"match": {"command": "zap"}, "message": "m"})})
-        self.assertEqual((ev.kinds["z"], ev.refusal is not None), (Kind.DIRECT, True))
+        self.assertEqual((ev.kinds["z"], ev.unchecked is not None), (Kind.DIRECT, True))
         out = self.hook(command, "hit")
         self.assertTrue(is_denied(out))
         self.assertIn("No zap.", deny_text(out))
 
-    def test_warn_only_rules_never_turn_a_refusal_into_a_denial(self) -> None:
+    def test_a_notice_is_shown_on_every_unchecked_call_unless_the_call_is_denied(self) -> None:
         self.put(self.gpath, {"rules": {"z": {"match": {"command": "zap"}, "message": "Careful.", "action": "warn"}}})
+        for session in ("one", "one"):
+            huge = self.hook("echo " + "y" * (verdict.MAX_COMMAND_BYTES + 1), session)
+            assert huge is not None
+            self.assertEqual(huge["hookSpecificOutput"]["additionalContext"], engine.UNCHECKED)
         with mock.patch.object(bounded, "call", timed_out):
             out = self.hook("sudo " * (self.BIG // 5) + "zap x", "warn")
         assert out is not None
-        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
-        self.assertIn("allowed because only warn rules", out["systemMessage"])
-        huge = self.hook("echo " + "y" * (verdict.MAX_COMMAND_BYTES + 1), "huge")
-        assert huge is not None
-        self.assertNotIn("permissionDecision", huge["hookSpecificOutput"])
+        self.assertNotIn("Careful.", json.dumps(out))
+        wide = "zap x; " + "; ".join(f"bash -c 'echo {n}'" for n in range(140))
+        for call in range(3):
+            hit = self.hook(wide, "hit")
+            assert hit is not None
+            context = hit["hookSpecificOutput"]["additionalContext"]
+            self.assertEqual("Careful." in context, call == 0)
+            self.assertIn(engine.UNCHECKED, context)
+        self.put(self.gpath, {"rules": {"z": {"match": {"command": "zap"}, "message": "No zap."}}})
+        denied = self.hook(wide, "deny")
+        self.assertTrue(is_denied(denied))
+        self.assertNotIn("could not fully analyse", deny_text(denied))
+
+    def test_an_unparsable_command_gets_the_notice_unless_a_rule_matched(self) -> None:
+        for command in ("echo 'unterminated", "if x; then y", "echo $("):
+            with self.subTest(command=command):
+                out = self.hook(command, "unparsed")
+                assert out is not None
+                self.assertEqual(out["hookSpecificOutput"]["additionalContext"], engine.UNCHECKED)
+        self.assertIsNone(self.hook("echo ok", "parsed"))
+        denied = self.hook("zap 'x", "matched")
+        self.assertTrue(is_denied(denied))
+        self.assertNotIn("could not fully analyse", deny_text(denied))
 
     def test_engine_failures_are_keyed_by_class_and_repeat_after_ten_minutes(self) -> None:
         self.break_engine("it misparsed a test command")
@@ -192,13 +215,14 @@ class Oversize(AstIsolated):
         super().setUp()
         self.put(self.gpath, {"rules": RULES_FOR_OUTAGES})
 
-    def test_a_command_over_the_cap_is_denied_and_never_parsed(self) -> None:
+    def test_a_command_over_the_cap_is_allowed_with_a_notice_and_never_parsed(self) -> None:
         for command in ("echo " + "y" * verdict.MAX_COMMAND_BYTES, "strings " + "é" * verdict.MAX_COMMAND_BYTES,
                         "echo " + "a" * verdict.MAX_COMMAND_BYTES + f"; {K} x"):
             with mock.patch("scanner.Scanner", side_effect=AssertionError("parsed")):
                 out = self.hook(command, f"big{len(command)}")
-            self.assertTrue(is_denied(out))
-            self.assertIn("command too large to check", deny_text(out))
+            assert out is not None
+            self.assertFalse(is_denied(out))
+            self.assertEqual(out["hookSpecificOutput"]["additionalContext"], engine.UNCHECKED)
 
         out = self.hook("echo " + "y" * (verdict.MAX_COMMAND_BYTES - 100) + f"; {K} x")
         self.assertIn("No kill.", deny_text(out))
@@ -208,18 +232,20 @@ class Limits(AstIsolated):
         super().setUp()
         self.put(self.gpath, {"rules": {"a": {"match": {"command": K}, "message": "No kill."}}})
 
-    def test_nesting_beyond_the_caps_is_refused_not_passed(self) -> None:
+    def test_nesting_beyond_the_caps_is_noticed_not_denied(self) -> None:
+        rule = {"a": policy.Rule.from_json({"match": {"command": K}, "message": "m"})}
         command = f"{K} x"
         for _ in range(9):
             command = "bash -c " + shlex.quote(command)
-        out = self.hook(command, "deep")
-        self.assertTrue(is_denied(out))
-        self.assertIn("command too complex to check", deny_text(out))
-        self.assertIn("nests shell strings too deeply", deny_text(out))
-        out = self.hook("eval " * 30 + f"{K} x", "evals")
-        self.assertIn("nests shell strings too deeply", deny_text(out))
-        out = self.hook("; ".join(f"bash -c 'echo {n}'" for n in range(100)), "wide")
-        self.assertIn("too many shell strings", deny_text(out))
+        wide = "; ".join(f"bash -c 'echo {n}'" for n in range(150))
+        for text, cause in ((command, "nests shell strings too deeply"), ("eval " * 30 + f"{K} x", "nests shell strings too deeply"),
+                            (wide, "too many shell strings")):
+            with self.subTest(cause=cause):
+                self.assertIn(cause, matching.evaluate(text, rule).unchecked or "")
+                out = self.hook(text, f"limit-{cause}-{len(text)}")
+                assert out is not None
+                self.assertFalse(is_denied(out))
+                self.assertEqual(out["hookSpecificOutput"]["additionalContext"], engine.UNCHECKED)
 
 if __name__ == "__main__":
     unittest.main()

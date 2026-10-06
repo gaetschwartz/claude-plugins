@@ -606,8 +606,8 @@ def case_of(ev: Evaluation, rid: str) -> int | None:
 
 def cannot_evaluate_note(ev: Evaluation) -> str:
     """Why this rule's match could not be judged, when it could not."""
-    if ev.refusal:
-        return f"cannot evaluate this rule's match: {ev.refusal}; the hook denies such a command"
+    if ev.unchecked:
+        return f"cannot evaluate this rule's match: {ev.unchecked}; the hook allows such a command with a notice"
     return (f"cannot evaluate this rule's match: the engine failed ({ev.failure}); the hook allows the command and "
             "warns the session")
 
@@ -682,7 +682,7 @@ def cmd_rule_ast(args: Args) -> int:
     print(render.clean(f"command: {args.command}"))
     print(f"units: {len(units)} (1 as written, {len(units) - 1} from shell strings)")
     if limit:
-        print(f"note: the command {limit}; the hook denies it and deeper units are not shown")
+        print(f"note: the command {limit}; the hook allows it with a notice and deeper units are not shown")
     for unit in units:
         print()
         if unit.label:
@@ -941,7 +941,8 @@ def build_parser() -> argparse.ArgumentParser:
     test = rule.add_parser("test", parents=[common, call], help="dry-run a rule against sample commands")
     source = test.add_mutually_exclusive_group(required=True)
     source.add_argument("--json", help="a draft rule as a JSON object, @<file> or - for stdin; its match is one "
-                        "ast-grep rule that may use the command, assignment, wrapper, statement, redirect, discards and capture atoms")
+                        "ast-grep rule that may use the command, assignment, wrapper, statement, redirect, discards, "
+                        "via, flag and capture atoms")
     source.add_argument("--id", help="an installed rule's id")
     test.add_argument("commands", nargs="*", metavar="CMD")
     test.add_argument("--examples", help='JSON list of {"cmd", "source", "expect"} objects, @<file> or - for stdin')

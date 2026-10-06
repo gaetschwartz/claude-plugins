@@ -31,9 +31,10 @@ class Matching(AstIsolated):
             f"a && {K} x": "direct", f"({K} x)": "direct", f"{{ {K} x; }}": "direct", f"if {K} x; then b; fi": "direct",
             f"{K} x | head": "wrapped", f"ps | {K} x": "wrapped", f"echo $({K} x)": "wrapped",
             f"echo `{K} x`": "wrapped", f"cat <({K} x)": "wrapped", f'echo "$({K} x)"': "wrapped",
+            f"ssh host {K} x": "wrapped",
             f"echo {K}": None, f"man {K}": None, f"echo '{K} x'": None, f"echo '$({K} x)'": None, f"ls > {K}": None,
             f"cat <<'EOF'\n{K} x\nEOF": None, f"cat <<EOF\n{K} x\nEOF": None, f"git commit -m 'fix {K}'": None,
-            f"{K}s x": None, f"x{K} y": None, f"ssh host {K} x": None, f"find . -exec {K} {{}} ;": None,
+            f"{K}s x": None, f"x{K} y": None, f"find . -exec {K} {{}} ;": None,
             "bash script.sh": None, f"python -c '{K} x'": None,
         })
 
@@ -71,13 +72,13 @@ class Matching(AstIsolated):
         commands = [f"sudo {K} x", f"sudo -u bob {K} x", f"sudo -nu bob {K} x", f"env A=1 B=2 {K} x", f"env - {K} x",
                     f"timeout 5 {K} x", f"timeout -s KILL 5s {K} x", f"nice -n 10 {K} x", f"nohup {K} x", f"time {K} x",
                     f"command {K} x", f"exec {K} x", f"builtin {K} x", f"stdbuf -oL {K} x", f"setsid {K} x",
-                    f"ionice -c 3 {K} x", f"xargs -I{{}} {K} {{}}", f"xargs -0 -n1 {K}", f"watch -n 5 {K} x",
+                    f"ionice -c 3 {K} x", f"xargs -I{{}} {K} {{}}", f"xargs -0 -n1 {K}",
                     f"doas {K} x", f"sudo -- {K} x", f"/usr/bin/sudo /bin/{K} x", f"sudo env timeout 5 nice -n 1 {K} x",
                     f"FOO=1 sudo {K} x", f"sudo {K} x > /dev/null 2>&1", f"echo a | xargs {K}", f"sudo 'sudo' {K}"]
         self.assert_kinds(rule_of({"command": K}), {c: "wrapped" for c in commands})
 
     def test_wrappers_are_not_looked_through_when_they_are_unknown_or_bare(self) -> None:
-        self.assert_kinds(rule_of({"command": K}), {f"mywrap -x 3 {K} a": None, f"ssh host {K}": None, "sudo": None, "env A=1": None})
+        self.assert_kinds(rule_of({"command": K}), {f"mywrap -x 3 {K} a": None, "sudo": None, "env A=1": None})
 
     def test_wrapper_names_are_commands_too(self) -> None:
         self.assert_kinds(rule_of({"command": ["sudo", "xargs"]}), {"sudo ls": "direct", "xargs ls": "direct", "ls": None})

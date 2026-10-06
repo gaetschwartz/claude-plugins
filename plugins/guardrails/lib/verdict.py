@@ -64,8 +64,8 @@ class UnitTree(NamedTuple):
 class Evaluation:
     """How each rule's matcher selects one command, and what kept a rule from being judged."""
 
-    __slots__ = ("details", "failure", "fault", "invalid", "kinds", "micros", "parse_us", "refusal", "runtime_broken",
-                 "unevaluated")
+    __slots__ = ("details", "failure", "fault", "invalid", "kinds", "micros", "parse_us", "runtime_broken", "unchecked",
+                 "unevaluated", "unparsed")
 
     def __init__(self, kinds: dict[str, Kind | None]) -> None:
         self.kinds = kinds
@@ -73,17 +73,15 @@ class Evaluation:
         self.unevaluated: set[str] = set()
         self.invalid: dict[str, str] = {}
         self.failure: str | None = None
-        self.refusal: str | None = None
+        self.unchecked: str | None = None
         self.runtime_broken = False
         self.fault: Fault | None = None
         self.micros: dict[str, int] = {}
         self.parse_us = 0
-
-    def failure_kind(self) -> str:
-        return "refusal" if self.refusal else "engine"
+        self.unparsed = False
 
     def warnings(self, managed: Collection[str] = ()) -> list[Notice]:
-        """A stable key and text per problem. Keys under FAILED_PREFIX are per failure class, not per message."""
+        """A stable key and text per problem. Keys under FAILED_PREFIX are per failure class and repeat; others are shown once."""
         out = [Notice(f"rule-invalid:{rid}", f"guardrails: rule {rid} does not compile ({why}) and is skipped")
                for rid, why in sorted(self.invalid.items())]
         if self.failure is not None:

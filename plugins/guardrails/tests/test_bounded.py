@@ -77,21 +77,19 @@ class Pathological(AstIsolated):
             "nested": {"match": {"pattern": f"{K} $$$", "inside": {"kind": "command_substitution",
                                                                            "stopBy": "end"}}, "message": "No nest."}}})
 
-    def test_a_command_the_parser_cannot_finish_is_denied_at_the_deadline(self) -> None:
+    def test_a_command_the_parser_cannot_finish_is_allowed_with_a_notice_at_the_deadline(self) -> None:
         with mock.patch.object(matching, "DEADLINE_SECONDS", 0.5):
             out = self.hook("$(" * 70_000 + ")" * 70_000, "dense")
         assert out is not None
-        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertIn("command too complex to check (it did not finish within 0.5 seconds)",
-                      out["hookSpecificOutput"]["permissionDecisionReason"])
+        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
+        self.assertIn("could not fully analyse", out["hookSpecificOutput"]["additionalContext"])
 
-    def test_adversarial_shapes_never_slip_through_and_the_largest_are_never_silent(self) -> None:
+    def test_adversarial_shapes_are_never_silent(self) -> None:
         for size in (2_000, 10_000):
             for name, text in adversarial(size).items():
                 out = self.hook(text + f"; {K} x", f"c{size}{name}")
                 if name in RUNNABLE:
-                    self.assertTrue(out is not None and out["hookSpecificOutput"]["permissionDecision"] == "deny",
-                                    f"{name} at {size}")
+                    self.assertIsNotNone(out, f"{name} at {size}")
         with mock.patch.object(matching, "DEADLINE_SECONDS", 2.0):
             for name in ("open-subst", "balanced", "word", "list", "heredoc-open"):
                 self.assertIsNotNone(self.hook(adversarial(100_000)[name] + f"; {K} x", f"big{name}"), name)
@@ -116,10 +114,10 @@ class Crashes(AstIsolated):
     def test_the_probe_decides_between_one_bad_command_and_a_broken_library(self) -> None:
         crash, slow, ok = bounded.Result(CRASHED), bounded.Result(TIMEOUT), bounded.Result(DONE, True)
         out = self.run_hook(crash, ok)
-        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
-        self.assertIn("this command crashes the parser", out["hookSpecificOutput"]["permissionDecisionReason"])
+        self.assertNotIn("permissionDecision", out["hookSpecificOutput"])
+        self.assertIn("could not fully analyse", out["hookSpecificOutput"]["additionalContext"])
         out = self.run_hook(crash, slow, ok, session="s2")
-        self.assertEqual(out["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("could not fully analyse", out["hookSpecificOutput"]["additionalContext"])
         self.reported.assert_not_called()
         for results in ((crash, bounded.Result(DONE, False)), (crash, slow, bounded.Result(DONE, False))):
             self.reported.reset_mock()

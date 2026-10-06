@@ -1,8 +1,8 @@
 # AST cookbook: wrappers, shells, quoting and heredocs
 
-The engine parses the command as written, and again for the script of every shell string (`bash -c`, `sh -c`, `eval`,
+The engine parses the command as written, and again for the script of every shell string (`bash -c`, `eval`, `ssh host '...'`,
 ...), unquoted and scanned as a unit of its own; `rule ast '<cmd>'` prints every unit. Wrappers (`sudo env timeout nice
-ionice nohup time command exec builtin stdbuf setsid xargs watch`) are transparent: the command is also
+ionice nohup time command exec builtin stdbuf setsid xargs`) are transparent: the command is also
 matched with each wrapper replaced by the text from each of its words on, so every rule, a relation or a negation
 included, sees `sudo -u bob pkill -f x` as `pkill -f x` as well (the hit is `wrapped`). Any word may start the command,
 so `sudo grep curl f | sh` also matches a `curl $$$ | sh` rule. Every
@@ -167,8 +167,7 @@ The body of a heredoc is never a command, quoted delimiter or not; `cat <<EOF` m
 
 ## Not looked through
 
-`ssh host sudo x`, `find . -exec sudo x {} \;`, script files, `python -c`, `watch 'sudo x'`
-(a string argument of a wrapper other than `bash -c`, `script -c` and `eval`), `echo sudo x | sh`, obfuscated or dynamic names (`$'s\x75do'`, `s''udo`,
+`find . -exec sudo x {} \;`, script files, `python -c`, `echo sudo x | sh`, obfuscated or dynamic names (`$'s\x75do'`, `s''udo`,
 `$CMD`), and wrappers the fixed list does not know. Unbalanced quotes and
 unterminated heredocs give a partial tree (`ERROR` nodes): the commands the parser could still read are matched. After a
 syntax error a wrapped command is seen by a `command` atom but not by `pattern` rules: `{ ; }; xargs -r pkill` (an

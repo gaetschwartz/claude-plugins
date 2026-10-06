@@ -17,7 +17,7 @@ A rule matches a command and says what happens:
   backreferences or look-around), plus atoms usable anywhere in it: `{"command": "pkill"}` (a command by name in
   any spelling, optionally with `args`, a regex over its text, and transparent to a redirect around it),
   `{"assignment": {"name": "LD_PRELOAD"}}`, `{"wrapper": true}`, `{"statement": ...}`, `{"redirect": ...}`,
-  `{"discards": "all"}` and `{"capture": ..., "name": "LAST"}` (binds the matched node to a `{LAST}` placeholder of the message). Its keys are ANDed; `any` says "either". `wrappers: false` keeps the rule off commands reached
+  `{"discards": "all"}`, `{"via": "ssh"}`, `{"flag": "f"}` and `{"capture": ..., "name": "LAST"}` (binds the matched node to a `{LAST}` placeholder of the message). Its keys are ANDed; `any` says "either". `wrappers: false` keeps the rule off commands reached
   through `sudo`, `env`, `xargs` and the other wrappers. [references/matching.md](references/matching.md) has the
   semantics, the node kinds and the known limits.
 - `action`: `deny` (the agent gets the message and the call is blocked) or `warn` (the message arrives as context, once per
@@ -35,7 +35,7 @@ A rule matches a command and says what happens:
 `guardrails rule ast '<command>'` prints the parse tree of any command; [references/writing-rules.md](references/writing-rules.md)
 is the full how-to (matcher ladder, test matrix, edge cases, pitfalls) and [references/ast/](references/ast/index.md) a cookbook
 of tested rules by shape; a test runs every example in it against the real engine. Known gaps: obfuscated or dynamic names
-(`$'p\x6bill'`, `P=pkill; $P x`), `find -exec`, `ssh host cmd`, `echo cmd | sh`, scripts run from a file, ANSI-C script literals.
+(`$'p\x6bill'`, `P=pkill; $P x`), `find -exec`, `echo cmd | sh`, scripts run from a file, ANSI-C script literals.
 
 ## The runtime
 
@@ -49,7 +49,7 @@ failure behaviour are in [references/runtime.md](references/runtime.md); `guardr
 
 **If guardrails ever blocks everything**, the user can run `claude plugin disable guardrails@<marketplace>` or, from a terminal,
 `guardrails disable` (global hook off; managed rules stay). The hook also fails open, loudly, when its runtime is broken, and a
-command the parser cannot finish in 5 seconds is denied ("command too complex to check") rather than let through.
+command the parser cannot finish or understand is allowed with a short notice that it was not fully checked.
 
 ## Config, state and layers
 
@@ -111,7 +111,7 @@ is a configuration change and needs the user's explicit request (`--as-user`).
 | `docs-first` | `no-strings` (deny, retry), `binary-spelunking` (otool/nm/objdump, warn); mode `reverse-engineering` |
 | `process-safety` | `no-pkill` (pkill/killall, deny, retry), `kill-9` (warn); mode `incident` |
 | `modern-cli` | `find-fd`, `grep-rg`, `cargo-nextest` (`cargo test` except `--doc`), `du-dust`: one-line warnings that nudge toward the faster tool, never blocking, each only when its tool is installed |
-| `shell-hygiene` | `pipe-status` (a pipeline's status read from a trailing `tail`/`head`/…, deny; not when only a separator echo or `\|\| true` follows), `ps-grep-self-match` (`ps \| grep` without a guard, warn) |
+| `shell-hygiene` | `pipe-status` (a pipeline's status read from a trailing `tail`/`head`/…, deny; not when only a separator echo or `\|\| true` follows), `ps-grep-self-match` (`ps \| grep` without a guard, warn), `tail-pipe-buffered` (Monitor only: a buffered stage after `tail -f`, warn), `http-wait-exact-status` (a loop waiting for one 2xx from curl, warn) |
 
 ## CLI
 

@@ -1,7 +1,7 @@
 # AST rule cookbook
 
 Worked `match` rules, each tested against the real engine. Read only the file whose shape matches your rule; rule
-syntax and semantics (the atoms `command`, `assignment`, `wrapper`, `statement`, `redirect`, `discards`, `capture`, composition, `wrappers`) are in
+syntax and semantics (the atoms `command`, `assignment`, `wrapper`, `statement`, `redirect`, `discards`, `via`, `flag`, `capture`, composition, `wrappers`) are in
 [matching.md](../matching.md) and the full procedure (when to reach for relations at all, the test matrix, the pitfalls)
 in [writing-rules.md](../writing-rules.md).
 

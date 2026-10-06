@@ -13,6 +13,8 @@ DENY = [
     "sleep 1; pkill x",
     "x=$(pkill -f y)",
     "{ pkill foo; }",
+    "ssh host pkill x",
+    "watch 'pkill x'",
     "killall Finder",
     "strings /bin/ls",
     "strings -a libfoo.dylib | grep version",
@@ -56,6 +58,8 @@ ALLOW = [
 ]
 
 WARN = [
+    "watch -n 5 'find .'",
+    "su -c 'find .'",
     "kill -9 123",
     "kill -s KILL 42",
     "nm -g libfoo.dylib",
@@ -106,7 +110,8 @@ WARN = [
 
 # Known limits of matching by the real tree: each is documented in references/matching.md.
 OVERBROAD = ["command -v find", "command -V find", "sudo grep find file"]
-UNSEEN = ["watch -n 5 'find .'", "su -c 'find .'", "echo 'find . -name x", "$'fi\\x6ed' . -name x"]
+UNSEEN = ["$'fi\\x6ed' . -name x"]
+UNPARSED = ["echo 'find . -name x"]
 
 
 class Corpus(RealRuntime):
@@ -147,3 +152,6 @@ class Corpus(RealRuntime):
         for command in UNSEEN:
             with self.subTest(unseen=command):
                 self.assertEqual(self.decide(command), "allow")
+        for command in UNPARSED:
+            with self.subTest(unparsed=command):
+                self.assertEqual(self.decide(command), "warn")

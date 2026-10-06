@@ -207,7 +207,7 @@ class WrappedForms(AstIsolated):
             for command in commands:
                 with self.subTest(rule=raw, command=command):
                     output, _ = engine.evaluate(command, {"r": rule}, {}, policy.Session(), "s")
-                    self.assertEqual(card[render.clean(command)], output is not None)
+                    self.assertEqual(card[render.clean(command)], output is not None and "permissionDecision" in output["hookSpecificOutput"])
 
 
 class NotEvaluated(AstIsolated):

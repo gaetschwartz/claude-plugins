@@ -32,7 +32,7 @@ class Variants(AstIsolated):
         from ast_grep_py import SgRoot
 
         spans = scanner.wrapper_spans(SgRoot(command, "bash").root(), rulebuilder.WRAPPERS)
-        return set(scanner.variants_of(command, spans))
+        return {variant.text for variant in scanner.variants_of(command, spans)}
 
     def test_a_wrapper_command_is_replaced_by_the_text_from_each_of_its_words_on(self) -> None:
         cases = {
@@ -54,6 +54,53 @@ class Variants(AstIsolated):
         for command, expected in cases.items():
             with self.subTest(command=command):
                 self.assertEqual(self.variants(command), expected)
+
+
+class JoinedRunners(AstIsolated):
+    def chains(self, command: str, text: str) -> list[tuple[str, ...]]:
+        import scanner
+
+        found: list[tuple[str, ...]] = []
+        scanner.walk(command, True, lambda unit, root: found.append(unit.via) if unit.text == text else None)
+        return found
+
+    def test_ssh_watch_su_and_nested_runners_are_read_as_the_script_they_hand_to_a_shell(self) -> None:
+        self.assert_kinds(rule_of({"command": K}), {
+            f"ssh -p 22 -i k h '{K} x'": "wrapped", f"ssh h {K} x": "wrapped", f"ssh a 'ssh b {K} x'": "wrapped",
+            f"watch '{K} x'": "wrapped", f"watch {K} x": "wrapped", f"watch -n 5 '{K} x'": "wrapped",
+            f"su -c '{K} x' bob": "wrapped", f"sudo ssh h '{K} x'": "wrapped", f"ssh h 'sudo -u bob {K} x'": "wrapped",
+            f"ssh h \"cd /x && {K} x\"": "wrapped", f"eval {K} x": "wrapped",
+            f"ssh {K}-host ls": None, "ssh h": None, "ssh": None, f"echo ssh h {K}": None, "watch": None,
+        })
+
+    def test_a_remote_wait_loop_is_judged_like_a_local_one(self) -> None:
+        rules = policy.effective_rules({}, {"rules": real_rules()}, {})
+        loop = 'while pgrep -f "docker build -f Dockerfile.v0.29"; do sleep 20; done; echo done'
+        for command in (loop, f"ssh zgx '{loop}'", f"watch '{loop}'"):
+            with self.subTest(command=command):
+                ev = matching.evaluate(command, rules)
+                self.assertIsNotNone(ev.kinds["no-pgrep-status"])
+                self.assertIsNotNone(ev.kinds["warn-pgrep-in-loop"])
+
+    def test_a_unit_records_the_wrappers_and_runners_it_was_reached_through_outermost_first(self) -> None:
+        self.assertEqual(self.chains(f"sudo ssh h '{K} x'", f"{K} x"), [("sudo", "ssh")])
+        self.assertEqual(self.chains(f"/bin/bash -c 'sudo env A=1 {K} x'", f"{K} x"), [("bash", "sudo", "env")])
+        self.assertEqual(self.chains(f"sudo env {K} x", f"{K} x"), [("sudo", "env")])
+        self.assertEqual(self.chains(f"env sudo -u bob {K} x", f"{K} x"), [("env", "sudo")])
+        self.assertEqual(self.chains(f"ssh a 'ssh b {K} x'", f"{K} x"), [("ssh", "ssh")])
+        self.assertEqual(self.chains(f"{K} x", f"{K} x"), [()])
+
+    def test_one_ssh_command_with_many_words_is_bounded_like_a_wrapper(self) -> None:
+        rule = {"r": rule_of({"command": K})}
+        self.assertEqual(matching.evaluate("ssh " + "a " * 50 + f"'{K} x'", rule).kinds["r"], Kind.WRAPPED)
+        for words in (2100, 3000):
+            ev = matching.evaluate("ssh " + "a " * words, rule)
+            self.assertIn("too many command variants", ev.unchecked or "")
+
+    def test_many_ssh_lines_do_not_use_up_the_shell_string_budget(self) -> None:
+        script = "; ".join(f"ssh h{n} a b c d e f 'echo {n}'" for n in range(40)) + f"; ssh h {K} x"
+        ev = matching.evaluate(script, {"r": rule_of({"command": K})})
+        self.assertEqual((ev.kinds["r"], ev.unchecked), (Kind.WRAPPED, None))
 
 
 class ThroughWrappers(AstIsolated):
@@ -268,7 +315,7 @@ class RealRuleSet(AstIsolated):
         for command in ("sudo " * 4000, "sudo true; " * 6000, "xargs -r " * 2000 + "ls"):
             with self.subTest(command=command[:12]):
                 ev = matching.evaluate(command, self.rules)
-                self.assertIn("command too complex to check", ev.refusal or "")
+                self.assertIn("command too complex to check", ev.unchecked or "")
 
 
 class Caps(AstIsolated):
@@ -279,14 +326,14 @@ class Caps(AstIsolated):
         for chain in ("sudo " * 100, "env A=1 " * 50, "nice -n 1 " * 60):
             with self.subTest(chain=chain[:12]):
                 ev = self.evaluate(chain + f"{K} x")
-                self.assertEqual((ev.kinds["r"], ev.refusal), (Kind.WRAPPED, None))
+                self.assertEqual((ev.kinds["r"], ev.unchecked), (Kind.WRAPPED, None))
 
     def test_too_many_variants_are_refused_at_any_size(self) -> None:
         for command in ("sudo " * 2100 + "ls", "; ".join(f"sudo a{n} b{n} c{n} d{n}" for n in range(600)) + "; ls",
                         "; ".join(["sudo ls"] * 2100)):
             with self.subTest(command=command[:20]):
                 ev = self.evaluate(command)
-                self.assertIn("unwraps into too many command variants", ev.refusal or "")
+                self.assertIn("unwraps into too many command variants", ev.unchecked or "")
                 self.assertEqual(ev.unevaluated, {"r"})
 
     def test_ordinary_commands_with_big_heredocs_and_many_wrappers_are_analysed(self) -> None:
@@ -299,24 +346,57 @@ class Caps(AstIsolated):
         for name, command in cases.items():
             with self.subTest(name):
                 ev = self.evaluate(command + f"{K} x")
-                self.assertEqual((ev.refusal, ev.kinds["r"]), (None, Kind.DIRECT))
+                self.assertEqual((ev.unchecked, ev.kinds["r"]), (None, Kind.DIRECT))
+
+    def test_a_wrapper_before_hundreds_of_short_words_is_analysed(self) -> None:
+        ev = self.evaluate("sudo " + " ".join(f"a{n}" for n in range(500)) + f" {K} x")
+        self.assertEqual((ev.kinds["r"], ev.unchecked), (Kind.WRAPPED, None))
+
+    def test_an_unrelated_via_rule_changes_neither_a_verdict_nor_a_limit(self) -> None:
+        import rulebuilder
+
+        command = "; ".join(f"{w} {s} -c 'ls'" for w in rulebuilder.WRAPPERS for s in ("bash", "sh", "zsh", "dash", "ksh"))
+        for text in (command, command + f"; {K} x"):
+            alone = {"r": rule_of({"pattern": f"{K} $$$"})}
+            both = {**alone, "v": rule_of({"command": "scp", "via": "ssh"})}
+            first, second = matching.evaluate(text, alone), matching.evaluate(text, both)
+            self.assertEqual((first.kinds["r"], first.unchecked), (second.kinds["r"], second.unchecked))
+
+    def test_a_via_rule_changes_no_budget(self) -> None:
+        text = "; ".join(f"bash -c 'echo {n}'; ssh h \"bash -c 'echo {n}'\"" for n in range(70)) + f"; {K} x"
+        alone = {"r": rule_of({"pattern": f"{K} $$$"})}
+        both = {**alone, "v": rule_of({"command": "echo", "via": "ssh"})}
+        for rules in (alone, both):
+            ev = matching.evaluate(text, rules)
+            self.assertEqual((ev.unchecked, ev.kinds["r"]), (None, Kind.DIRECT))
+        self.assertEqual(matching.evaluate(text, both).kinds["v"], Kind.WRAPPED)
+
+    def test_unparsable_shell_text_is_noticed_through_ssh_and_watch_too(self) -> None:
+        import scanner
+
+        configs = matching.configs_of({"r": rule_of({"command": "zzzz"})})
+        for command, expected in {"bash -c 'echo ('": True, "ssh h 'echo ('": True, "watch 'echo ('": True,
+                                  "ssh h 'ls -l'": False, "ssh -p 22 h \"echo 'x'\"": False,
+                                  "watch -n 5 'ls -l'": False, "ssh h": False}.items():
+            with self.subTest(command=command):
+                self.assertEqual(scanner.Scanner(configs).run(command).unparsed, expected)
 
     def test_the_work_budget_is_a_cap_of_its_own_with_its_own_message(self) -> None:
         with mock.patch("scanner.MAX_VARIANT_BYTES", 100):
             ev = self.evaluate("echo x\nsudo " + "y" * 200 + " a b c\n")
-        self.assertIn("unwraps into too much command text to parse", ev.refusal or "")
+        self.assertIn("unwraps into too much command text to parse", ev.unchecked or "")
 
     def test_a_direct_hit_stands_when_the_variants_are_limited(self) -> None:
         ev = self.evaluate(f"{K} x; " + "sudo " * 2100 + "ls")
-        self.assertEqual((ev.kinds["r"], ev.refusal is not None), (Kind.DIRECT, True))
+        self.assertEqual((ev.kinds["r"], ev.unchecked is not None), (Kind.DIRECT, True))
 
     def test_shell_strings_and_variants_have_separate_budgets(self) -> None:
         many = "; ".join(f"bash -c 'echo {n}'" for n in range(60))
         ev = self.evaluate(many + "; sudo " * 40 + K + " x")
-        self.assertEqual((ev.kinds["r"], ev.refusal), (Kind.WRAPPED, None))
+        self.assertEqual((ev.kinds["r"], ev.unchecked), (Kind.WRAPPED, None))
 
     def test_scripts_beyond_the_caps_name_their_cause(self) -> None:
-        cases = ((nest(f"{K} x", 9), Limit.DEPTH), ("; ".join(f"bash -c 'echo {n}'" for n in range(80)), Limit.UNITS),
+        cases = ((nest(f"{K} x", 9), Limit.DEPTH), ("; ".join(f"bash -c 'echo {n}'" for n in range(140)), Limit.UNITS),
                  (nest("x" * 100_000, 4), Limit.SIZE), ("eval " * 40 + K + " x", Limit.DEPTH))
         import scanner
         from ast_grep_py import SgRoot  # noqa: F401

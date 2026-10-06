@@ -1,5 +1,5 @@
 """Typed ast-grep rules for a guardrails rule: its match with every atom (command, wrapper, assignment, statement,
-redirect, discards, capture) expanded and its single-command patterns made tolerant of how a command is spelled. All
+redirect, discards, via, flag, capture) expanded and its single-command patterns made tolerant of how a command is spelled. All
 of it is data for ast-grep; nothing here reads shell syntax."""
 
 from __future__ import annotations
@@ -7,21 +7,29 @@ from __future__ import annotations
 import re
 import string
 from collections.abc import Iterator, Sequence
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypedDict
 
 import policy
 import redirects
 
 if TYPE_CHECKING:
-    from ast_grep_py import Config, Rule, SgNode
+    from ast_grep_py import Config, Relation, Rule, SgNode
 
 PLAIN_NAME = frozenset(string.ascii_letters + string.digits + "_.+-")
 SUBSTITUTIONS = ("command_substitution", "process_substitution")
 ASSIGNMENT_OR_REDIRECT = ("variable_assignment", "file_redirect", "herestring_redirect", "heredoc_redirect")
 ASSIGNMENTS = 3
 WRAPPERS = ("sudo", "doas", "env", "timeout", "nice", "nohup", "time", "command", "exec", "builtin", "stdbuf", "setsid",
-            "ionice", "xargs", "watch")
-ATOMS = ("command", "wrapper", "assignment", "statement", "redirect", "discards")
+            "ionice", "xargs")
+SHELLS = ("bash", "sh", "zsh", "dash", "ksh", "script", "su")
+JOINED_RUNNERS = ("eval", "ssh", "watch")
+RUNNERS = (*SHELLS, *JOINED_RUNNERS)
+VIA_CLASSES = ("wrapper", "runner")
+ATOMS = ("command", "wrapper", "assignment", "statement", "redirect", "discards", "via", "flag")
+ALWAYS: Rule = {"regex": ""}
+NEVER: Rule = {"not": ALWAYS}
+SHORT_FLAG = re.compile(r"[A-Za-z]")
+LONG_FLAG = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.+-]+")
 CAPTURE_KEYS = frozenset({"capture", "name", "field"})
 CAPTURE_NAME = re.compile(r"[A-Z][A-Z0-9_]*")
 FIELD_NAME = re.compile(r"[a-z][a-z0-9_]*")
@@ -99,7 +107,78 @@ def assignment(value: object, where: str) -> Rule:
     return {"kind": "variable_assignment", **({"all": parts} if parts else {})}
 
 
-def atom(key: str, node: dict[str, Any], where: str) -> Rule:
+class Marker(TypedDict):
+    """A `via` atom left in the rule for the scanner to settle per unit."""
+
+    via: list[str]
+
+
+def via(value: object, where: str) -> Marker:
+    names = [value] if isinstance(value, str) else value
+    known = (*WRAPPERS, *RUNNERS, *VIA_CLASSES)
+    if not (isinstance(names, list) and names and all(name in known for name in names)):
+        raise policy.Invalid(f"'{where}.via' must be a wrapper or runner name, or a non-empty list of them "
+                             f"({', '.join(known)})")
+    return {"via": names}
+
+
+CLASSES = {"wrapper": WRAPPERS, "runner": RUNNERS}
+
+
+def through(names: Sequence[str], chain: Sequence[str]) -> bool:
+    """Whether a unit reached through this chain of wrapper and runner names is covered by the `via` names."""
+    return any(name in chain or any(step in CLASSES.get(name, ()) for step in chain) for name in names)
+
+
+def via_names(rule: object) -> frozenset[str]:
+    """Every name the `via` atoms of a rule mention."""
+    if isinstance(rule, list):
+        return frozenset().union(*(via_names(item) for item in rule))
+    if not isinstance(rule, dict):
+        return frozenset()
+    mentioned = frozenset([rule["via"]] if isinstance(rule["via"], str) else rule["via"]) if "via" in rule else frozenset()
+    return mentioned.union(*(via_names(value) for value in rule.values()))
+
+
+def facts(watched: frozenset[str], chain: Sequence[str]) -> frozenset[str]:
+    """What the watched names can tell of a chain: the names it holds, and the classes it crosses."""
+    return frozenset(name for name in watched if through([name], chain))
+
+
+def resolve_via(rule: Any, chain: Sequence[str]) -> Any:
+    """The rule with each `via` placeholder made always true or always false for a unit reached through this chain."""
+    if isinstance(rule, list):
+        return [resolve_via(item, chain) for item in rule]
+    if not isinstance(rule, dict):
+        return rule
+    if "via" in rule:
+        return ALWAYS if through(rule["via"], chain) else NEVER
+    return {key: resolve_via(value, chain) for key, value in rule.items()}
+
+
+def flag(value: object, where: str) -> Rule:
+    """A command with a word after its name that is one of these flags: a short name inside any `-abc` cluster (digits
+    are skipped), a long name as `--name` or `--name=...`, the word optionally quoted; nothing after a `--` word counts."""
+    names = [value] if isinstance(value, str) else value
+    if not (isinstance(names, list) and names and all(isinstance(name, str) for name in names)):
+        raise policy.Invalid(f"'{where}.flag' must be a flag name or a non-empty list of them")
+    for name in names:
+        if name.startswith("-"):
+            raise policy.Invalid(f"'{where}.flag' names are written without the dash: {name.lstrip('-')!r}, not "
+                                 f"{name!r}")
+        if not (SHORT_FLAG.fullmatch(name) or LONG_FLAG.fullmatch(name)):
+            raise policy.Invalid(f"'{where}.flag' name {name!r} is neither a short flag (one ASCII letter) nor a long "
+                                 "one (letters, digits and _ . + -)")
+    shorts = "".join(name for name in names if len(name) == 1)
+    longs = "|".join(re.escape(name) for name in names if len(name) > 1)
+    forms = ([f"-[A-Za-z0-9]*[{shorts}][A-Za-z0-9]*"] if shorts else []) + (
+        [f"--(?:{longs})(?:=(?s:.*))?"] if longs else [])
+    word: Relation = {"regex": f"^[\"']?(?:{'|'.join(forms)})[\"']?$", "follows": {"kind": "command_name", "stopBy": "end"},
+                  "not": {"follows": {"regex": "^--$", "stopBy": "end"}}}
+    return {"kind": "command", "has": word}
+
+
+def atom(key: str, node: dict[str, Any], where: str) -> Rule | Marker:
     value = node[key]
     if key == "command":
         args = node.get("args")
@@ -120,6 +199,10 @@ def atom(key: str, node: dict[str, Any], where: str) -> Rule:
         return redirects.redirect(value, where)
     if key == "discards":
         return redirects.discards(value, where)
+    if key == "via":
+        return via(value, where)
+    if key == "flag":
+        return flag(value, where)
     return assignment(value, f"{where}.assignment")
 
 

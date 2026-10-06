@@ -579,6 +579,144 @@
         }
       ],
       "messageShort": "`ps | grep X` also lists the grep itself and your own shell: `| grep -v grep` after the match, a bracketed pattern (`grep '[c]argo'`), or `pgrep -fl PATTERN` on its own."
+    },
+    "tail-pipe-buffered": {
+      "description": "a stage that buffers its output after tail -f in a Monitor",
+      "match": {
+        "command": [
+          "cut",
+          "tr",
+          "uniq",
+          "awk",
+          "sed"
+        ],
+        "not": {
+          "any": [
+            {
+              "command": [
+                "sed",
+                "tr"
+              ],
+              "flag": [
+                "u",
+                "unbuffered"
+              ]
+            },
+            {
+              "regex": "fflush"
+            },
+            {
+              "via": "stdbuf"
+            }
+          ]
+        },
+        "inside": {
+          "kind": "pipeline"
+        },
+        "follows": {
+          "any": [
+            {
+              "command": "tail",
+              "flag": [
+                "f",
+                "F",
+                "follow"
+              ]
+            },
+            {
+              "command": "journalctl",
+              "flag": [
+                "f",
+                "follow"
+              ]
+            },
+            {
+              "command": [
+                "docker",
+                "kubectl"
+              ],
+              "args": "(^|\\s)logs(\\s|$)",
+              "flag": [
+                "f",
+                "follow"
+              ]
+            }
+          ],
+          "stopBy": "end"
+        }
+      },
+      "when": {
+        "tool": "Monitor"
+      },
+      "action": "warn",
+      "message": "A stage after `tail -f` that is not line-buffered holds its output until its buffer fills, so the Monitor stays silent.\nEnd the pipeline with `grep --line-buffered`, or make the stage line-buffered: `sed -u`, `tr -u`, `awk '{{print; fflush()}}'`, `jq --unbuffered`, `stdbuf -oL cut ...`."
+    },
+    "http-wait-exact-status": {
+      "description": "a loop that waits for one specific 2xx status from curl",
+      "match": {
+        "all": [
+          {
+            "any": [
+              {
+                "kind": "while_statement"
+              },
+              {
+                "kind": "for_statement"
+              }
+            ]
+          },
+          {
+            "has": {
+              "command": "curl",
+              "stopBy": "end"
+            }
+          },
+          {
+            "any": [
+              {
+                "all": [
+                  {
+                    "regex": "^until\\b"
+                  },
+                  {
+                    "has": {
+                      "kind": "test_command",
+                      "regex": "(^|\\s)(=|==|-eq)\\s*\"?2[0-9][0-9]\"?(\\s|\\])",
+                      "stopBy": "end"
+                    }
+                  }
+                ]
+              },
+              {
+                "all": [
+                  {
+                    "has": {
+                      "command": "break",
+                      "stopBy": "end"
+                    }
+                  },
+                  {
+                    "has": {
+                      "kind": "test_command",
+                      "regex": "(^|\\s)(=|==|-eq)\\s*\"?2[0-9][0-9]\"?(\\s|\\])",
+                      "stopBy": "end"
+                    }
+                  }
+                ]
+              },
+              {
+                "has": {
+                  "kind": "case_item",
+                  "regex": "^2[0-9][0-9]\\)",
+                  "stopBy": "end"
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "action": "warn",
+      "message": "Do not wait for one specific success code: a 404, 401 or 3xx never becomes 200, so the loop spins until its timeout.\nLoop only while the status is 000 or 5xx, stop on anything else and read the code (`case $c in 000|5??) sleep 2;; *) echo $c; break;; esac`), or let curl retry: `curl --retry N --retry-connrefused -s -o /dev/null -w '%{{http_code}}' URL` (--retry only retries timeouts and HTTP 408, 429, 500, 502, 503, 504)."
     }
   },
   "modes": {},
@@ -688,6 +826,45 @@
         "ps aux 2>/dev/null | grep '[c]argo' | wc -l",
         "ps -p 5 | grep x",
         "ps -q 5 | grep x"
+      ]
+    },
+    "tail-pipe-buffered": {
+      "catch": [
+        "tail -n0 -F log | grep -E --line-buffered 'x|y' | cut -c1-220",
+        "tail -f log | sed 's/a/b/'",
+        "tail --follow=name log | awk '{print $1}'",
+        "journalctl -fu app | cut -c1-80",
+        "docker logs -f app | tr a b",
+        "kubectl logs --follow pod | uniq",
+        "sudo tail -f log | sed 's/a/b/'",
+        "tail -f log | uniq -u"
+      ],
+      "pass": [
+        "tail -f log | sed -u 's/a/b/'",
+        "tail -f log | tr -u a b",
+        "tail -f log | grep --line-buffered x",
+        "tail -f log | awk '{print; fflush()}'",
+        "tail -f log | stdbuf -oL cut -c1-80",
+        "tail -n 20 log | cut -c1-80",
+        "cut -d: -f1 f | sort",
+        "docker logs app | cut -c1-80",
+        "tail -F x | head -3"
+      ]
+    },
+    "http-wait-exact-status": {
+      "catch": [
+        "for i in $(seq 1 60); do c=$(curl -s -o /dev/null -w \"%{http_code}\" URL); [ \"$c\" = 200 ] && break; sleep 5; done",
+        "until [ \"$(curl -s -o /dev/null -w %{http_code} URL)\" = 200 ]; do sleep 5; done",
+        "while :; do c=$(curl -s -w %{http_code} URL); case $c in 200) break;; esac; sleep 2; done",
+        "until [[ $(curl -s -o /dev/null -w '%{http_code}' URL) == 204 ]]; do sleep 1; done"
+      ],
+      "pass": [
+        "while :; do c=$(curl -s -o /dev/null -w '%{http_code}' URL); case $c in 000|5??) sleep 2;; *) echo $c; break;; esac; done",
+        "while [ \"$(curl -s -o /dev/null -w '%{http_code}' URL)\" -ne 503 ]; do sleep 1; done",
+        "for i in 1 2 3; do curl -s URL; done",
+        "curl -s URL",
+        "curl --retry 5 --retry-connrefused -s -o /dev/null -w '%{http_code}' URL",
+        "while [ \"$(curl -s -o /dev/null -w '%{http_code}' URL)\" -eq 200 ]; do sleep 1; done"
       ]
     }
   }
