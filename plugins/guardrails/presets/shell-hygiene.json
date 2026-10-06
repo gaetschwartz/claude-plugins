@@ -153,12 +153,82 @@
                       },
                       {
                         "precedes": {
-                          "has": {
-                            "kind": "special_variable_name",
-                            "regex": "^\\?$",
-                            "stopBy": "end"
-                          },
-                          "stopBy": "end"
+                          "any": [
+                            {
+                              "has": {
+                                "kind": "special_variable_name",
+                                "regex": "^\\?$",
+                                "stopBy": "end"
+                              }
+                            },
+                            {
+                              "regex": "^;$",
+                              "precedes": {
+                                "has": {
+                                  "kind": "special_variable_name",
+                                  "regex": "^\\?$",
+                                  "stopBy": "end"
+                                }
+                              }
+                            },
+                            {
+                              "kind": "comment",
+                              "precedes": {
+                                "has": {
+                                  "kind": "special_variable_name",
+                                  "regex": "^\\?$",
+                                  "stopBy": "end"
+                                }
+                              }
+                            }
+                          ]
+                        }
+                      },
+                      {
+                        "nthChild": {
+                          "position": 1,
+                          "reverse": true
+                        },
+                        "inside": {
+                          "any": [
+                            {
+                              "kind": "subshell"
+                            },
+                            {
+                              "kind": "compound_statement"
+                            }
+                          ],
+                          "precedes": {
+                            "any": [
+                              {
+                                "has": {
+                                  "kind": "special_variable_name",
+                                  "regex": "^\\?$",
+                                  "stopBy": "end"
+                                }
+                              },
+                              {
+                                "regex": "^;$",
+                                "precedes": {
+                                  "has": {
+                                    "kind": "special_variable_name",
+                                    "regex": "^\\?$",
+                                    "stopBy": "end"
+                                  }
+                                }
+                              },
+                              {
+                                "kind": "comment",
+                                "precedes": {
+                                  "has": {
+                                    "kind": "special_variable_name",
+                                    "regex": "^\\?$",
+                                    "stopBy": "end"
+                                  }
+                                }
+                              }
+                            ]
+                          }
                         }
                       },
                       {
@@ -400,12 +470,45 @@
                   "inside": {
                     "kind": "pipeline",
                     "precedes": {
-                      "has": {
-                        "kind": "special_variable_name",
-                        "regex": "^\\?$",
-                        "stopBy": "end"
-                      },
-                      "stopBy": "end"
+                      "any": [
+                        {
+                          "has": {
+                            "kind": "special_variable_name",
+                            "regex": "^\\?$",
+                            "stopBy": "end"
+                          }
+                        },
+                        {
+                          "regex": "^;$",
+                          "precedes": {
+                            "has": {
+                              "kind": "special_variable_name",
+                              "regex": "^\\?$",
+                              "stopBy": "end"
+                            }
+                          }
+                        },
+                        {
+                          "kind": "comment",
+                          "precedes": {
+                            "has": {
+                              "kind": "special_variable_name",
+                              "regex": "^\\?$",
+                              "stopBy": "end"
+                            }
+                          }
+                        },
+                        {
+                          "regex": "^(&&|\\|\\|)$",
+                          "precedes": {
+                            "has": {
+                              "kind": "special_variable_name",
+                              "regex": "^\\?$",
+                              "stopBy": "end"
+                            }
+                          }
+                        }
+                      ]
                     }
                   }
                 },
@@ -415,12 +518,105 @@
                     "inside": {
                       "kind": "redirected_statement",
                       "precedes": {
-                        "has": {
-                          "kind": "special_variable_name",
-                          "regex": "^\\?$",
-                          "stopBy": "end"
+                        "any": [
+                          {
+                            "has": {
+                              "kind": "special_variable_name",
+                              "regex": "^\\?$",
+                              "stopBy": "end"
+                            }
+                          },
+                          {
+                            "regex": "^;$",
+                            "precedes": {
+                              "has": {
+                                "kind": "special_variable_name",
+                                "regex": "^\\?$",
+                                "stopBy": "end"
+                              }
+                            }
+                          },
+                          {
+                            "kind": "comment",
+                            "precedes": {
+                              "has": {
+                                "kind": "special_variable_name",
+                                "regex": "^\\?$",
+                                "stopBy": "end"
+                              }
+                            }
+                          },
+                          {
+                            "regex": "^(&&|\\|\\|)$",
+                            "precedes": {
+                              "has": {
+                                "kind": "special_variable_name",
+                                "regex": "^\\?$",
+                                "stopBy": "end"
+                              }
+                            }
+                          }
+                        ]
+                      }
+                    }
+                  }
+                },
+                {
+                  "inside": {
+                    "kind": "pipeline",
+                    "nthChild": {
+                      "position": 1,
+                      "reverse": true
+                    },
+                    "inside": {
+                      "any": [
+                        {
+                          "kind": "subshell"
                         },
-                        "stopBy": "end"
+                        {
+                          "kind": "compound_statement"
+                        }
+                      ],
+                      "precedes": {
+                        "any": [
+                          {
+                            "has": {
+                              "kind": "special_variable_name",
+                              "regex": "^\\?$",
+                              "stopBy": "end"
+                            }
+                          },
+                          {
+                            "regex": "^;$",
+                            "precedes": {
+                              "has": {
+                                "kind": "special_variable_name",
+                                "regex": "^\\?$",
+                                "stopBy": "end"
+                              }
+                            }
+                          },
+                          {
+                            "kind": "comment",
+                            "precedes": {
+                              "has": {
+                                "kind": "special_variable_name",
+                                "regex": "^\\?$",
+                                "stopBy": "end"
+                              }
+                            }
+                          },
+                          {
+                            "regex": "^(&&|\\|\\|)$",
+                            "precedes": {
+                              "has": {
+                                "kind": "special_variable_name",
+                                "regex": "^\\?$",
+                                "stopBy": "end"
+                              }
+                            }
+                          }
+                        ]
                       }
                     }
                   }
@@ -750,7 +946,11 @@
         "git push 2>&1 | tail -2 && git status",
         "make | tail && echo ---; echo $?",
         "make | tail || false",
-        "make | tail && git status || true"
+        "make | tail && git status || true",
+        "(make | tail); echo $?",
+        "make | tail\necho $?",
+        "{ make | tail; }; echo $?",
+        "make | tail; [ $? -eq 0 ] && echo ok"
       ],
       "pass": [
         "make | tail",
@@ -792,7 +992,12 @@
         "make | tail >log || true",
         "a | b | sort || true",
         "(make | tail) && echo ---",
-        "x && make | tail || true"
+        "x && make | tail || true",
+        "make | tail; echo x; echo $?",
+        "make | tail; true; echo $?",
+        "just test > log; echo \"exit=$?\"",
+        "make > out.log 2>&1; echo \"rc=$?\"",
+        "make | tail & echo $?"
       ]
     },
     "ps-grep-self-match": {

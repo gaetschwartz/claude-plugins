@@ -227,6 +227,24 @@ class Examples(AstIsolated):
             with self.subTest(command=command):
                 self.assertTrue(self.fires(command))
 
+    def test_pipe_status_reads_question_mark_only_in_the_next_command(self) -> None:
+        for command in ("make | tail; echo $?", "make | tail\necho $?", "make | tail;\necho $?", "make | tail && echo $?",
+                        "(make | tail); echo $?", "{ make | tail; }; echo $?", "make | tail >o; echo $?",
+                        "make | tail # note\necho $?", 'make | tail; echo "rc=$?"', "make | tail; [ $? -eq 0 ] && echo ok",
+                        "make | tail; if [ $? -ne 0 ]; then x; fi", "if y; then make | tail; echo $?; fi"):
+            with self.subTest(command=command):
+                self.assertTrue(self.fires(command))
+        for command in ("make | tail; echo x; echo $?", "make | tail; true; echo $?", "make | tail\nls\necho $?",
+                        'just test > log; echo "exit=$?"', "make > out.log; echo rc=$?", "make | tail & echo $?",
+                        "(make | tail); echo x; echo $?", "make | tail; echo ok; if [ $? -ne 0 ]; then x; fi"):
+            with self.subTest(command=command):
+                self.assertFalse(self.fires(command))
+
+    def test_pipe_status_says_question_mark_for_a_status_read_in_the_next_command(self) -> None:
+        for command in ("(make | tail); echo $?", "make | tail && echo \"rc=$?\"", "make | tail; echo $?"):
+            with self.subTest(command=command):
+                self.assertIn("pipestatus[1]", self.says("shell-hygiene", "pipe-status", command))
+
     def test_du_dust_quotes_the_first_path_and_reads_fine_without_one(self) -> None:
         for command, path in (("du -sh /tmp/x", "/tmp/x"), ("du -d 1 ~", "~"), ("sudo du -sh a b", "a"),
                               ("du --max-depth=1 ./src | sort -h", "./src")):

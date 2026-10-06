@@ -49,6 +49,12 @@ pipeline that ends a list, subshell or `{ }` group that the operator follows):
   `$?` anywhere in the command.
 - `|| true` and `|| :`: the status is discarded on purpose.
 
+`$?` counts as a consumer only when it reads the pipeline's own status: it appears in the next command, separated by
+`;` or a newline (a comment may sit between), or chained directly with `&&`/`||`. The pipeline may also be the last
+command of a `( )` or `{ }` group that the next command follows. A `$?` after another command in between
+(`make | tail; echo x; echo $?`), after `&`, or in `just test > log; echo "exit=$?"` (no pipeline) is not the
+pipeline's status and does not fire. A pipeline that ends a list (`x && make | tail; echo $?`) is not followed.
+
 ## A field of the matched node
 
 ```rule-example
