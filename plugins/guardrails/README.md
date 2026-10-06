@@ -111,7 +111,7 @@ is a configuration change and needs the user's explicit request (`--as-user`).
 | `docs-first` | `no-strings` (deny, retry), `binary-spelunking` (otool/nm/objdump, warn); mode `reverse-engineering` |
 | `process-safety` | `no-pkill` (pkill/killall, deny, retry), `kill-9` (warn); mode `incident` |
 | `modern-cli` | `find-fd`, `grep-rg`, `cargo-nextest` (`cargo test` except `--doc`), `du-dust`: one-line warnings that nudge toward the faster tool, never blocking, each only when its tool is installed |
-| `shell-hygiene` | `pipe-status` (a pipeline's status read from a trailing `tail`/`head`/…, deny; not when only a separator echo or `\|\| true` follows), `ps-grep-self-match` (`ps \| grep` without a guard, warn), `tail-pipe-buffered` (Monitor only: a buffered stage after `tail -f`, warn), `http-wait-exact-status` (a loop waiting for one 2xx from curl, warn) |
+| `shell-hygiene` | `pipe-status` (a pipeline's status read from a trailing `tail`/`head`/…: deny when read by `\|\|`, `$?`, a condition, `!` or an `&&` whose next command is consequential; not when only a separator echo or `\|\| true` follows), `pipe-status-chain` (other `&&`, warn), `ps-grep-self-match` (`ps \| grep` without a guard, warn), `tail-pipe-buffered` (Monitor only: a buffered stage after `tail -f`, warn), `http-wait-exact-status` (a loop waiting for one 2xx from curl, warn) |
 
 ## CLI
 

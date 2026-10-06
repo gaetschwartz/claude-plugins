@@ -206,11 +206,11 @@ class Examples(AstIsolated):
     def test_pipe_status_still_denies_an_echo_that_reports_or_expands(self) -> None:
         for consumer in ("echo found", "echo ok", 'echo "done"', 'echo "exit=$?"', 'echo "--- $x ---"', 'echo "--- $(date) ---"',
                          'echo "ok ---"', "echo ok ---", 'echo "- ok"', 'echo "x" "---"', "printf '%s\\n' done",
-                         "printf '--- %s ---\\n' \"$x\"", "echo ---; echo $?", "git status", "true"):
+                         "printf '--- %s ---\\n' \"$x\"", "echo ---; echo $?", "git push"):
             with self.subTest(consumer=consumer):
                 self.assertTrue(self.fires(f"make | tail && {consumer}"))
-        for command in ("make | tail && echo --- ; echo $?", "make | tail && echo --- && make | tail && git status",
-                        "cargo build 2>&1 | tail -3 && echo \"exit=$?\"", "git push 2>&1 | tail -2 && git status",
+        for command in ("make | tail && echo --- ; echo $?", "make | tail && echo --- && make | tail && git push",
+                        "cargo build 2>&1 | tail -3 && echo \"exit=$?\"", "git push 2>&1 | tail -2 && git push origin x",
                         "grep pat f | head && echo found", "make | tail && echo done", 'make | tail && echo "done"'):
             with self.subTest(command=command):
                 self.assertTrue(self.fires(command))
@@ -222,7 +222,7 @@ class Examples(AstIsolated):
                         "if make | tail || true; then y; fi"):
             with self.subTest(command=command):
                 self.assertFalse(self.fires(command))
-        for command in ("make | tail && true", "make | tail || false", "make | tail || true foo", "make | tail && git status || true",
+        for command in ("make | tail || false", "make | tail || true foo", "make | tail && git status || true",
                         "make | tail || echo failed", "make | tail && echo ok || true"):
             with self.subTest(command=command):
                 self.assertTrue(self.fires(command))
@@ -245,6 +245,63 @@ class Examples(AstIsolated):
             with self.subTest(command=command):
                 self.assertIn("pipestatus[1]", self.says("shell-hygiene", "pipe-status", command))
 
+    def chain(self, command: str) -> bool:
+        return matching.evaluate(command, {"r": rule_of("shell-hygiene", "pipe-status-chain")}).kinds["r"] is not None
+
+    def test_and_denies_when_the_next_command_is_consequential_and_only_warns_otherwise(self) -> None:
+        consequential = ("echo ok", 'echo "exit=$?"', "printf '%s\\n' done", "git push", "git commit -m x", "git -C d push origin x",
+                         "git add -A", "git stash", "git stash pop", "git checkout main", "git reset --hard", "git tag v1.0",
+                         "git rebase main", "git push 2>&1 | tail -2", "docker compose up -d", "docker build .",
+                         "podman run x", "docker-compose restart a", "systemctl restart x",
+                         "kill 123", "rm -rf build", "mv a b", "cp a b", "install a b", "ln -s a b", "ssh host ls",
+                         "scp a h:b", "rsync -a a h:b", "npm publish", "cargo publish", "kubectl apply -f x",
+                         "terraform apply", "wrangler deploy", "just deploy", "./run.sh", "../x/run", "./target/release/app",
+                         "target/debug/app --x", "cargo run", "cargo run --release", "bash run.sh", "python3 x.py",
+                         "ENV=1 git push", "/usr/bin/rm x", "echo ok > log")
+        quiet = ("ls", "git status", "git log --oneline -3", "git diff", "git show HEAD", "git branch", "git stash list",
+                 "git tag", "git fetch", "git log | head", "rg x | head", "cat f", "sed -n 1p f", "find . -name x",
+                 "docker ps", "docker logs x", "cargo build", "cargo test", "python3 -m pytest", "python3 -c x",
+                 "bash -c x", "cd x", "true", "make | tail", "grep x f | head", "(git push)", "systemctl status x")
+        for follower in consequential:
+            with self.subTest(follower=follower):
+                self.assertTrue(self.fires(f"make | tail && {follower}"))
+                self.assertFalse(self.chain(f"make | tail && {follower}"))
+        for follower in quiet:
+            with self.subTest(follower=follower):
+                self.assertFalse(self.fires(f"make | tail && {follower}"))
+                self.assertTrue(self.chain(f"make | tail && {follower}"))
+
+    def test_the_warning_and_the_denial_share_the_same_consumers_and_exemptions(self) -> None:
+        for command in ("(make | tail) && ls", "{ make | tail; } && ls", "x && make | tail && ls", "make | sort | cat && ls",
+                        "make | tail >log && ls"):
+            with self.subTest(command=command):
+                self.assertTrue(self.chain(command))
+                self.assertFalse(self.fires(command))
+        for command in ("(make | tail) && git push", "{ make | tail; } && git push", "x && make | tail && git push",
+                        "make | sort | cat && git push", "make | tail >log && git push"):
+            with self.subTest(command=command):
+                self.assertTrue(self.fires(command))
+                self.assertFalse(self.chain(command))
+        for command in ("make | tail || echo failed", "make | tail; echo $?", "if make | tail; then ls; fi", "! make | tail",
+                        "make | tail && echo ---", "set -o pipefail; make | tail && ls",
+                        "make | tail; echo x; ls"):
+            with self.subTest(command=command):
+                self.assertFalse(self.chain(command))
+
+    def test_a_wrapped_follower_is_judged_through_its_variant(self) -> None:
+        for follower in ("sudo systemctl stop x", "timeout 300 ./run.sh", "env A=1 git push"):
+            with self.subTest(follower=follower):
+                self.assertTrue(self.fires(f"make | tail && {follower}"))
+        for follower in ("sudo ls", "timeout 300 cargo test", "env A=1 git status"):
+            with self.subTest(follower=follower):
+                self.assertFalse(self.fires(f"make | tail && {follower}"))
+                self.assertTrue(self.chain(f"make | tail && {follower}"))
+
+    def test_the_warning_says_what_and_tests_and_names_the_last_stage(self) -> None:
+        text = self.says("shell-hygiene", "pipe-status-chain", "make | sort | cat && ls")
+        self.assertIn("`cat`", text)
+        self.assertIn("set -o pipefail", text)
+
     def test_du_dust_quotes_the_first_path_and_reads_fine_without_one(self) -> None:
         for command, path in (("du -sh /tmp/x", "/tmp/x"), ("du -d 1 ~", "~"), ("sudo du -sh a b", "a"),
                               ("du --max-depth=1 ./src | sort -h", "./src")):
@@ -265,8 +322,8 @@ class Examples(AstIsolated):
 
     def test_ps_grep_is_a_warning_and_the_others_deny(self) -> None:
         actions = {rid: str(rule_of("shell-hygiene", rid).action) for rid in cli.load_preset("shell-hygiene")["rules"]}
-        self.assertEqual(actions, {"pipe-status": "deny", "ps-grep-self-match": "warn", "tail-pipe-buffered": "warn",
-                                   "http-wait-exact-status": "warn"})
+        self.assertEqual(actions, {"pipe-status": "deny", "pipe-status-chain": "warn", "ps-grep-self-match": "warn",
+                                   "tail-pipe-buffered": "warn", "http-wait-exact-status": "warn"})
 
 
 class Installed(AstIsolated):
