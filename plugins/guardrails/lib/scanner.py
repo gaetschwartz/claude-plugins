@@ -19,6 +19,7 @@ from collections.abc import Callable, Hashable, Iterator, Sequence
 from enum import StrEnum
 from typing import NamedTuple
 
+import repair
 import rulebuilder
 from ast_grep_py import Config, SgNode, SgRoot
 from verdict import MAX_COMMAND_BYTES, Detail, Kind, Limit, UnitTree
@@ -30,6 +31,7 @@ MAX_UNITS = 128
 MAX_VARIANTS = 2048
 MAX_VARIANT_BYTES = 4 * MAX_COMMAND_BYTES
 MAX_COMBINATIONS = 64
+MAX_REPAIR_PARSES = 64
 CONTEXT_KINDS = frozenset({"pipeline", "command_substitution", "process_substitution"})
 ARGUMENT_KINDS = frozenset({"raw_string", "string", "word", "number", "concatenation", "simple_expansion", "expansion",
                             "command_substitution", "arithmetic_expansion", "process_substitution"})
@@ -67,6 +69,7 @@ class Unit(NamedTuple):
     restricted: bool
     via: tuple[str, ...] = ()
     group: tuple[int, int] | None = None
+    repaired: bool = False
 
     @property
     def candidate(self) -> bool:
@@ -445,10 +448,13 @@ def walk(command: str, with_variants: bool, visit: Callable[[Unit, SgNode], None
     charged = {(command, False, False)}
     visited = {(command, False, False, distinct(()))}
     scripts = variants = script_bytes = variant_bytes = serial = 0
+    budget = repair.Budget(MAX_REPAIR_PARSES)
     while queue:
         unit = queue.popleft()
         serial += 1
-        root = SgRoot(unit.text, "bash").root()
+        parsed = repair.parse(unit.text, budget, root_of, unit.origin is not Origin.VARIANT)
+        root = parsed.root
+        unit = unit._replace(text=parsed.text, repaired=parsed.repaired)
         visit(unit, root)
         found: Iterator[Unit] = iter(())
         try:
@@ -487,6 +493,10 @@ def walk(command: str, with_variants: bool, visit: Callable[[Unit, SgNode], None
     return None
 
 
+def root_of(text: str) -> SgNode:
+    return SgRoot(text, "bash").root()
+
+
 def compile_errors(configs: dict[str, Config]) -> dict[str, str]:
     """The reason per rule id whose config does not compile."""
     scanner = Scanner(configs)
@@ -517,4 +527,4 @@ def tree_of(unit: Unit, root: SgNode) -> UnitTree:
         node, depth = stack.pop()
         rows.append((depth, node.kind(), node.text() if node.is_leaf() or node.kind() in LEAF_KINDS else None))
         stack.extend((child, depth + 1) for child in reversed(node.named_children()))
-    return UnitTree("shell string" if unit.origin is Origin.SCRIPT else "", unit.text, rows, broken(root))
+    return UnitTree("shell string" if unit.origin is Origin.SCRIPT else "", unit.text, rows, broken(root), unit.repaired)

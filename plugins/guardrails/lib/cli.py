@@ -680,12 +680,16 @@ def cmd_rule_ast(args: Args) -> int:
     except matching.EngineError as exc:
         raise Invalid(f"the AST engine is unavailable: {exc}") from exc
     print(render.clean(f"command: {args.command}"))
-    print(f"units: {len(units)} (1 as written, {len(units) - 1} from shell strings)")
+    mended = sum(unit.repaired for unit in units)
+    shells = sum(unit.label == "shell string" for unit in units)
+    print(f"units: {len(units)} (1 as written, {shells} from shell strings" + (f", {mended} repaired)" if mended else ")"))
     if limit:
         print(f"note: the command {limit}; the hook allows it with a notice and deeper units are not shown")
     for unit in units:
         print()
-        if unit.label:
+        if unit.repaired:
+            print(render.clean(f"tree: {unit.label or 'command'}, repaired, source: {unit.src}"))
+        elif unit.label:
             print(render.clean(f"tree: {unit.label}, source: {unit.src}"))
         else:
             print("tree: command as written")

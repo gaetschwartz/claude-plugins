@@ -237,7 +237,8 @@ class Units(AstIsolated):
         cases = {
             "ls -la | grep x": 1, "git status": 1, "sudo ls": 2, "sudo a; env b": 3, "bash -c 'ls'": 2,
             "sudo bash -c 'ls'": 4, "bash -c 'bash -c ls'": 3, "eval 'eval ls'": 3, "bash -c 'sudo ls'": 3,
-            "bash -c \"bash -c 'ls'\"; sudo ls": 4,
+            "bash -c \"bash -c 'ls'\"; sudo ls": 4, "echo a | sort\nls | head": 1, "echo a | sort | cat\nfoo && bar": 2,
+            "sudo a | b | cat\nfoo && bar": 3,
         }
         for command, expected in cases.items():
             with self.subTest(command=command):

@@ -59,6 +59,7 @@ class UnitTree(NamedTuple):
     src: str
     rows: list[tuple[int, str, str | None]]
     broken: bool
+    repaired: bool = False
 
 
 class Evaluation:

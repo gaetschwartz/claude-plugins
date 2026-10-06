@@ -202,6 +202,24 @@ an `if`, a subshell or a `{ ...; }` group is not wrapped. A direct hit beats a w
 A rule is compiled when it is added, tested, listed by `status` and run by the hook. The CLI rejects one that does not
 compile (exit 2); the hook skips it and warns once per session.
 
+### Parser repairs
+
+tree-sitter-bash sometimes does not end a statement at a newline after a multi-stage pipeline: in `a | b | cat`
+newline `foo && bar` it parses `foo` as an argument of `cat`, so every rule sees a bogus argument and a bogus `&&` that
+consumes the pipeline's status ([tree-sitter-bash#347](https://github.com/tree-sitter/tree-sitter-bash/issues/347),
+open; it also appears with any 3+ stage pipeline followed by a later statement). The symptom is a newline between two
+children of one `command` node (comments aside, and not after a backslash). `lib/repair.py` inserts `;` right after the
+last real token before each such newline (before any trailing comment), parses again, and loops up to 6 times.
+
+The repaired text is accepted only when no such newline remains and it has more `command` nodes than the original;
+otherwise the unit stays as written. When accepted it replaces the original as the text of that unit (the command, or a
+shell string), so the broken tree is never matched; wrapper variants are cut from the repaired text. A text without a
+newline is parsed once and never repaired; each extra parse counts against a budget of 64 per command (`MAX_REPAIR_PARSES`),
+and a repair that cannot finish within it is skipped. `guardrails rule ast` reports it (`units: 1 (1 as written, 0 from
+shell strings, 1 repaired)`) and prints the repaired text. Rules, `{LAST}` captures and `matching.matched_statement` all
+work on the repaired text, so a replayed statement is the statement of the repaired text (`foo && pkill x`, not the
+pipeline that swallowed it); the command text that is hashed, shown or audited is always the original.
+
 ### Tree-sitter Bash node kinds that matter
 
 Verified with `guardrails rule ast '<command>'`:
