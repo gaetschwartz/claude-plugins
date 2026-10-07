@@ -13,7 +13,7 @@ import fcntl
 import json
 import os
 import sys
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from pathlib import Path
 from typing import Any, NamedTuple, TypeGuard
 
@@ -25,7 +25,7 @@ MAX_SESSIONS = 50
 HERE = Path(__file__).resolve().parent
 CLI = HERE.parent / "bin" / "guardrails"
 APP_DIR = Path("dev.gaetans.guardrails") / "claude-plugin"
-CONFIG_KEYS = ("rules", "modes", "enabled")
+CONFIG_KEYS = ("rules", "modes", "matchers", "enabled")
 
 Doc = dict[str, Any]
 
@@ -214,7 +214,7 @@ def write_state(state: Doc) -> None:
 
 
 @contextlib.contextmanager
-def locked(lock: Path) -> Iterator[None]:
+def locked(lock: Path) -> Generator[None]:
     lock.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o666)
     try:

@@ -17,7 +17,9 @@ A rule matches a command and says what happens:
   backreferences or look-around), plus atoms usable anywhere in it: `{"command": "pkill"}` (a command by name in
   any spelling, optionally with `args`, a regex over its text, and transparent to a redirect around it),
   `{"assignment": {"name": "LD_PRELOAD"}}`, `{"wrapper": true}`, `{"statement": ...}`, `{"redirect": ...}`,
-  `{"discards": "all"}`, `{"via": "ssh"}`, `{"flag": "f"}` and `{"capture": ..., "name": "LAST"}` (binds the matched node to a `{LAST}` placeholder of the message). Its keys are ANDed; `any` says "either". `wrappers: false` keeps the rule off commands reached
+  `{"discards": "all"}`, `{"via": "ssh"}`, `{"flag": "f"}`, `{"capture": ..., "name": "LAST"}` (binds the matched node to
+  a `{LAST}` placeholder of the message) and `{"matcher": "name"}` (a fragment from the config's `matchers`, shared
+  between rules). Its keys are ANDed; `any` says "either". `wrappers: false` keeps the rule off commands reached
   through `sudo`, `env`, `xargs` and the other wrappers. [references/matching.md](references/matching.md) has the
   semantics, the node kinds and the known limits.
 - `action`: `deny` (the agent gets the message and the call is blocked) or `warn` (the message arrives as context, once per
@@ -111,12 +113,12 @@ is a configuration change and needs the user's explicit request (`--as-user`).
 | `docs-first` | `no-strings` (deny, retry), `binary-spelunking` (otool/nm/objdump, warn); mode `reverse-engineering` |
 | `process-safety` | `no-pkill` (pkill/killall, deny, retry), `kill-9` (warn); mode `incident` |
 | `modern-cli` | `find-fd`, `grep-rg`, `cargo-nextest` (`cargo test` except `--doc`), `du-dust`: one-line warnings that nudge toward the faster tool, never blocking, each only when its tool is installed |
-| `shell-hygiene` | `pipe-status` (a pipeline's status read from a trailing `tail`/`head`/…: deny when read by `\|\|`, `$?`, a condition, `!` or an `&&` whose next command is consequential; not when only a separator echo or `\|\| true` follows), `pipe-status-chain` (other `&&`, warn), `ps-grep-self-match` (`ps \| grep` without a guard, warn), `tail-pipe-buffered` (Monitor only: a buffered stage after `tail -f`, warn), `http-wait-exact-status` (a loop waiting for one 2xx from curl, warn) |
+| `shell-hygiene` | `pipe-status` (a pipeline's status read from a trailing `tail`/`head`/…: deny when read by `\|\|`, `$?`, a condition or `!`), `pipe-status-chain` (the same pipeline before `&&`, warn), `ps-grep-self-match` (`ps \| grep` without a guard, warn), `tail-pipe-buffered` (Monitor only: a buffered stage after `tail -f`, warn), `http-wait-exact-status` (a loop waiting for one 2xx from curl, warn) |
 
 ## CLI
 
 An agent runs `guardrails <verb>` (the plugin's `bin/` is on the Bash tool's PATH); from your own terminal use `python3
-<plugin dir>/lib/guard.py <verb>`. Verbs: `status`, `rule add|set|rm|test|ast`, `mode declare|undeclare|on|off`, `preset
+<plugin dir>/lib/guard.py <verb>`. Verbs: `status`, `rule add|set|rm|test|ast`, `matcher add|rm`, `mode declare|undeclare|on|off`, `preset
 list|show|install`, `stats`, `audit`, `engine status|ensure`, `enable|disable` (`--scope project` for the project rules); changes take `--scope
 global|project|managed`. When run by an agent (`CLAUDECODE` set), configuration changes need `--as-user` and `enable` /
 `disable` are refused. `rule test` dry-runs a draft (`--json`) or installed (`--id`) rule against sample commands without

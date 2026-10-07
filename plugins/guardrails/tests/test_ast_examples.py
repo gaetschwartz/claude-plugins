@@ -14,7 +14,7 @@ import policy
 
 BLOCK = re.compile(r"^```rule-example\n(.*?)\n```$", re.MULTILINE | re.DOTALL)
 REQUIRED = {"id", "title", "rule", "action", "catch", "pass"}
-OPTIONAL = {"tree", "wrappers", "when", "message", "messages", "cases", "says"}
+OPTIONAL = {"tree", "wrappers", "when", "message", "messages", "cases", "says", "matchers"}
 NEW_SKILL = ROOT / "skills" / "new" / "SKILL.md"
 
 
@@ -29,7 +29,8 @@ def examples() -> list[tuple[Path, dict[str, Any]]]:
 def rule_of(example: dict[str, Any]) -> policy.Rule:
     extra = {key: example[key] for key in ("when", "messages") if key in example}
     return policy.Rule.from_json({"match": example["rule"], "message": example.get("message", "m"),
-                                  "action": example["action"], "wrappers": example.get("wrappers", True), **extra})
+                                  "action": example["action"], "wrappers": example.get("wrappers", True), **extra},
+                                 example.get("matchers"))
 
 
 class ExampleShape(unittest.TestCase):

@@ -6,7 +6,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from helpers import GREP_RECURSIVE, MAINTAINER, AstIsolated, real_rules
+from helpers import GREP_RECURSIVE, MAINTAINER, AstIsolated, real_matchers, real_rules
 
 import matching
 import policy
@@ -74,7 +74,7 @@ class JoinedRunners(AstIsolated):
         })
 
     def test_a_remote_wait_loop_is_judged_like_a_local_one(self) -> None:
-        rules = policy.effective_rules({}, {"rules": real_rules()}, {})
+        rules = policy.effective_rules({}, {"rules": real_rules(), "matchers": real_matchers()}, {})
         loop = 'while pgrep -f "docker build -f Dockerfile.v0.29"; do sleep 20; done; echo done'
         for command in (loop, f"ssh zgx '{loop}'", f"watch '{loop}'"):
             with self.subTest(command=command):
@@ -191,6 +191,13 @@ class PatternShapes(AstIsolated):
             with self.subTest(command=command):
                 self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
 
+    def test_the_words_a_tolerant_pattern_skips_are_assignments_never_arguments(self) -> None:
+        rule = rule_of({"pattern": "cargo test $$$"})
+        for command, expected in {"cargo test -p x": "direct", "A=1 B=2 cargo test": "direct", "cargo build test": None,
+                                  "cargo nextest run test": None, "cargo build --features test": None}.items():
+            with self.subTest(command=command):
+                self.assertEqual(matching.evaluate(command, {"r": rule}).kinds["r"], expected)
+
     def test_an_any_member_without_a_command_pattern_survives_next_to_one_with(self) -> None:
         rule = rule_of({"any": [{"pattern": "pgrep $$$"}, {"kind": "command", "regex": r"^xargs\b.*\bkill\b"}]})
         for command, expected in {"pgrep x": "direct", "xargs kill": "direct", "/usr/bin/pgrep x": "direct",
@@ -254,7 +261,7 @@ class RealRuleSet(AstIsolated):
 
     def setUp(self) -> None:
         super().setUp()
-        self.rules = policy.effective_rules({}, {"rules": real_rules()}, {})
+        self.rules = policy.effective_rules({}, {"rules": real_rules(), "matchers": real_matchers()}, {})
 
     def cost(self, command: str) -> tuple[int, int]:
         """(texts parsed, bytes parsed) for one command, in process."""

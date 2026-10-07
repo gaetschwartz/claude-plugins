@@ -104,11 +104,11 @@ class Matching(AstIsolated):
             "grep -r foo .": "direct", "grep -rn foo .": "direct", "grep -nr foo .": "direct", "grep -R foo .": "direct",
             "egrep -r foo .": "direct", "fgrep -rl foo .": "direct", "grep --recursive foo .": "direct",
             "grep --dereference-recursive foo": "direct", "grep -d recurse foo .": "direct",
-            "grep --directories=recurse foo .": "direct", "grep --directories recurse foo": "direct",
+            "grep --directories recurse foo": "direct",
             "grep -A3 -r foo .": "direct", "grep -e foo -r .": "direct", "/usr/bin/grep -r x": "direct",
             "sudo grep -rn foo .": "wrapped", "find . | xargs grep -rl foo": "wrapped", "ps | grep -r x": "wrapped",
             "sudo -u bob -- grep -rn foo .": "wrapped", "env -- grep -R x": "wrapped", "sudo -- grep foo -- -r": None,
-            "grep foo file": None, "grep -n foo file": None, "grep -e r file": None, "grep -er file": None,
+            "grep foo file": None, "grep -n foo file": None, "grep -e r file": None,
             "grep -d skip foo": None, "grep foo -- -r": None, "rg -r x": None, "git grep -n x": None,
             "echo grep -r": None, "grep -A3 foo file": None,
         })

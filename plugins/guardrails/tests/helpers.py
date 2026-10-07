@@ -36,6 +36,14 @@ def real_rules() -> dict[str, Any]:
     for path in sorted((ROOT / "presets").glob("*.json")):
         rules.update({f"{path.stem}-{rid}": rule for rid, rule in json.loads(path.read_text())["rules"].items()})
     return rules
+
+
+def real_matchers() -> dict[str, Any]:
+    """The matchers every preset defines, as a config's `matchers` table."""
+    return {name: fragment for path in sorted((ROOT / "presets").glob("*.json"))
+            for name, fragment in json.loads(path.read_text()).get("matchers", {}).items()}
+
+
 DEV_DATA = Path.home() / ".cache" / "guardrails-runtime-dev"
 SKIP_RUNTIME = "the managed runtime could not be installed ({reason}); tests that run the real hook are skipped"
 _RUNTIME: list[bootstrap.Outcome] = []

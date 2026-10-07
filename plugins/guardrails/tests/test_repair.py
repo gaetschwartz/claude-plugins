@@ -120,9 +120,9 @@ class NewlineRepair(RepairCase):
         self.assertIsNone(matching.evaluate(GRAMMAR_BUG, {"r": swallowed}).kinds["r"])
         self.assertIsNotNone(matching.evaluate("echo a | sort | cat foo", {"r": swallowed}).kinds["r"])
         preset = json.loads((ROOT / "presets" / "shell-hygiene.json").read_text())
-        pipe_status = policy.Rule.from_json(preset["rules"]["pipe-status"])
-        self.assertIsNone(matching.evaluate("ls | sort | cat\nfoo && echo ok", {"r": pipe_status}).kinds["r"])
-        self.assertIsNotNone(matching.evaluate("make | sort | cat\nmake | tail && echo ok", {"r": pipe_status}).kinds["r"])
+        chain = policy.Rule.from_json(preset["rules"]["pipe-status-chain"], preset["matchers"])
+        self.assertIsNone(matching.evaluate("ls | sort | cat\nfoo && echo ok", {"r": chain}).kinds["r"])
+        self.assertIsNotNone(matching.evaluate("make | sort | cat\nmake | tail && echo ok", {"r": chain}).kinds["r"])
 
     def test_the_matched_statement_is_the_one_in_the_repaired_text(self) -> None:
         rule = rule_of({"command": "pkill"})

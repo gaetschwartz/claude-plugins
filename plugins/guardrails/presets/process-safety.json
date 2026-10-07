@@ -11,7 +11,16 @@
     },
     "kill-9": {
       "description": "SIGKILL without trying SIGTERM first",
-      "match": {"command": "kill", "args": "(^|\\s)-(9|KILL|SIGKILL)(\\s|$)|(^|\\s)-s\\s+(9|KILL|SIGKILL)(\\s|$)"},
+      "match": {
+        "any": [
+          {"pattern": "kill -9 $$$"},
+          {"pattern": "kill -KILL $$$"},
+          {"pattern": "kill -SIGKILL $$$"},
+          {"pattern": "kill -s 9 $$$"},
+          {"pattern": "kill -s KILL $$$"},
+          {"pattern": "kill -s SIGKILL $$$"}
+        ]
+      },
       "action": "warn",
       "message": "SIGKILL gives the process no chance to clean up (temp files, locks, child processes). Send SIGTERM first (`kill <pid>`) and escalate only if it does not exit."
     }

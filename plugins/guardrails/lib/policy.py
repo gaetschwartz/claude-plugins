@@ -4,12 +4,14 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Mapping
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, NamedTuple, Self
 
 if TYPE_CHECKING:
     from messages import Case
+    from rulebuilder import Inliner
 
 MAX_AST_BYTES = 16384  # bounds nesting too: ast-grep overflows its stack past about 4000 levels
 RULE_KEYS = ("match", "wrappers", "message", "messageShort", "messages", "action", "retry", "enabled", "modes", "when",
@@ -21,6 +23,8 @@ REMOVED_FIELDS = {
 UNKNOWN_FIELD_HINT = ("this version does not know it; reinstall the preset that added it (`guardrails preset install "
                       "<name>`) or remove the field")
 LAYERS = ("managed", "global", "project")
+NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
+PRESET_MATCHER_PREFIX = "preset."
 
 
 class Invalid(Exception):
@@ -64,10 +68,10 @@ def json_modes(raw: object) -> list[str]:
     return [m for m in modes if isinstance(m, str)] if isinstance(modes, list) else []
 
 
-def match_of(raw: object) -> dict[str, Any]:
+def match_of(raw: object, inliner: Inliner | None = None) -> dict[str, Any]:
     import rulebuilder
 
-    match = rulebuilder.checked(raw)
+    match = rulebuilder.checked((inliner or rulebuilder.Inliner({})).rule(raw))
     if (size := ast_size(match)) > MAX_AST_BYTES:
         raise Invalid(f"'match' is {size} bytes, over the {MAX_AST_BYTES // 1024} KiB limit; split it into rules")
     rulebuilder.check_regexes(match)
@@ -86,9 +90,12 @@ class Rule(NamedTuple):
     wrappers: bool = True
     when: dict[str, Any] | None = None
     messages: tuple[Case, ...] = ()
+    matchers: tuple[str, ...] = ()
 
     @classmethod
-    def from_json(cls, raw: object) -> Self:
+    def from_json(cls, raw: object, matchers: Mapping[str, Any] | None = None) -> Self:
+        """The rule with every matcher reference of `match` and of the message cases' `matches` expanded from this
+        layer's `matchers`; `matchers` on the result names the ones it used."""
         import conditions
         import messages as texts
         import rulebuilder
@@ -104,7 +111,8 @@ class Rule(NamedTuple):
             raise Invalid("'message' is required")
         if "messageShort" in raw and not isinstance(raw["messageShort"], str):
             raise Invalid("'messageShort' must be a string")
-        match = match_of(raw.get("match"))
+        inliner = rulebuilder.Inliner(matchers or {})
+        match = match_of(raw.get("match"), inliner)
         try:
             action, retry = Action(raw.get("action", "deny")), Retry(raw.get("retry", "none"))
         except ValueError:
@@ -117,10 +125,11 @@ class Rule(NamedTuple):
         when = raw.get("when")
         if "when" in raw:
             conditions.check(when, "when")
-        cases = texts.cases_of(raw["messages"]) if "messages" in raw else ()
+        cases = texts.cases_of(raw["messages"], inliner=inliner) if "messages" in raw else ()
         description = raw.get("description")
         rule = cls(match, message, action, retry, raw.get("enabled", True), modes, raw.get("messageShort"),
-                   description if isinstance(description, str) else None, raw.get("wrappers", True), when, cases)
+                   description if isinstance(description, str) else None, raw.get("wrappers", True), when, cases,
+                   tuple(sorted(inliner.used)))
         texts.check_texts(texts.rule_texts(rule), any(conditions.bin_atoms(when)),
                            lambda: rulebuilder.bound_names(match))
         return rule
@@ -247,7 +256,7 @@ def _entries(doc: object, key: str) -> dict[str, dict[str, Any]]:
 
 
 def origins(key: str, managed: object, global_config: object, project_config: object) -> dict[str, list[str]]:
-    """Entry id (of 'rules' or 'modes') → the layers that define it, highest precedence first."""
+    """Entry id (of 'rules', 'modes' or 'matchers') → the layers that define it, highest precedence first."""
     out: dict[str, list[str]] = {}
     for layer, doc in zip(LAYERS, (managed, global_config, project_config), strict=True):
         for name in _entries(doc, key):
@@ -275,16 +284,16 @@ def effective(managed: object, global_config: object, project_config: object) ->
     rules: dict[str, Rule] = {}
     problems: dict[str, str] = {}
 
-    def add(rid: str, raw: Mapping[str, Any]) -> None:
+    def add(rid: str, raw: Mapping[str, Any], matchers: Mapping[str, Any]) -> None:
         try:
             if "#" in rid:
                 raise Invalid(f"rule id {rid!r} must not contain '#': it separates the id from the rule hash in denials")
-            rules[rid] = Rule.from_json(raw)
+            rules[rid] = Rule.from_json(raw, matchers)
         except Invalid as exc:
             problems[rid] = str(exc)
 
     for rid, raw in managed_rules.items():
-        add(rid, raw)
+        add(rid, raw, view(managed, "matchers"))
         if rid in rules:
             rules[rid] = rules[rid]._replace(modes=tuple(m for m in rules[rid].modes if m in declared))
     for doc in [global_config, *([project_config] if project_enabled(project_config) else [])]:
@@ -294,7 +303,7 @@ def effective(managed: object, global_config: object, project_config: object) ->
             if rid in rules:
                 rules[rid] = merge_rule(rules[rid], raw, rid not in managed_rules)
             else:
-                add(rid, raw)
+                add(rid, raw, view(doc, "matchers"))
     return Effective(rules, problems)
 
 
@@ -323,7 +332,7 @@ def effective_modes(managed: object, global_config: object, project_config: obje
 
 def _shape_problems(path: str, doc: object) -> list[str]:
     problems = []
-    for key in ("rules", "modes"):
+    for key in ("rules", "modes", "matchers"):
         if not isinstance(doc, dict) or key not in doc:
             continue
         table = doc[key]
@@ -335,21 +344,30 @@ def _shape_problems(path: str, doc: object) -> list[str]:
     return problems
 
 
+def matcher_problems(label: str, matchers: Mapping[str, Any]) -> list[str]:
+    """One problem per matcher of a layer that does not expand and compile (a rule using it is invalid anyway)."""
+    import rulebuilder
+
+    return [f"{label} matcher {name} is invalid: {why}" for name, why in rulebuilder.matcher_problems(matchers).items()]
+
+
 def managed_layer(doc: object, path: str) -> tuple[dict[str, Any], list[str]]:
     """The managed file as a layer, and what is wrong with it."""
     problems = _shape_problems(path, doc)
     modes = _entries(doc, "modes")
+    matchers = view(doc, "matchers")
+    problems += matcher_problems("managed", matchers)
     rules: dict[str, dict[str, Any]] = {}
     for rid, raw in _entries(doc, "rules").items():
         try:
-            rule = Rule.from_json(raw)
+            rule = Rule.from_json(raw, matchers)
         except Invalid as exc:
             problems.append(f"managed rule {rid} is invalid and ignored: {exc}")
             continue
         problems += [f"managed rule {rid} lists mode '{m}', which the managed file does not declare, so it cannot "
                      "suspend the rule" for m in rule.modes if m not in modes]
         rules[rid] = {**raw, "modes": [m for m in rule.modes if m in modes]}
-    return {"rules": rules, "modes": modes}, problems
+    return {"rules": rules, "modes": modes, "matchers": matchers}, problems
 
 
 def active_modes(modes: Mapping[str, Mode], session: Session) -> dict[str, Activation]:

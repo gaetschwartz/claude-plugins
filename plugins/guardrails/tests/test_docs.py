@@ -50,12 +50,16 @@ class MatchingClaims(AstIsolated):
         self.assertTrue(matches({"match": found[3], "message": "m"}, "'ps' x | xargs kill"))
         idioms = text.split("### Idioms\n", 1)[1].split("\n\nBash and Monitor", 1)[0]
         rules = [json.loads(m) for m in re.findall(r"`(\{\"(?:command|kind|pattern)\".*?\})`", idioms)]
-        self.assertEqual(len(rules), 7)
+        self.assertEqual(len(rules), 9)
         for match in rules:
             with self.subTest(match=match):
                 policy.Rule.from_json({"match": match, "message": "m"})
         self.assertTrue(matches({"match": rules[3], "message": "m"}, "kill $(pgrep x)"))
-        self.assertTrue(matches({"match": rules[6], "message": "m"}, "DYLD_INSERT_LIBRARIES=/a ls"))
+        self.assertTrue(matches({"match": rules[8], "message": "m"}, "DYLD_INSERT_LIBRARIES=/a ls"))
+        word = {"match": {"command": "grep", "has": rules[6]}, "message": "m"}
+        self.assertTrue(matches(word, "grep -d recurse x") and not matches(word, "grep -d recurser x"))
+        self.assertTrue(matches({"match": rules[7], "message": "m"}, "echo ${PIPESTATUS[0]} $PIPESTATUS"))
+        self.assertFalse(matches({"match": rules[7], "message": "m"}, "echo ${pipestatus[0]} ${PIPESTATUS_X}"))
         no_wrappers = {"match": {"command": "pkill"}, "wrappers": False, "message": "m"}
         for command, expected in (("pkill x", True), ("a | pkill x", True), ("echo $(pkill x)", True),
                                   ("bash -c 'pkill x'", True), ("sudo pkill x", False), ("env A=1 pkill x", False),

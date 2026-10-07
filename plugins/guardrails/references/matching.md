@@ -7,7 +7,7 @@ The runtime, its trust model and what happens when the engine fails are in [runt
 
 ast-grep does all the lexing and parsing, in process through the `ast-grep-py` library: guardrails writes no shell parser.
 A rule's `match` is one ast-grep rule object, plus nine guardrails atoms (`command`, `assignment`, `wrapper`, `statement`, `redirect`, `discards`, `via`, `flag`, `capture`) that are
-expanded into plain ast-grep rules when the rule is compiled. It is matched on the tree-sitter Bash parse of the command
+expanded into plain ast-grep rules when the rule is compiled, and `matcher` references to shared fragments. It is matched on the tree-sitter Bash parse of the command
 as written, of its wrapper variants and of each shell string, in a bounded checker.
 
 Matcher ladder, narrowest first: `{"command": "pkill"}`, then a `command` with `args`, then a `pattern` plus `inside` /
@@ -77,7 +77,7 @@ tested or loaded, exit 2):
   command typed directly has an empty chain.
 - `{"flag": ["f", "follow"]}`: a command with any of these flags after its name, written without the dash. One letter is
   a short flag inside any `-abc` cluster (digits are skipped; value-taking options are not told apart: `-sofoo` reads as s,
-  o, f, o), a longer name is `--name` or `--name=...`, the word may be quoted; a word after `--` is no flag.
+  o, f, o, and `grep -er x` as recursive; `--name=value` matches whatever the value), a longer name is `--name` or `--name=...`, the word may be quoted; a word after `--` is no flag.
 
 - `{"capture": <rule>, "name": "LAST"}`: the rule, and the node it matched bound to `LAST`, which the message writes as
   `{LAST}`. It stands for `{"all": [<rule>, {"pattern": "$LAST"}]}` (a bare metavariable matches any node, so it binds
@@ -91,6 +91,20 @@ tested or loaded, exit 2):
   `follows` keeps the redirect transparency below; as the rule of a sibling relation it binds the statement (`make
   >o`), with `field` the command's name. A capture in a message case's `matches` binds nothing and is refused. See
   [ast/captures.md](ast/captures.md).
+
+### Matchers
+
+A matcher is a named fragment of `match`, defined once in the config's top-level `"matchers": {"operand": {"kind":
+"word", "regex": "^[^-+]"}}` (also in presets and the managed file) and used as `{"matcher": "operand"}` wherever an
+atom goes: at the top, under `any` / `all` / `not`, as the rule of a relation or `stopBy`, inside a `capture`, in a
+message case's `matches`, inside another matcher. Keys next to a reference are ANDed with the fragment. References are
+expanded when the rule is loaded (at most 2000 nodes per rule), so the hash, `status` and `rule test` show the expanded
+rule and a changed matcher changes the hash of every rule using it. No parameters, overriding or recursion: a missing
+name or a cycle makes the rule invalid (`rule add` / `rule test` exit 2, `status` names it). A layer resolves references
+from its own `matchers` only, so a repo's project config cannot depend on a user's matchers or redefine a managed one.
+`guardrails matcher add|rm <name>` edits them (add a matcher after those it refers to). `preset install` writes the
+matchers its rules use as `preset.<name>`, replacing them like rules; that prefix is reserved, so a user matcher never
+collides. `status` lists them and the rules using each.
 
 ### Redirects wrap statements
 
@@ -263,6 +277,8 @@ and quoted strings. Use it for dataflow across commands that no relation express
 - Only in a context: `{"command": "pgrep", "inside": {"any": [{"kind": "command_substitution"}, {"kind": "pipeline"}], "stopBy": "end"}}`.
 - Unless guarded: `{"pattern": "npm publish $$$", "not": {"inside": {"kind": "if_statement", "stopBy": "end"}}}`.
 - Never after a specific step: `{"pattern": "git push $$$", "not": {"follows": {"pattern": "git pull $$$", "stopBy": "end"}}}`.
+- The exact text of one word or variable, with no regex: `{"pattern": {"context": "\"$a\" recurse", "selector": "word"}}`,
+  `{"pattern": {"context": "${PIPESTATUS}", "selector": "variable_name"}}` (an UPPERCASE `$NAME` is a metavariable).
 - A dangerous prefix: `{"kind": "command", "has": {"assignment": {"name": {"regex": "^(LD_PRELOAD|DYLD_INSERT_LIBRARIES)$"}}}}`.
 - Only as typed, never through a wrapper: `{"match": {"command": "pkill"}, "wrappers": false, ...}`.
 
@@ -283,7 +299,7 @@ itself start without a tool call and are not covered.
   project, or managed) or for this session. An agent may switch on a session mode only when it is declared with
   `agentMayEnable` (and a rule suspended by an agent-enabled mode is reported to the user).
 - The deny text starts with `[guardrails:<id>#<hash>]` (`<id>#<hash> (managed)` for a managed rule). The hash is eight
-  hex digits of the effective rule as enforced: `match`, `wrappers`, `when`, `action`, `retry`, `message`, `messageShort`
+  hex digits of the effective rule as enforced: `match` (matchers expanded), `wrappers`, `when`, `action`, `retry`, `message`, `messageShort`
   and `messages` (so rewording changes it), never `description`, `enabled`, `modes` or who set it. A rule id cannot
   contain `#`. Warn texts carry the same marker.
 

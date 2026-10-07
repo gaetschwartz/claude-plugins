@@ -49,7 +49,8 @@ or `$( )`) and at least 3 that must pass (a look-alike, `man X`, `echo "X"`, a h
 mismatches; a `message` that names the alternative. When the alternative is a tool that may be missing or installed
 under another name, add `"when": {"bin": [...]}` and write `{found}` for its name; when the advice differs by command
 shape, add `messages` cases rather than a second rule with the same matcher; `{ARG}` puts a pattern's `$ARG`, or a node bound by a `capture` atom (`references/ast/captures.md`), in the text,
-and literal braces are `{{` `}}` (writing-rules.md, step 8).
+and literal braces are `{{` `}}` (writing-rules.md, step 8). A fragment two rules share is a matcher
+(`guardrails matcher add`, `{"matcher": "name"}`; matching.md, Matchers).
 
 Three examples (each block is machine-checked: every `catch` command matches, every `pass` command does not).
 

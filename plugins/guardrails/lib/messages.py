@@ -14,6 +14,7 @@ import policy
 
 if TYPE_CHECKING:
     from ast_grep_py import SgNode
+    from rulebuilder import Inliner
 
 FOUND = "found"
 MAX_CAPTURES = 8
@@ -77,7 +78,7 @@ def check_texts(texts: list[tuple[str, str]], has_bin: bool, bound: Callable[[],
         raise policy.Invalid(f"the messages use {len(captures)} capture placeholders; at most {MAX_CAPTURES}")
 
 
-def cases_of(raw: object, where: str = "messages") -> tuple[Case, ...]:
+def cases_of(raw: object, where: str = "messages", inliner: Inliner | None = None) -> tuple[Case, ...]:
     import conditions
 
     if not isinstance(raw, list) or not raw:
@@ -95,8 +96,9 @@ def cases_of(raw: object, where: str = "messages") -> tuple[Case, ...]:
             raise policy.Invalid(f"'{at}.text' must be a non-empty string")
         if "messageShort" in case and not isinstance(case["messageShort"], str):
             raise policy.Invalid(f"'{at}.messageShort' must be a string")
-        conditions.check(case["when"], f"{at}.when", hit=True)
-        out.append(Case(case["when"], case["text"], case.get("messageShort")))
+        when = conditions.inlined(case["when"], inliner, f"{at}.when") if inliner else case["when"]
+        conditions.check(when, f"{at}.when", hit=True)
+        out.append(Case(when, case["text"], case.get("messageShort")))
     return tuple(out)
 
 

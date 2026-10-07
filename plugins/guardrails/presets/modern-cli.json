@@ -3,12 +3,7 @@
   "rules": {
     "find-fd": {
       "description": "find when fd is installed",
-      "match": {
-        "command": "find",
-        "not": {
-          "via": "ssh"
-        }
-      },
+      "match": {"command": "find", "not": {"via": "ssh"}},
       "when": {
         "bin": [
           "fd",
@@ -22,59 +17,17 @@
       "description": "recursive grep when ripgrep is installed",
       "match": {
         "all": [
-          {
-            "command": [
-              "grep",
-              "egrep",
-              "fgrep"
-            ]
-          },
+          {"command": ["grep", "egrep", "fgrep"]},
           {
             "any": [
+              {"flag": ["r", "R", "recursive", "dereference-recursive"]},
               {
-                "has": {
-                  "regex": "^(?:-[A-Za-z&&[^efmABCdD]]*[rR][A-Za-z]*|-drecurse|--recursive|--dereference-recursive|--directories=recurse)$",
-                  "not": {
-                    "follows": {
-                      "regex": "^--$",
-                      "stopBy": {
-                        "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$"
-                      }
-                    }
-                  },
-                  "follows": {
-                    "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$",
-                    "stopBy": "end"
-                  }
-                }
-              },
-              {
-                "has": {
-                  "regex": "^(?:-d|--directories)$",
-                  "precedes": {
-                    "regex": "^recurse$"
-                  },
-                  "not": {
-                    "follows": {
-                      "regex": "^--$",
-                      "stopBy": {
-                        "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$"
-                      }
-                    }
-                  },
-                  "follows": {
-                    "regex": "^[\"']?(?:[^\\s]*/)?(?:grep|egrep|fgrep)[\"']?$",
-                    "stopBy": "end"
-                  }
-                }
+                "flag": ["d", "directories"],
+                "has": {"pattern": {"context": "\"$a\" recurse", "selector": "word"}}
               }
             ]
           },
-          {
-            "not": {
-              "via": "ssh"
-            }
-          }
+          {"not": {"via": "ssh"}}
         ]
       },
       "when": {
@@ -87,19 +40,12 @@
       "description": "cargo test when cargo-nextest is installed (doctests exempt)",
       "match": {
         "command": "cargo",
-        "args": "(^|\\s)(\\S*/)?cargo(\\s+(\\+\\S+|--?(locked|offline|frozen|q|quiet|v|vv|verbose)))*\\s+test(\\s|$)",
-        "not": {
-          "has": {
-            "regex": "^--doc$"
-          }
+        "has": {
+          "pattern": {"context": "\"$a\" test", "selector": "word"},
+          "not": {"follows": {"matcher": "preset.operand", "stopBy": "end"}}
         },
-        "all": [
-          {
-            "not": {
-              "via": "ssh"
-            }
-          }
-        ]
+        "not": {"flag": "doc"},
+        "all": [{"not": {"via": "ssh"}}]
       },
       "when": {
         "bin": "cargo-nextest"
@@ -111,26 +57,10 @@
       "description": "du when dust is installed",
       "match": {
         "any": [
-          {
-            "command": "du",
-            "has": {
-              "capture": {
-                "kind": "word",
-                "regex": "^[^-]",
-                "not": {
-                  "regex": "^[0-9]+[KMGTB]?$"
-                }
-              },
-              "name": "PATH"
-            }
-          },
-          {
-            "command": "du"
-          }
+          {"command": "du", "has": {"capture": {"matcher": "preset.operand"}, "name": "PATH"}},
+          {"command": "du"}
         ],
-        "not": {
-          "via": "ssh"
-        }
+        "not": {"via": "ssh"}
       },
       "when": {
         "bin": "dust"
@@ -139,21 +69,14 @@
       "message": "Prefer `dust` over `du` (sorted, with bars): `dust -d 1` for one level; see `dust --help`.",
       "messages": [
         {
-          "when": {
-            "matches": {
-              "has": {
-                "kind": "word",
-                "regex": "^[^-]",
-                "not": {
-                  "regex": "^[0-9]+[KMGTB]?$"
-                }
-              }
-            }
-          },
+          "when": {"matches": {"has": {"matcher": "preset.operand"}}},
           "text": "Prefer `dust` over `du` (sorted, with bars): `dust -d 1 {PATH}` for one level; see `dust --help`."
         }
       ]
     }
+  },
+  "matchers": {
+    "preset.operand": {"kind": "word", "regex": "^[^-+]"}
   },
   "modes": {},
   "examples": {
@@ -195,7 +118,11 @@
         "cd crates/x && cargo test",
         "RUST_BACKTRACE=1 cargo +nightly test",
         "sudo cargo test -q",
-        "cargo test 2>&1 | tail -20"
+        "cargo test 2>&1 | tail -20",
+        "cargo +stable test",
+        "cargo -q test -p x",
+        "cargo --locked test",
+        ">/dev/null cargo test"
       ],
       "pass": [
         "cargo test --doc",
@@ -205,7 +132,9 @@
         "cargo build --features test",
         "echo cargo test",
         "man cargo-test",
-        "ssh host cargo test"
+        "ssh host cargo test",
+        "cargo new test",
+        "cargo build --locked --features test"
       ]
     },
     "du-dust": {

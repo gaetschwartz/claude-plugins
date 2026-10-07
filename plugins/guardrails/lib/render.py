@@ -73,6 +73,13 @@ class ModeRow:
 
 
 @dataclass
+class MatcherRow:
+    name: str
+    layers: list[str]
+    used_by: list[str]
+
+
+@dataclass
 class Status:
     files: list[str]
     hook_on: bool
@@ -82,6 +89,7 @@ class Status:
     problems: list[str]
     no_rules: str = "No rules installed. guardrails:setup installs presets."
     notes: list[str] = field(default_factory=list)
+    matchers: list[MatcherRow] = field(default_factory=list)
 
 
 def char_width(ch: str) -> int:
@@ -131,8 +139,13 @@ def compact(value: object) -> str:
     return json.dumps(value, separators=(",", ":"), ensure_ascii=False)
 
 
+def uses_matchers(rule: policy.Rule) -> str:
+    return f"matchers {words(list(rule.matchers))}" if rule.matchers else ""
+
+
 def describe_match(rule: policy.Rule) -> str:
-    return span(compact(rule.match)) + ("" if rule.wrappers else " · not through wrappers")
+    extra = [text for text in (uses_matchers(rule), "" if rule.wrappers else "not through wrappers") if text]
+    return " · ".join([span(compact(rule.match)), *extra])
 
 
 def describe_conditions(rule: policy.Rule) -> str:
@@ -140,6 +153,8 @@ def describe_conditions(rule: policy.Rule) -> str:
     parts = [f"when {span(compact(rule.when))}"] if rule.when is not None else []
     if rule.messages:
         parts.append(plural(len(rule.messages), "message case"))
+    if rule.matchers:
+        parts.append(uses_matchers(rule))
     return " · ".join(parts)
 
 
@@ -158,7 +173,7 @@ def texts_under(node: object, keys: tuple[str, ...]) -> list[str]:
     out: list[str] = []
     for key, value in node.items():
         if key in keys and isinstance(value, str | dict):
-            out.append(value if isinstance(value, str) else str(policy.view(value, "context")))
+            out.append(value if isinstance(value, str) else str(value.get("context", "")))
         else:
             out += texts_under(value, keys)
     return out
@@ -243,6 +258,11 @@ def status_listing(status: Status) -> str:
         for row, cell in zip(status.modes, padded_rows([m.name for m in status.modes])):
             lines.append(f"- {cell} {clean(row.on)} · agent may enable: {'yes' if row.agent_may_enable else 'no'} · "
                          f"{'+'.join(row.layers)}")
+    if status.matchers:
+        lines += ["", "**Matchers**"]
+        for row, cell in zip(status.matchers, padded_rows([m.name for m in status.matchers])):
+            used = plural(len(row.used_by), "rule")
+            lines.append(f"- {cell} {'+'.join(row.layers)} · used by {used}" + (f": {words(row.used_by)}" if row.used_by else ""))
     if status.problems:
         lines += ["", "**Problems**"]
         lines += [f"- {prose(p)}" for p in status.problems]

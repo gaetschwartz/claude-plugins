@@ -31,59 +31,16 @@ The capture sits under `has` of the pipeline, around the last stage (`nthChild` 
 "name"` binds the stage's name instead of the whole stage, so `{LAST}` is `tail`, not `tail -3`. A redirect on the
 last stage (`>log`) does not change the name. When `&&`, `||` or `;` follows a pipeline of three or more stages,
 tree-sitter nests every stage after the first, and what follows, in a `list` inside the first stage's pipeline; the
-pipeline that matches is then that inner one, and its last stage is still the real last stage. A rule that must judge
-the first stage (`pipe-status` exempts display-only first commands) goes up from the inner pipeline through those
-lists: `{"inside": {"kind": "pipeline", "stopBy": {"not": {"kind": "list"}}}}`.
+pipeline that matches is then that inner one, and its last stage is still the real last stage.
 
-`pipe-status` also leaves a status alone when the consumer is not a verdict. Two consumers are exempt, judged on the
-node after the `&&`/`||` that follows the pipeline (the exemption is written twice: from the pipeline, and from a
-pipeline that ends a list, subshell or `{ }` group that the operator follows):
-
-- A display echo: an `echo` or `printf` with no expansion (`simple_expansion`, `expansion`, `command_substitution`,
-  `arithmetic_expansion`, none below it), whose arguments are a separator or a label, by regex on the command's text. A
-  separator is two or more of `-=*_~`, or one to six `#`. The argument is empty (`echo`, `echo ""`, `printf '\n'`), or
-  starts (after `\n` escapes and spaces) with a separator and continues with any text that has no quote, backslash
-  (other than `\n`, `\t`) or backtick, quoted or not: `echo ---`, `echo "====="`, `echo "=====PYPROJECT====="`,
-  `echo "--- listing ---"`, `echo "### Section"`, `printf '=== %s ===\n' x` (extra `printf` arguments must be plain
-  words). Words with no separator in front (`echo done`, `echo "ok ---"`) report a result and stay denied, as does a
-  `$?` anywhere in the command.
-- `|| true` and `|| :`: the status is discarded on purpose.
-
-`pipe-status` is two rules over the same pipelines. `pipe-status` denies when the consumer is `||`, an adjacent `$?`, an
-`if`/`while`/`until`/`elif` condition, `!`, or an `&&` whose next command is consequential. `pipe-status-chain` warns on
-every other `&&` whose next command is not consequential and not a wrapper; it has `wrappers: false`, because the
-wrapper variants read the words of `sudo ls` as commands of their own (`pipe-status` judges `sudo systemctl restart x`
-through its variant). The exemptions above apply to both. A command is consequential when it changes state or reports
-success, judged by a regex on the text of the node after `&&` (a pipeline there is judged by its first command), anchored
-at its start after any `VAR=x` assignments, an optional directory and quote:
-
-- `echo` or `printf`: it claims success after a masked failure (a separator echo is exempt above).
-- `git` that changes the repository: `add`, `commit`, `push`, `pull`, `merge`, `rebase`, `reset`, `checkout`, `switch`,
-  `cherry-pick`, `revert`, `restore`, `clean`, `rm`, `mv`, `am`, `apply`, `tag <name>`, `stash` (bare, `push`, `pop`,
-  `apply`, `drop`, `save`, `clear`). `status`, `log`, `diff`, `show`, `branch`, `fetch`, `stash list` and `tag` alone read
-  or only update remote refs, so they warn.
-- `docker`, `podman`, `docker-compose`, `podman-compose` (with `compose`, `container`, `image`, `buildx`): `up`, `run`,
-  `restart`, `start`, `stop`, `rm`, `push`, `build`, `down`, `kill`, `rmi` change containers or images; `ps`, `logs` and
-  `inspect` read.
-- `systemctl` `start`, `restart`, `stop`, `reload`, `enable`, `disable` (and `mask`, `unmask`, `kill`, `try-restart`,
-  `reload-or-restart`): service state.
-- `kill`, `rm`, `mv`, `cp`, `install`, `ln`: files and processes; `ssh`, `scp`, `rsync`: they act on another host.
-- `npm`, `pnpm`, `yarn`, `bun`, `cargo`, `twine`, `gem` `publish`; `kubectl`, `terraform`, `tofu` `apply`, `delete`,
-  `destroy`; `fly`, `flyctl`, `kamal`, `wrangler`, `vercel`, `netlify`, `firebase`, `serverless`, `sls`, `cdk`, `just`,
-  `make`, `npm`, `pnpm`, `yarn`, `bun` with a `deploy` subcommand, and a command named `deploy`: they release.
-- Running what was just built: `cargo run`, a path starting `./` or `../` or through `target/debug/` or
-  `target/release/`, and `bash`, `sh`, `zsh`, `python`, `python3`, `node`, `ruby`, `perl` with a script argument (not
-  `-c` or `-m`).
-
-Everything else after `&&` (another pipeline, `grep`, `rg`, `sed`, `cat`, `ls`, `find`, `cargo build`, `cargo test`,
-`just`, `cd`, `git status`) only warns. In a longer chain the status gates every later command: `pipe-status` also denies
-when the pipeline is the first of its list and a consequential command comes after the second `&&`.
-
-`$?` counts as a consumer only when it reads the pipeline's own status: it appears in the next command, separated by
-`;` or a newline (a comment may sit between), or chained directly with `&&`/`||`. The pipeline may also be the last
-command of a `( )` or `{ }` group that the next command follows. A `$?` after another command in between
-(`make | tail; echo x; echo $?`), after `&`, or in `just test > log; echo "exit=$?"` (no pipeline) is not the
-pipeline's status and does not fire. A pipeline that ends a list (`x && make | tail; echo $?`) is not followed.
+`pipe-status` and `pipe-status-chain` in the `shell-hygiene` preset read what consumes the status of a pipeline ending
+in a filter. They start at its last stage and climb through every pipeline, list, subshell, group and redirect wrapper
+that is the last child of its parent or a wrapper's body (`tail-step`), up to the node something reads: the left side of
+`||` (`pipe-status` denies; `|| true` and `|| :` discard on purpose), a `!`, an `if` / `while` / `elif` condition, or a
+statement the next statement's `$?` reads (that statement only, and not after `&`). The left side of `&&` only warns,
+whatever follows: the command after it may run after a failure. `set -o pipefail` or `setopt pipefail` before it, and a
+`PIPESTATUS` / `pipestatus` read after it, exempt the pipeline. `guardrails preset show shell-hygiene` prints the
+matchers ([matching.md](../matching.md#matchers)).
 
 ## A field of the matched node
 
@@ -115,16 +72,11 @@ no `name` of its own and is read through its `body`.
 {
   "id": "capture-through-any",
   "title": "du with or without a path: the path is quoted when there is one",
-  "rule": {"any": [{"command": "du",
-                    "has": {"capture": {"kind": "word", "regex": "^[^-]", "not": {"regex": "^[0-9]+[KMGTB]?$"}},
-                            "name": "PATH"}},
-                   {"command": "du"}]},
+  "matchers": {"path": {"kind": "word", "regex": "^[^-]"}},
+  "rule": {"any": [{"command": "du", "has": {"capture": {"matcher": "path"}, "name": "PATH"}}, {"command": "du"}]},
   "action": "warn",
   "message": "Prefer `dust` over `du`: `dust -d 1`.",
-  "messages": [
-    {"when": {"matches": {"has": {"kind": "word", "regex": "^[^-]", "not": {"regex": "^[0-9]+[KMGTB]?$"}}}},
-     "text": "Prefer `dust` over `du`: `dust -d 1 {PATH}`."}
-  ],
+  "messages": [{"when": {"matches": {"has": {"matcher": "path"}}}, "text": "Prefer `dust` over `du`: `dust -d 1 {PATH}`."}],
   "catch": ["du -sh /tmp/x", "du", "sudo du -d 1 ~", "du -sh a b"],
   "pass": ["dust -d 1 .", "df -h", "echo du", "man du"],
   "cases": {"du -sh /tmp/x": 1, "du -sh": null},

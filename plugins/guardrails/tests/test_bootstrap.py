@@ -19,7 +19,7 @@ import unittest
 import urllib.error
 import urllib.request
 import zipfile
-from collections.abc import Iterator
+from collections.abc import Generator
 from email.message import Message
 from pathlib import Path
 from typing import Any
@@ -106,7 +106,7 @@ class Pinned(unittest.TestCase):
         return bootstrap.Pins("3.13", "0.45.3", "9.9.9", {"darwin-arm64": entry}, runtime_id)
 
     @contextlib.contextmanager
-    def urlopen(self, url: str, timeout: float = 0) -> Iterator[io.BytesIO]:
+    def urlopen(self, url: str, timeout: float = 0) -> Generator[io.BytesIO]:
         self.served.append(url)
         yield io.BytesIO(self.wheel)
 

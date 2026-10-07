@@ -12,7 +12,7 @@ import json
 import os
 import sys
 import time
-from collections.abc import Iterator
+from collections.abc import Generator
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict
 
@@ -156,7 +156,7 @@ def mark_broken(data: Path) -> None:
 
 
 @contextlib.contextmanager
-def locked(data: Path, wait: bool) -> Iterator[bool]:
+def locked(data: Path, wait: bool) -> Generator[bool]:
     """Hold the install lock (the OS releases it if we die); False when `wait` is off and another install holds it."""
     (data / "runtime").mkdir(parents=True, mode=0o700, exist_ok=True)
     with open(data / "runtime" / "lock", "a") as handle:

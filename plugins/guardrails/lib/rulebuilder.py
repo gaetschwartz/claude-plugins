@@ -6,7 +6,7 @@ from __future__ import annotations
 
 import re
 import string
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
 from typing import TYPE_CHECKING, Any, TypedDict
 
 import policy
@@ -25,6 +25,8 @@ SHELLS = ("bash", "sh", "zsh", "dash", "ksh", "script", "su")
 JOINED_RUNNERS = ("eval", "ssh", "watch")
 RUNNERS = (*SHELLS, *JOINED_RUNNERS)
 VIA_CLASSES = ("wrapper", "runner")
+MATCHER = "matcher"
+MAX_EXPANDED_NODES = 2000
 ATOMS = ("command", "wrapper", "assignment", "statement", "redirect", "discards", "via", "flag")
 ALWAYS: Rule = {"regex": ""}
 NEVER: Rule = {"not": ALWAYS}
@@ -389,6 +391,73 @@ def expanded(node: object, where: str = "match", at: str = "node") -> Any:
     return {**core, **params}
 
 
+class Inliner:
+    """Expands each `{"matcher": name}` reference into the named fragment of one config layer, within a node budget;
+    `used` collects the names reached, the ones inside other matchers included."""
+
+    def __init__(self, matchers: Mapping[str, Any]) -> None:
+        self.matchers = matchers
+        self.used: set[str] = set()
+        self.nodes = 0
+
+    def rule(self, node: object, where: str = "match", path: tuple[str, ...] = ()) -> Any:
+        self.nodes += 1
+        if self.nodes > MAX_EXPANDED_NODES:
+            raise policy.Invalid(f"matchers expand to more than {MAX_EXPANDED_NODES} nodes in one rule; a matcher that "
+                                 "repeats another several times grows exponentially, so reuse smaller ones")
+        if isinstance(node, list):
+            return [self.rule(item, f"{where}[{i}]", path) for i, item in enumerate(node)]
+        if not isinstance(node, dict):
+            return node
+        out = {key: self.rule(value, f"{where}.{key}", path) if key in (*NESTED, "statement", "capture") else value
+               for key, value in node.items() if key != MATCHER}
+        if MATCHER not in node:
+            return out
+        fragment = self.fragment(node[MATCHER], f"{where}.{MATCHER}", path)
+        if not out:
+            return fragment
+        return {**fragment, **out} if not fragment.keys() & out.keys() else {"all": [fragment, out]}
+
+    def fragment(self, name: object, where: str, path: tuple[str, ...]) -> dict[str, Any]:
+        if not isinstance(name, str) or name not in self.matchers:
+            known = ", ".join(sorted(self.matchers)) or "none"
+            raise policy.Invalid(f"{where.removesuffix('.matcher')} refers to no matcher {name!r} (this config defines: "
+                                 f"{known})")
+        if name in path:
+            raise policy.Invalid(f"matcher cycle: {' -> '.join((*path, name))}")
+        body = self.matchers[name]
+        if not isinstance(body, dict) or not body:
+            raise policy.Invalid(f"matcher '{name}' must be a non-empty rule object")
+        self.used.add(name)
+        inner: dict[str, Any] = self.rule(body, f"matcher '{name}'", (*path, name))
+        expanded(inner, f"matcher '{name}'")
+        return inner
+
+
+def matcher_problems(matchers: Mapping[str, Any]) -> dict[str, str]:
+    """Matcher name -> what is wrong with it, for the matchers of a layer that fail on their own or sit in a cycle; one
+    that only fails through another matcher is left to the rule that uses it."""
+    found: dict[str, str] = {}
+    failing: dict[str, str] = {}
+    for name in matchers:
+        try:
+            if not policy.NAME.fullmatch(name):
+                raise policy.Invalid(f"name must match {policy.NAME.pattern}")
+            check_regexes(Inliner(matchers).fragment(name, "matcher", ()))
+        except policy.Invalid as exc:
+            failing[name] = str(exc)
+    stubs: dict[str, Any] = {name: {"kind": "word"} for name in matchers}
+    for name, why in failing.items():
+        try:
+            check_regexes(Inliner({**stubs, name: matchers[name]}).fragment(name, "matcher", ()))
+        except policy.Invalid as exc:
+            found[name] = str(exc)
+        else:
+            if why.startswith("matcher cycle"):
+                found[name] = why
+    return found
+
+
 def checked(match: object) -> dict[str, Any]:
     """The match object of a stored rule, validated: one ast-grep rule object built from its keys and the atoms."""
     if isinstance(match, dict) and (old := next((key for key in REMOVED if key in match), None)) \
@@ -503,8 +572,9 @@ def loosened(node: Any) -> Any:
         variants = []
         for skipped in range(ASSIGNMENTS + 1):
             shaped = "$_A " * skipped + f"$_N {rest}"
+            leading = [{"has": {"kind": "variable_assignment", "nthChild": i}} for i in range(1, skipped + 1)]
             variants.append({**out, "pattern": {**pattern, "context": shaped} if in_context else shaped,
-                             "all": checked})
+                             "all": [*leading, *checked]})
         out = {"any": variants}
     return out if found and out.get("any", True) else None
 

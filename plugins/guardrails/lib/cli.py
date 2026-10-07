@@ -5,7 +5,6 @@ from __future__ import annotations
 import argparse
 import json
 import os
-import re
 import shlex
 import sys
 from collections.abc import Callable
@@ -31,7 +30,6 @@ SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "d
             "when", "messages")
 MATCHING = ("match", "wrappers", "when", "messages")
 SCOPES = ("global", "project", "managed")
-NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
 
 Args = argparse.Namespace
 
@@ -63,8 +61,8 @@ def forbid_agent(what: str) -> None:
 
 
 def check_name(kind: str, name: str) -> None:
-    if not NAME.fullmatch(name):
-        raise Invalid(f"{kind} name {name!r} must match {NAME.pattern}")
+    if not policy.NAME.fullmatch(name):
+        raise Invalid(f"{kind} name {name!r} must match {policy.NAME.pattern}")
 
 
 def table(mapping: dict[str, Any], key: str) -> dict[str, Any]:
@@ -103,6 +101,14 @@ def change_config(scope: str, path: Path, fn: Callable[[store.Doc], Any]) -> Any
     except store.StoreError as exc:
         raise store.StoreError(f"{exc}; fix or remove the managed file by hand, the CLI never overwrites a corrupt "
                                "file") from exc
+
+
+def layer_matchers(path: Path) -> dict[str, Any]:
+    """The matchers a config file defines; an unreadable file reads as none, since the change reports it."""
+    try:
+        return view(store.load(path), "matchers")
+    except store.StoreError:
+        return {}
 
 
 def managed_config() -> store.Doc:
@@ -193,6 +199,7 @@ class Snapshot:
     active: dict[str, policy.Activation]
     rule_origins: dict[str, list[str]]
     mode_origins: dict[str, list[str]]
+    matcher_origins: dict[str, list[str]]
     problems: list[str]
     problem_layers: list[frozenset[str]]
     blind: frozenset[str] = frozenset()
@@ -251,6 +258,7 @@ def snapshot(args: Args) -> Snapshot:
     session = policy.Session.from_json(view(view(state, "sessions"), sid) if sid else {})
     rule_origins = policy.origins("rules", mconfig, gconfig, pconfig)
     mode_origins = policy.origins("modes", mconfig, gconfig, pconfig)
+    matcher_origins = policy.origins("matchers", mconfig, gconfig, pconfig)
     for rid, why in sorted(found.problems.items()):
         report(f"rule {rid}: {why} (ignored by the hook)", *rule_origins.get(rid, []))
     for rid in sorted(rules):
@@ -259,8 +267,10 @@ def snapshot(args: Args) -> Snapshot:
                 report(f"rule {rid}: mode '{m}' is not declared (the rule stays enforced)",
                        *rule_origins.get(rid, []))
     for label, doc in (("global", gconfig), ("project", pconfig)):
-        for text in policy.removed_key_problems((label, doc)):
+        for text in policy.removed_key_problems((label, doc)) + policy.matcher_problems(label, view(doc, "matchers")):
             report(text, label)
+        if "matchers" in doc and not isinstance(doc["matchers"], dict):
+            report(f"{label} config: 'matchers' must be an object, so its matchers are ignored", label)
     parsed = {rid: rule for rid, rule in rules.items() if rule.enabled
               and not any(p.startswith(f"rule {rid}:") for p in problems)}
     blind: set[str] = set()
@@ -276,8 +286,8 @@ def snapshot(args: Args) -> Snapshot:
             report(f"rules {', '.join(sorted(parsed))} use the ast-grep engine and are NOT enforced "
                    f"while the engine cannot run ({exc}).{fails_open}", *where)
     return Snapshot(mconfig, gconfig, pconfig, gpath, ppath, gconfig.get("enabled", True) is not False,
-                    rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, problems, layers,
-                    frozenset(blind), call_env(args, root))
+                    rules, modes, policy.active_modes(modes, session), rule_origins, mode_origins, matcher_origins,
+                    problems, layers, frozenset(blind), call_env(args, root))
 
 
 def rule_state(rule: policy.Rule, layers: list[str], active: dict[str, policy.Activation], blind: bool = False,
@@ -326,6 +336,9 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
         else:
             on = "off"
         modes.append(render.ModeRow(name, on, snap.modes[name].agent_may_enable, snap.mode_origins.get(name, [])))
+    matchers = [render.MatcherRow(name, snap.matcher_origins.get(name, []),
+                                  sorted(rid for rid, rule in snap.rules.items() if name in rule.matchers))
+                for name in sorted(snap.matcher_origins) if keep(snap.matcher_origins, name)]
     notes = []
     if not snap.hook_on:
         reason = f" ({snap.gconfig['disabledReason']})" if snap.gconfig.get("disabledReason") else ""
@@ -333,7 +346,7 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
         notes.append(f"the global hook is disabled{reason}{kept}")
     status = render.Status(file_lines(snap), snap.hook_on, snap.ppath is not None
                            and snap.pconfig.get("enabled", True) is False, rules, modes, snap.problems_in(scope),
-                           notes=notes)
+                           notes=notes, matchers=matchers)
     if scope:
         status.no_rules = f"No rules with a {scope} entry."
     return status
@@ -419,11 +432,11 @@ def cmd_rule_add(args: Args) -> int:
     require_user(args, "rule add")
     check_name("rule", args.id)
     rule, _ = split_envelope(load_json(args.json, "--json"))
-    parsed = policy.Rule.from_json(rule)
-    unchecked = check_ast_rule(parsed)
-    rule["setBy"] = stamp(args.reason)
     scope = resolve_scope(args)
     path = scope_path(scope)
+    parsed = policy.Rule.from_json(rule, layer_matchers(path))
+    unchecked = check_ast_rule(parsed)
+    rule["setBy"] = stamp(args.reason)
 
     def change(doc: store.Doc) -> bool:
         rules = table(doc, "rules")
@@ -492,7 +505,8 @@ def cmd_rule_set(args: Args) -> int:
             rules[args.id] = {}
         rule = rules[args.id]
         apply_fields(rule, fields)
-        candidate.append(policy.merge_rule(base, rule) if base is not None else policy.Rule.from_json(rule))
+        candidate.append(policy.merge_rule(base, rule) if base is not None
+                         else policy.Rule.from_json(rule, view(doc, "matchers")))
         if base is None:
             unchecked.append(check_ast_rule(candidate[-1]))
         rule["setBy"] = stamp(args.reason)
@@ -525,6 +539,64 @@ def cmd_rule_rm(args: Args) -> int:
 
     change_config(scope, path, change)
     print(f"removed rule {args.id} from {path}")
+    return 0
+
+
+def broken_rules(doc: store.Doc, matchers: dict[str, Any]) -> dict[str, str]:
+    """Rule id -> why it does not load, for the rules of this config document under these matchers."""
+    out: dict[str, str] = {}
+    for rid, raw in view(doc, "rules").items():
+        try:
+            policy.Rule.from_json(raw, matchers)
+        except Invalid as exc:
+            out[rid] = str(exc)
+    return out
+
+
+def change_matchers(doc: store.Doc, name: str, fragment: Any) -> bool:
+    """Set (or, for None, remove) a matcher of this document; raises Invalid when it, or a rule that loaded before,
+    would no longer load. True when the matcher existed."""
+    matchers = table(doc, "matchers")
+    before, existed = broken_rules(doc, matchers), name in matchers
+    if fragment is None:
+        del matchers[name]
+    else:
+        matchers[name] = fragment
+        if problem := policy.matcher_problems("this", matchers):
+            raise Invalid(problem[0])
+    after = broken_rules(doc, matchers)
+    if newly := sorted(set(after) - set(before)):
+        raise Invalid(f"rule {newly[0]} would stop loading: {after[newly[0]]}")
+    return existed
+
+
+def cmd_matcher_add(args: Args) -> int:
+    require_user(args, "matcher add")
+    check_name("matcher", args.name)
+    if args.name.startswith(policy.PRESET_MATCHER_PREFIX):
+        raise Invalid(f"matcher names starting with '{policy.PRESET_MATCHER_PREFIX}' are reserved for presets; pick another name")
+    fragment = load_json(args.json, "--json")
+    if not isinstance(fragment, dict) or not fragment:
+        raise Invalid("--json must be a non-empty rule object")
+    scope = resolve_scope(args)
+    path = scope_path(scope)
+    existed = change_config(scope, path, lambda doc: change_matchers(doc, args.name, fragment))
+    print(f"{'replaced' if existed else 'added'} matcher {args.name} in {path}")
+    return 0
+
+
+def cmd_matcher_rm(args: Args) -> int:
+    require_user(args, "matcher rm")
+    scope = resolve_scope(args)
+    path = scope_path(scope)
+
+    def change(doc: store.Doc) -> None:
+        if args.name not in view(doc, "matchers"):
+            raise Invalid(f"no matcher '{args.name}' in {path}")
+        change_matchers(doc, args.name, None)
+
+    change_config(scope, path, change)
+    print(f"removed matcher {args.name} from {path}")
     return 0
 
 
@@ -628,11 +700,12 @@ def cmd_rule_test(args: Args) -> int:
         draft, carried = split_envelope(load_json(args.json, "--json"))
         if carried is not None:
             examples += example_list(carried)
-        rule = policy.Rule.from_json(draft)
+        scope = args.scope or "global"
+        rule = policy.Rule.from_json(draft, view({"managed": mconfig, "global": gconfig, "project": pconfig}[scope],
+                                                 "matchers"))
         layers: list[str] = []
         named = args.id_name or draft.get("id")
         rid = named if isinstance(named, str) and named else "new-rule"
-        scope = args.scope or "global"
     else:
         found = policy.effective(mconfig, gconfig, pconfig)
         rules = found.rules
@@ -862,6 +935,8 @@ def cmd_preset_install(args: Args) -> int:
     if unknown:
         raise Invalid(f"preset {args.name} has no rule {', '.join(unknown)} (it has {', '.join(sorted(rules))})")
     chosen = {rid: r for rid, r in rules.items() if not only or rid in only}
+    shared = view(preset, "matchers")
+    needed = sorted({name for r in chosen.values() for name in policy.Rule.from_json(r, shared).matchers})
     wanted = {m for r in chosen.values() for m in policy.json_modes(r)}
     modes = {name: m for name, m in view(preset, "modes").items() if name in wanted}
     scope = resolve_scope(args)
@@ -870,6 +945,12 @@ def cmd_preset_install(args: Args) -> int:
     report: list[str] = []
 
     def change(doc: store.Doc) -> None:
+        smatchers = table(doc, "matchers")
+        before = broken_rules(doc, smatchers)
+        for name in needed:
+            state = "added" if name not in smatchers else "unchanged" if smatchers[name] == shared[name] else "replaced"
+            report.append(f"matcher {name}: {state}")
+            smatchers[name] = shared[name]
         srules = table(doc, "rules")
         for rid, rule in sorted(chosen.items()):
             current = srules.get(rid)
@@ -888,6 +969,8 @@ def cmd_preset_install(args: Args) -> int:
             smodes[name] = {"description": str(mode.get("description", "")), "agentMayEnable": agent,
                             "active": False, "setBy": by}
             report.append(f"mode {name}: added (agent may enable: {'yes' if agent else 'no'})")
+        if newly := sorted(set(broken_rules(doc, smatchers)) - set(before)):
+            raise Invalid(f"rule {newly[0]} would stop loading with the preset's matchers, so nothing was installed")
 
     change_config(scope, path, change)
     print(f"installed preset {args.name} into {path}")
@@ -946,7 +1029,7 @@ def build_parser() -> argparse.ArgumentParser:
     source = test.add_mutually_exclusive_group(required=True)
     source.add_argument("--json", help="a draft rule as a JSON object, @<file> or - for stdin; its match is one "
                         "ast-grep rule that may use the command, assignment, wrapper, statement, redirect, discards, "
-                        "via, flag and capture atoms")
+                        "via, flag, capture and matcher atoms")
     source.add_argument("--id", help="an installed rule's id")
     test.add_argument("commands", nargs="*", metavar="CMD")
     test.add_argument("--examples", help='JSON list of {"cmd", "source", "expect"} objects, @<file> or - for stdin')
@@ -972,11 +1055,19 @@ def build_parser() -> argparse.ArgumentParser:
         toggle.add_argument("name")
         toggle.add_argument("--scope", choices=("session", *SCOPES), default="session")
 
+    matcher = verbs.add_parser("matcher", help="named match fragments rules refer to as {\"matcher\": name}").add_subparsers(
+        dest="op", required=True)
+    matcher_add = matcher.add_parser("add", parents=[common, scoped], help="add or replace a matcher")
+    matcher_add.add_argument("name")
+    matcher_add.add_argument("--json", required=True, help="the fragment as a JSON rule object, @<file> or - for stdin")
+    matcher_rm = matcher.add_parser("rm", parents=[common, scoped], help="remove a matcher no rule needs")
+    matcher_rm.add_argument("name")
+
     preset = verbs.add_parser("preset", help="bundled rule sets").add_subparsers(dest="op", required=True)
     preset.add_parser("list", parents=[common], help="list presets")
     show = preset.add_parser("show", parents=[common], help="print a preset")
     show.add_argument("name")
-    install = preset.add_parser("install", parents=[common, scoped], help="copy a preset's rules and modes into config")
+    install = preset.add_parser("install", parents=[common, scoped], help="copy a preset's rules, modes and the matchers they use into config")
     install.add_argument("name")
     install.add_argument("--only", help="comma-separated rule ids to install")
 
@@ -1003,6 +1094,8 @@ HANDLERS: dict[tuple[str, str | None], Callable[[Args], int]] = {
     ("rule", "rm"): cmd_rule_rm,
     ("rule", "test"): cmd_rule_test,
     ("rule", "ast"): cmd_rule_ast,
+    ("matcher", "add"): cmd_matcher_add,
+    ("matcher", "rm"): cmd_matcher_rm,
     ("mode", "declare"): cmd_mode_declare,
     ("mode", "undeclare"): cmd_mode_undeclare,
     ("mode", "on"): cmd_mode_on,

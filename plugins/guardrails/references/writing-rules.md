@@ -36,6 +36,7 @@ Take the first rung that separates your examples. Each rung down costs precision
 | `statement`, `redirect`, `discards` | a redirect decides, or a sibling relation must see through one | [ast/redirects.md](ast/redirects.md) |
 | `via`, `flag` | which wrappers or runners a command ran through, or one flag by name | [matching.md](matching.md#the-atoms) |
 | `capture` | the message must quote a node the atoms matched (the last stage of a pipeline, an argument) | [ast/captures.md](ast/captures.md) |
+| `matcher` | a fragment that several rules, or one rule twice, share | [matching.md](matching.md#matchers) |
 | relations | structure decides: nesting, pipelines, order, a flag on one command among several, a wrapper or shell itself | [ast/index.md](ast/index.md) |
 | whole-text regex | only raw text can say it, across nodes the tree cannot relate | `{"kind": "program", "regex": "..."}` |
 

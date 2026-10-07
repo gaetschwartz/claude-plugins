@@ -2,488 +2,15 @@
   "description": "Mistakes agents repeat with shell pipelines",
   "rules": {
     "pipe-status": {
-      "description": "A pipeline ending in a filter whose status is read as if it were the producer's",
+      "description": "A pipeline ending in a filter whose status is branched on or read as if it were the producer's",
       "match": {
         "capture": {
-          "command": [
-            "head",
-            "tail",
-            "cat",
-            "wc",
-            "sort",
-            "cut",
-            "uniq",
-            "tr",
-            "sed",
-            "tee",
-            "column",
-            "nl",
-            "paste",
-            "rev",
-            "fold",
-            "less",
-            "more"
-          ],
-          "nthChild": {
-            "position": 1,
-            "reverse": true
-          },
-          "all": [
-            {
-              "inside": {
-                "kind": "pipeline"
-              }
-            },
-            {
-              "inside": {
-                "statement": {
-                  "kind": "pipeline",
-                  "any": [
-                    {
-                      "all": [
-                        {
-                          "not": {
-                            "inside": {
-                              "kind": "pipeline",
-                              "stopBy": {
-                                "not": {
-                                  "kind": "list"
-                                }
-                              }
-                            }
-                          }
-                        },
-                        {
-                          "not": {
-                            "has": {
-                              "kind": "command",
-                              "nthChild": 1,
-                              "any": [
-                                {
-                                  "has": {
-                                    "field": "name",
-                                    "regex": "^(\\S*/)?(echo|printf|ls|cat|pwd|date|ps|du|df)$"
-                                  }
-                                },
-                                {
-                                  "has": {
-                                    "field": "name",
-                                    "regex": "^git$"
-                                  },
-                                  "regex": "^git(\\s+-\\S+(\\s+\\S+)?)*\\s+(log|show|status|diff|branch|remote|ls-files|rev-parse|describe|shortlog|blame)(\\s|$)"
-                                }
-                              ]
-                            }
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "inside": {
-                        "kind": "pipeline",
-                        "stopBy": {
-                          "not": {
-                            "kind": "list"
-                          }
-                        },
-                        "not": {
-                          "has": {
-                            "kind": "command",
-                            "nthChild": 1,
-                            "any": [
-                              {
-                                "has": {
-                                  "field": "name",
-                                  "regex": "^(\\S*/)?(echo|printf|ls|cat|pwd|date|ps|du|df)$"
-                                }
-                              },
-                              {
-                                "has": {
-                                  "field": "name",
-                                  "regex": "^git$"
-                                },
-                                "regex": "^git(\\s+-\\S+(\\s+\\S+)?)*\\s+(log|show|status|diff|branch|remote|ls-files|rev-parse|describe|shortlog|blame)(\\s|$)"
-                              }
-                            ]
-                          }
-                        }
-                      }
-                    }
-                  ]
-                },
-                "stopBy": {
-                  "statement": {
-                    "kind": "pipeline"
-                  }
-                },
-                "all": [
-                  {
-                    "any": [
-                      {
-                        "precedes": {
-                          "any": [
-                            {
-                              "regex": "^\\|\\|$"
-                            },
-                            {
-                              "regex": "^&&$",
-                              "precedes": {
-                                "regex": "^(?:\\w+=\\S*\\s+)*[\\\"']?(?:(?:\\S*/)?(?:(?:echo|printf)(?:\\s|$)|git(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:add|commit|push|pull|merge|rebase|reset|checkout|switch|cherry-pick|revert|restore|clean|rm|mv|am|apply|tag\\s+(?:-[^l\\s]\\S*\\s+)*[^-\\s]\\S*|stash(?:\\s+(?:push|pop|apply|drop|save|clear)\\b|\\s*$))(?:\\s|$)|(?:docker|podman|docker-compose|podman-compose)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:(?:compose|container|image|buildx)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?(?:up|run|restart|start|stop|rm|push|build|down|kill|rmi)(?:\\s|$)|systemctl(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:start|restart|stop|reload|reload-or-restart|try-restart|enable|disable|mask|unmask|kill)(?:\\s|$)|(?:kill|rm|mv|cp|install|ln|ssh|scp|rsync)(?:\\s|$)|(?:npm|pnpm|yarn|bun|cargo|twine|gem)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+publish(?:\\s|$)|(?:kubectl|terraform|tofu)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:apply|delete|destroy)(?:\\s|$)|(?:fly|flyctl|kamal|wrangler|vercel|netlify|firebase|serverless|sls|cdk|just|make|npm|pnpm|yarn|bun)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:run\\s+)?deploy\\S*(?:\\s|$)|deploy(?:\\s|$)|cargo(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+run(?:\\s|$)|(?:bash|sh|zsh|python3?|node|ruby|perl)\\s+[^-\\s])|\\.{1,2}/|(?:\\S*/)?target/(?:debug|release)/)"
-                              }
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "inside": {
-                          "kind": "list",
-                          "precedes": {
-                            "any": [
-                              {
-                                "regex": "^\\|\\|$"
-                              },
-                              {
-                                "regex": "^&&$",
-                                "precedes": {
-                                  "regex": "^(?:\\w+=\\S*\\s+)*[\\\"']?(?:(?:\\S*/)?(?:(?:echo|printf)(?:\\s|$)|git(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:add|commit|push|pull|merge|rebase|reset|checkout|switch|cherry-pick|revert|restore|clean|rm|mv|am|apply|tag\\s+(?:-[^l\\s]\\S*\\s+)*[^-\\s]\\S*|stash(?:\\s+(?:push|pop|apply|drop|save|clear)\\b|\\s*$))(?:\\s|$)|(?:docker|podman|docker-compose|podman-compose)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:(?:compose|container|image|buildx)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?(?:up|run|restart|start|stop|rm|push|build|down|kill|rmi)(?:\\s|$)|systemctl(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:start|restart|stop|reload|reload-or-restart|try-restart|enable|disable|mask|unmask|kill)(?:\\s|$)|(?:kill|rm|mv|cp|install|ln|ssh|scp|rsync)(?:\\s|$)|(?:npm|pnpm|yarn|bun|cargo|twine|gem)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+publish(?:\\s|$)|(?:kubectl|terraform|tofu)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:apply|delete|destroy)(?:\\s|$)|(?:fly|flyctl|kamal|wrangler|vercel|netlify|firebase|serverless|sls|cdk|just|make|npm|pnpm|yarn|bun)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:run\\s+)?deploy\\S*(?:\\s|$)|deploy(?:\\s|$)|cargo(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+run(?:\\s|$)|(?:bash|sh|zsh|python3?|node|ruby|perl)\\s+[^-\\s])|\\.{1,2}/|(?:\\S*/)?target/(?:debug|release)/)"
-                                }
-                              }
-                            ]
-                          }
-                        }
-                      },
-                      {
-                        "inside": {
-                          "any": [
-                            {
-                              "kind": "if_statement"
-                            },
-                            {
-                              "kind": "while_statement"
-                            }
-                          ],
-                          "field": "condition"
-                        }
-                      },
-                      {
-                        "nthChild": 1,
-                        "inside": {
-                          "kind": "elif_clause"
-                        }
-                      },
-                      {
-                        "precedes": {
-                          "any": [
-                            {
-                              "has": {
-                                "kind": "special_variable_name",
-                                "regex": "^\\?$",
-                                "stopBy": "end"
-                              }
-                            },
-                            {
-                              "regex": "^;$",
-                              "precedes": {
-                                "has": {
-                                  "kind": "special_variable_name",
-                                  "regex": "^\\?$",
-                                  "stopBy": "end"
-                                }
-                              }
-                            },
-                            {
-                              "kind": "comment",
-                              "precedes": {
-                                "has": {
-                                  "kind": "special_variable_name",
-                                  "regex": "^\\?$",
-                                  "stopBy": "end"
-                                }
-                              }
-                            }
-                          ]
-                        }
-                      },
-                      {
-                        "nthChild": {
-                          "position": 1,
-                          "reverse": true
-                        },
-                        "inside": {
-                          "any": [
-                            {
-                              "kind": "subshell"
-                            },
-                            {
-                              "kind": "compound_statement"
-                            }
-                          ],
-                          "precedes": {
-                            "any": [
-                              {
-                                "has": {
-                                  "kind": "special_variable_name",
-                                  "regex": "^\\?$",
-                                  "stopBy": "end"
-                                }
-                              },
-                              {
-                                "regex": "^;$",
-                                "precedes": {
-                                  "has": {
-                                    "kind": "special_variable_name",
-                                    "regex": "^\\?$",
-                                    "stopBy": "end"
-                                  }
-                                }
-                              },
-                              {
-                                "kind": "comment",
-                                "precedes": {
-                                  "has": {
-                                    "kind": "special_variable_name",
-                                    "regex": "^\\?$",
-                                    "stopBy": "end"
-                                  }
-                                }
-                              }
-                            ]
-                          }
-                        }
-                      },
-                      {
-                        "nthChild": {
-                          "position": 1,
-                          "reverse": true
-                        },
-                        "inside": {
-                          "any": [
-                            {
-                              "kind": "subshell"
-                            },
-                            {
-                              "kind": "compound_statement"
-                            }
-                          ],
-                          "precedes": {
-                            "any": [
-                              {
-                                "regex": "^\\|\\|$"
-                              },
-                              {
-                                "regex": "^&&$",
-                                "precedes": {
-                                  "regex": "^(?:\\w+=\\S*\\s+)*[\\\"']?(?:(?:\\S*/)?(?:(?:echo|printf)(?:\\s|$)|git(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:add|commit|push|pull|merge|rebase|reset|checkout|switch|cherry-pick|revert|restore|clean|rm|mv|am|apply|tag\\s+(?:-[^l\\s]\\S*\\s+)*[^-\\s]\\S*|stash(?:\\s+(?:push|pop|apply|drop|save|clear)\\b|\\s*$))(?:\\s|$)|(?:docker|podman|docker-compose|podman-compose)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:(?:compose|container|image|buildx)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?(?:up|run|restart|start|stop|rm|push|build|down|kill|rmi)(?:\\s|$)|systemctl(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:start|restart|stop|reload|reload-or-restart|try-restart|enable|disable|mask|unmask|kill)(?:\\s|$)|(?:kill|rm|mv|cp|install|ln|ssh|scp|rsync)(?:\\s|$)|(?:npm|pnpm|yarn|bun|cargo|twine|gem)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+publish(?:\\s|$)|(?:kubectl|terraform|tofu)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:apply|delete|destroy)(?:\\s|$)|(?:fly|flyctl|kamal|wrangler|vercel|netlify|firebase|serverless|sls|cdk|just|make|npm|pnpm|yarn|bun)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:run\\s+)?deploy\\S*(?:\\s|$)|deploy(?:\\s|$)|cargo(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+run(?:\\s|$)|(?:bash|sh|zsh|python3?|node|ruby|perl)\\s+[^-\\s])|\\.{1,2}/|(?:\\S*/)?target/(?:debug|release)/)"
-                                }
-                              }
-                            ]
-                          }
-                        }
-                      },
-                      {
-                        "has": {
-                          "kind": "negated_command"
-                        }
-                      },
-                      {
-                        "has": {
-                          "kind": "pipeline",
-                          "has": {
-                            "kind": "negated_command"
-                          }
-                        }
-                      }
-                    ]
-                  }
-                ],
-                "not": {
-                  "any": [
-                    {
-                      "precedes": {
-                        "regex": "^(&&|\\|\\|)$",
-                        "precedes": {
-                          "command": [
-                            "echo",
-                            "printf"
-                          ],
-                          "regex": "^(?:(?:\\S*/)?echo(?:\\s+-[neE]+)*(?:\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?'|(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*))?\\s*|(?:\\S*/)?printf(?:\\s+--)?\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?')(?:\\s+(?:[^\\s\\\"'`$\\\\]+|\\\"[^\\\"`$\\\\]*\\\"|'[^']*'))*\\s*)$",
-                          "not": {
-                            "has": {
-                              "any": [
-                                {
-                                  "kind": "simple_expansion"
-                                },
-                                {
-                                  "kind": "expansion"
-                                },
-                                {
-                                  "kind": "command_substitution"
-                                },
-                                {
-                                  "kind": "arithmetic_expansion"
-                                }
-                              ],
-                              "stopBy": "end"
-                            }
-                          }
-                        }
-                      },
-                      "not": {
-                        "inside": {
-                          "kind": "program",
-                          "stopBy": "end",
-                          "has": {
-                            "kind": "special_variable_name",
-                            "regex": "^\\?$",
-                            "stopBy": "end"
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "precedes": {
-                        "regex": "^\\|\\|$",
-                        "precedes": {
-                          "command": [
-                            "true",
-                            ":"
-                          ],
-                          "regex": "^(true|:)$"
-                        }
-                      }
-                    },
-                    {
-                      "nthChild": {
-                        "position": 1,
-                        "reverse": true
-                      },
-                      "inside": {
-                        "any": [
-                          {
-                            "kind": "list"
-                          },
-                          {
-                            "kind": "subshell"
-                          },
-                          {
-                            "kind": "compound_statement"
-                          }
-                        ],
-                        "precedes": {
-                          "regex": "^(&&|\\|\\|)$",
-                          "precedes": {
-                            "command": [
-                              "echo",
-                              "printf"
-                            ],
-                            "regex": "^(?:(?:\\S*/)?echo(?:\\s+-[neE]+)*(?:\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?'|(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*))?\\s*|(?:\\S*/)?printf(?:\\s+--)?\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?')(?:\\s+(?:[^\\s\\\"'`$\\\\]+|\\\"[^\\\"`$\\\\]*\\\"|'[^']*'))*\\s*)$",
-                            "not": {
-                              "has": {
-                                "any": [
-                                  {
-                                    "kind": "simple_expansion"
-                                  },
-                                  {
-                                    "kind": "expansion"
-                                  },
-                                  {
-                                    "kind": "command_substitution"
-                                  },
-                                  {
-                                    "kind": "arithmetic_expansion"
-                                  }
-                                ],
-                                "stopBy": "end"
-                              }
-                            }
-                          }
-                        }
-                      },
-                      "not": {
-                        "inside": {
-                          "kind": "program",
-                          "stopBy": "end",
-                          "has": {
-                            "kind": "special_variable_name",
-                            "regex": "^\\?$",
-                            "stopBy": "end"
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "nthChild": {
-                        "position": 1,
-                        "reverse": true
-                      },
-                      "inside": {
-                        "any": [
-                          {
-                            "kind": "list"
-                          },
-                          {
-                            "kind": "subshell"
-                          },
-                          {
-                            "kind": "compound_statement"
-                          }
-                        ],
-                        "precedes": {
-                          "regex": "^\\|\\|$",
-                          "precedes": {
-                            "command": [
-                              "true",
-                              ":"
-                            ],
-                            "regex": "^(true|:)$"
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "follows": {
-                        "any": [
-                          {
-                            "kind": "command",
-                            "regex": "^set(\\s+\\S+)*\\s+-[A-Za-z]*o\\s+pipefail(\\s|$)"
-                          },
-                          {
-                            "kind": "command",
-                            "regex": "(?i)^setopt(\\s+\\S+)*\\s+pipe_?fail(\\s|$)"
-                          }
-                        ],
-                        "stopBy": "end"
-                      }
-                    },
-                    {
-                      "inside": {
-                        "follows": {
-                          "any": [
-                            {
-                              "kind": "command",
-                              "regex": "^set(\\s+\\S+)*\\s+-[A-Za-z]*o\\s+pipefail(\\s|$)"
-                            },
-                            {
-                              "kind": "command",
-                              "regex": "(?i)^setopt(\\s+\\S+)*\\s+pipe_?fail(\\s|$)"
-                            }
-                          ],
-                          "stopBy": "end"
-                        },
-                        "stopBy": "end"
-                      }
-                    },
-                    {
-                      "inside": {
-                        "kind": "program",
-                        "regex": "PIPESTATUS|pipestatus",
-                        "stopBy": "end"
-                      }
-                    }
-                  ]
-                }
-              }
-            }
+          "matcher": "preset.unchecked-pipeline-tail",
+          "any": [
+            {"matcher": "preset.status-gates-or"},
+            {"matcher": "preset.status-tests-condition"},
+            {"matcher": "preset.status-read-by-next"},
+            {"matcher": "preset.status-negated"}
           ]
         },
         "name": "LAST",
@@ -493,176 +20,12 @@
       "message": "A pipeline's status is its last command's (`{LAST}`), so a failure of the first command goes unseen. Run `set -o pipefail` first, or write to a file, check the status, then read the file.",
       "messages": [
         {
-          "when": {
-            "matches": {
-              "any": [
-                {
-                  "inside": {
-                    "kind": "pipeline",
-                    "precedes": {
-                      "any": [
-                        {
-                          "has": {
-                            "kind": "special_variable_name",
-                            "regex": "^\\?$",
-                            "stopBy": "end"
-                          }
-                        },
-                        {
-                          "regex": "^;$",
-                          "precedes": {
-                            "has": {
-                              "kind": "special_variable_name",
-                              "regex": "^\\?$",
-                              "stopBy": "end"
-                            }
-                          }
-                        },
-                        {
-                          "kind": "comment",
-                          "precedes": {
-                            "has": {
-                              "kind": "special_variable_name",
-                              "regex": "^\\?$",
-                              "stopBy": "end"
-                            }
-                          }
-                        },
-                        {
-                          "regex": "^(&&|\\|\\|)$",
-                          "precedes": {
-                            "has": {
-                              "kind": "special_variable_name",
-                              "regex": "^\\?$",
-                              "stopBy": "end"
-                            }
-                          }
-                        }
-                      ]
-                    }
-                  }
-                },
-                {
-                  "inside": {
-                    "kind": "pipeline",
-                    "inside": {
-                      "kind": "redirected_statement",
-                      "precedes": {
-                        "any": [
-                          {
-                            "has": {
-                              "kind": "special_variable_name",
-                              "regex": "^\\?$",
-                              "stopBy": "end"
-                            }
-                          },
-                          {
-                            "regex": "^;$",
-                            "precedes": {
-                              "has": {
-                                "kind": "special_variable_name",
-                                "regex": "^\\?$",
-                                "stopBy": "end"
-                              }
-                            }
-                          },
-                          {
-                            "kind": "comment",
-                            "precedes": {
-                              "has": {
-                                "kind": "special_variable_name",
-                                "regex": "^\\?$",
-                                "stopBy": "end"
-                              }
-                            }
-                          },
-                          {
-                            "regex": "^(&&|\\|\\|)$",
-                            "precedes": {
-                              "has": {
-                                "kind": "special_variable_name",
-                                "regex": "^\\?$",
-                                "stopBy": "end"
-                              }
-                            }
-                          }
-                        ]
-                      }
-                    }
-                  }
-                },
-                {
-                  "inside": {
-                    "kind": "pipeline",
-                    "nthChild": {
-                      "position": 1,
-                      "reverse": true
-                    },
-                    "inside": {
-                      "any": [
-                        {
-                          "kind": "subshell"
-                        },
-                        {
-                          "kind": "compound_statement"
-                        }
-                      ],
-                      "precedes": {
-                        "any": [
-                          {
-                            "has": {
-                              "kind": "special_variable_name",
-                              "regex": "^\\?$",
-                              "stopBy": "end"
-                            }
-                          },
-                          {
-                            "regex": "^;$",
-                            "precedes": {
-                              "has": {
-                                "kind": "special_variable_name",
-                                "regex": "^\\?$",
-                                "stopBy": "end"
-                              }
-                            }
-                          },
-                          {
-                            "kind": "comment",
-                            "precedes": {
-                              "has": {
-                                "kind": "special_variable_name",
-                                "regex": "^\\?$",
-                                "stopBy": "end"
-                              }
-                            }
-                          },
-                          {
-                            "regex": "^(&&|\\|\\|)$",
-                            "precedes": {
-                              "has": {
-                                "kind": "special_variable_name",
-                                "regex": "^\\?$",
-                                "stopBy": "end"
-                              }
-                            }
-                          }
-                        ]
-                      }
-                    }
-                  }
-                }
-              ]
-            }
-          },
+          "when": {"matches": {"matcher": "preset.status-read-by-next"}},
           "text": "`$?` after a pipe is the last command's status. Use `set -o pipefail` first, or read zsh `pipestatus[1]` / bash `PIPESTATUS[0]` in the very next command.",
           "messageShort": "`$?` is the last stage's. `set -o pipefail`, or `pipestatus[1]` (zsh) / `PIPESTATUS[0]` (bash)."
         },
         {
-          "when": {
-            "matches": {
-              "command": "head"
-            }
-          },
+          "when": {"matches": {"command": "head"}},
           "text": "`head` hides the producer's status, and `set -o pipefail` would report SIGPIPE (141) when `head` closes early. Write to a file, check the status, then `head` the file.",
           "messageShort": "`head` hides the producer's status; pipefail gives 141. Write to a file, check it, then `head` it."
         }
@@ -670,423 +33,28 @@
       "messageShort": "Pipe status is `{LAST}`'s. `set -o pipefail`, or write to a file and check it."
     },
     "pipe-status-chain": {
-      "description": "A pipeline ending in a filter whose status gates a following `&&` command that is not consequential",
+      "description": "A pipeline ending in a filter whose status gates a following `&&`",
       "match": {
-        "capture": {
-          "command": [
-            "head",
-            "tail",
-            "cat",
-            "wc",
-            "sort",
-            "cut",
-            "uniq",
-            "tr",
-            "sed",
-            "tee",
-            "column",
-            "nl",
-            "paste",
-            "rev",
-            "fold",
-            "less",
-            "more"
-          ],
-          "nthChild": {
-            "position": 1,
-            "reverse": true
-          },
-          "all": [
-            {
-              "inside": {
-                "kind": "pipeline"
-              }
-            },
-            {
-              "inside": {
-                "statement": {
-                  "kind": "pipeline",
-                  "any": [
-                    {
-                      "all": [
-                        {
-                          "not": {
-                            "inside": {
-                              "kind": "pipeline",
-                              "stopBy": {
-                                "not": {
-                                  "kind": "list"
-                                }
-                              }
-                            }
-                          }
-                        },
-                        {
-                          "not": {
-                            "has": {
-                              "kind": "command",
-                              "nthChild": 1,
-                              "any": [
-                                {
-                                  "has": {
-                                    "field": "name",
-                                    "regex": "^(\\S*/)?(echo|printf|ls|cat|pwd|date|ps|du|df)$"
-                                  }
-                                },
-                                {
-                                  "has": {
-                                    "field": "name",
-                                    "regex": "^git$"
-                                  },
-                                  "regex": "^git(\\s+-\\S+(\\s+\\S+)?)*\\s+(log|show|status|diff|branch|remote|ls-files|rev-parse|describe|shortlog|blame)(\\s|$)"
-                                }
-                              ]
-                            }
-                          }
-                        }
-                      ]
-                    },
-                    {
-                      "inside": {
-                        "kind": "pipeline",
-                        "stopBy": {
-                          "not": {
-                            "kind": "list"
-                          }
-                        },
-                        "not": {
-                          "has": {
-                            "kind": "command",
-                            "nthChild": 1,
-                            "any": [
-                              {
-                                "has": {
-                                  "field": "name",
-                                  "regex": "^(\\S*/)?(echo|printf|ls|cat|pwd|date|ps|du|df)$"
-                                }
-                              },
-                              {
-                                "has": {
-                                  "field": "name",
-                                  "regex": "^git$"
-                                },
-                                "regex": "^git(\\s+-\\S+(\\s+\\S+)?)*\\s+(log|show|status|diff|branch|remote|ls-files|rev-parse|describe|shortlog|blame)(\\s|$)"
-                              }
-                            ]
-                          }
-                        }
-                      }
-                    }
-                  ]
-                },
-                "stopBy": {
-                  "statement": {
-                    "kind": "pipeline"
-                  }
-                },
-                "all": [
-                  {
-                    "any": [
-                      {
-                        "precedes": {
-                          "regex": "^&&$",
-                          "precedes": {
-                            "not": {
-                              "regex": "^(?:\\w+=\\S*\\s+)*[\\\"']?(?:(?:\\S*/)?(?:(?:echo|printf)(?:\\s|$)|git(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:add|commit|push|pull|merge|rebase|reset|checkout|switch|cherry-pick|revert|restore|clean|rm|mv|am|apply|tag\\s+(?:-[^l\\s]\\S*\\s+)*[^-\\s]\\S*|stash(?:\\s+(?:push|pop|apply|drop|save|clear)\\b|\\s*$))(?:\\s|$)|(?:docker|podman|docker-compose|podman-compose)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:(?:compose|container|image|buildx)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?(?:up|run|restart|start|stop|rm|push|build|down|kill|rmi)(?:\\s|$)|systemctl(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:start|restart|stop|reload|reload-or-restart|try-restart|enable|disable|mask|unmask|kill)(?:\\s|$)|(?:kill|rm|mv|cp|install|ln|ssh|scp|rsync)(?:\\s|$)|(?:npm|pnpm|yarn|bun|cargo|twine|gem)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+publish(?:\\s|$)|(?:kubectl|terraform|tofu)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:apply|delete|destroy)(?:\\s|$)|(?:fly|flyctl|kamal|wrangler|vercel|netlify|firebase|serverless|sls|cdk|just|make|npm|pnpm|yarn|bun)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:run\\s+)?deploy\\S*(?:\\s|$)|deploy(?:\\s|$)|cargo(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+run(?:\\s|$)|(?:bash|sh|zsh|python3?|node|ruby|perl)\\s+[^-\\s])|\\.{1,2}/|(?:\\S*/)?target/(?:debug|release)/)"
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "inside": {
-                          "kind": "list",
-                          "precedes": {
-                            "regex": "^&&$",
-                            "precedes": {
-                              "not": {
-                                "regex": "^(?:\\w+=\\S*\\s+)*[\\\"']?(?:(?:\\S*/)?(?:(?:echo|printf)(?:\\s|$)|git(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:add|commit|push|pull|merge|rebase|reset|checkout|switch|cherry-pick|revert|restore|clean|rm|mv|am|apply|tag\\s+(?:-[^l\\s]\\S*\\s+)*[^-\\s]\\S*|stash(?:\\s+(?:push|pop|apply|drop|save|clear)\\b|\\s*$))(?:\\s|$)|(?:docker|podman|docker-compose|podman-compose)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:(?:compose|container|image|buildx)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?(?:up|run|restart|start|stop|rm|push|build|down|kill|rmi)(?:\\s|$)|systemctl(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:start|restart|stop|reload|reload-or-restart|try-restart|enable|disable|mask|unmask|kill)(?:\\s|$)|(?:kill|rm|mv|cp|install|ln|ssh|scp|rsync)(?:\\s|$)|(?:npm|pnpm|yarn|bun|cargo|twine|gem)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+publish(?:\\s|$)|(?:kubectl|terraform|tofu)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:apply|delete|destroy)(?:\\s|$)|(?:fly|flyctl|kamal|wrangler|vercel|netlify|firebase|serverless|sls|cdk|just|make|npm|pnpm|yarn|bun)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:run\\s+)?deploy\\S*(?:\\s|$)|deploy(?:\\s|$)|cargo(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+run(?:\\s|$)|(?:bash|sh|zsh|python3?|node|ruby|perl)\\s+[^-\\s])|\\.{1,2}/|(?:\\S*/)?target/(?:debug|release)/)"
-                              }
-                            }
-                          }
-                        }
-                      },
-                      {
-                        "nthChild": {
-                          "position": 1,
-                          "reverse": true
-                        },
-                        "inside": {
-                          "any": [
-                            {
-                              "kind": "subshell"
-                            },
-                            {
-                              "kind": "compound_statement"
-                            }
-                          ],
-                          "precedes": {
-                            "regex": "^&&$",
-                            "precedes": {
-                              "not": {
-                                "regex": "^(?:\\w+=\\S*\\s+)*[\\\"']?(?:(?:\\S*/)?(?:(?:echo|printf)(?:\\s|$)|git(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:add|commit|push|pull|merge|rebase|reset|checkout|switch|cherry-pick|revert|restore|clean|rm|mv|am|apply|tag\\s+(?:-[^l\\s]\\S*\\s+)*[^-\\s]\\S*|stash(?:\\s+(?:push|pop|apply|drop|save|clear)\\b|\\s*$))(?:\\s|$)|(?:docker|podman|docker-compose|podman-compose)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:(?:compose|container|image|buildx)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+)?(?:up|run|restart|start|stop|rm|push|build|down|kill|rmi)(?:\\s|$)|systemctl(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:start|restart|stop|reload|reload-or-restart|try-restart|enable|disable|mask|unmask|kill)(?:\\s|$)|(?:kill|rm|mv|cp|install|ln|ssh|scp|rsync)(?:\\s|$)|(?:npm|pnpm|yarn|bun|cargo|twine|gem)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+publish(?:\\s|$)|(?:kubectl|terraform|tofu)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:apply|delete|destroy)(?:\\s|$)|(?:fly|flyctl|kamal|wrangler|vercel|netlify|firebase|serverless|sls|cdk|just|make|npm|pnpm|yarn|bun)(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+(?:run\\s+)?deploy\\S*(?:\\s|$)|deploy(?:\\s|$)|cargo(?:\\s+-\\S+(?:\\s+\\S+)?)*\\s+run(?:\\s|$)|(?:bash|sh|zsh|python3?|node|ruby|perl)\\s+[^-\\s])|\\.{1,2}/|(?:\\S*/)?target/(?:debug|release)/)"
-                              }
-                            }
-                          }
-                        }
-                      }
-                    ]
-                  }
-                ],
-                "not": {
-                  "any": [
-                    {
-                      "precedes": {
-                        "regex": "^(&&|\\|\\|)$",
-                        "precedes": {
-                          "command": [
-                            "echo",
-                            "printf"
-                          ],
-                          "regex": "^(?:(?:\\S*/)?echo(?:\\s+-[neE]+)*(?:\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?'|(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*))?\\s*|(?:\\S*/)?printf(?:\\s+--)?\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?')(?:\\s+(?:[^\\s\\\"'`$\\\\]+|\\\"[^\\\"`$\\\\]*\\\"|'[^']*'))*\\s*)$",
-                          "not": {
-                            "has": {
-                              "any": [
-                                {
-                                  "kind": "simple_expansion"
-                                },
-                                {
-                                  "kind": "expansion"
-                                },
-                                {
-                                  "kind": "command_substitution"
-                                },
-                                {
-                                  "kind": "arithmetic_expansion"
-                                }
-                              ],
-                              "stopBy": "end"
-                            }
-                          }
-                        }
-                      },
-                      "not": {
-                        "inside": {
-                          "kind": "program",
-                          "stopBy": "end",
-                          "has": {
-                            "kind": "special_variable_name",
-                            "regex": "^\\?$",
-                            "stopBy": "end"
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "precedes": {
-                        "regex": "^\\|\\|$",
-                        "precedes": {
-                          "command": [
-                            "true",
-                            ":"
-                          ],
-                          "regex": "^(true|:)$"
-                        }
-                      }
-                    },
-                    {
-                      "nthChild": {
-                        "position": 1,
-                        "reverse": true
-                      },
-                      "inside": {
-                        "any": [
-                          {
-                            "kind": "list"
-                          },
-                          {
-                            "kind": "subshell"
-                          },
-                          {
-                            "kind": "compound_statement"
-                          }
-                        ],
-                        "precedes": {
-                          "regex": "^(&&|\\|\\|)$",
-                          "precedes": {
-                            "command": [
-                              "echo",
-                              "printf"
-                            ],
-                            "regex": "^(?:(?:\\S*/)?echo(?:\\s+-[neE]+)*(?:\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?'|(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*))?\\s*|(?:\\S*/)?printf(?:\\s+--)?\\s+(?:\\\"(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?\\\"|'(?:\\\\[nt])*\\s*(?:(?:[-=*_~]{2,}|#{1,6})(?:[^\\\"'`\\\\\\n]|\\\\[nt])*)?')(?:\\s+(?:[^\\s\\\"'`$\\\\]+|\\\"[^\\\"`$\\\\]*\\\"|'[^']*'))*\\s*)$",
-                            "not": {
-                              "has": {
-                                "any": [
-                                  {
-                                    "kind": "simple_expansion"
-                                  },
-                                  {
-                                    "kind": "expansion"
-                                  },
-                                  {
-                                    "kind": "command_substitution"
-                                  },
-                                  {
-                                    "kind": "arithmetic_expansion"
-                                  }
-                                ],
-                                "stopBy": "end"
-                              }
-                            }
-                          }
-                        }
-                      },
-                      "not": {
-                        "inside": {
-                          "kind": "program",
-                          "stopBy": "end",
-                          "has": {
-                            "kind": "special_variable_name",
-                            "regex": "^\\?$",
-                            "stopBy": "end"
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "nthChild": {
-                        "position": 1,
-                        "reverse": true
-                      },
-                      "inside": {
-                        "any": [
-                          {
-                            "kind": "list"
-                          },
-                          {
-                            "kind": "subshell"
-                          },
-                          {
-                            "kind": "compound_statement"
-                          }
-                        ],
-                        "precedes": {
-                          "regex": "^\\|\\|$",
-                          "precedes": {
-                            "command": [
-                              "true",
-                              ":"
-                            ],
-                            "regex": "^(true|:)$"
-                          }
-                        }
-                      }
-                    },
-                    {
-                      "follows": {
-                        "any": [
-                          {
-                            "kind": "command",
-                            "regex": "^set(\\s+\\S+)*\\s+-[A-Za-z]*o\\s+pipefail(\\s|$)"
-                          },
-                          {
-                            "kind": "command",
-                            "regex": "(?i)^setopt(\\s+\\S+)*\\s+pipe_?fail(\\s|$)"
-                          }
-                        ],
-                        "stopBy": "end"
-                      }
-                    },
-                    {
-                      "inside": {
-                        "follows": {
-                          "any": [
-                            {
-                              "kind": "command",
-                              "regex": "^set(\\s+\\S+)*\\s+-[A-Za-z]*o\\s+pipefail(\\s|$)"
-                            },
-                            {
-                              "kind": "command",
-                              "regex": "(?i)^setopt(\\s+\\S+)*\\s+pipe_?fail(\\s|$)"
-                            }
-                          ],
-                          "stopBy": "end"
-                        },
-                        "stopBy": "end"
-                      }
-                    },
-                    {
-                      "inside": {
-                        "kind": "program",
-                        "regex": "PIPESTATUS|pipestatus",
-                        "stopBy": "end"
-                      }
-                    }
-                  ]
-                }
-              }
-            }
-          ]
-        },
+        "capture": {"all": [{"matcher": "preset.unchecked-pipeline-tail"}, {"matcher": "preset.status-gates-and"}]},
         "name": "LAST",
         "field": "name"
       },
       "action": "warn",
-      "message": "`&&` after this pipeline tests `{LAST}`'s status, so a failure of the first command goes unseen and the next command still runs. Run `set -o pipefail` first, or write to a file, check it, then read the file.",
-      "messageShort": "`&&` tests `{LAST}`'s status only. `set -o pipefail`, or write to a file and check it.",
-      "wrappers": false
+      "message": "`&&` after this pipeline tests `{LAST}`'s status, so a failure of the first command is masked and the command after `&&` may run anyway. Run `set -o pipefail` first, read `PIPESTATUS`, or run the producer on its own.",
+      "messageShort": "`&&` tests `{LAST}`'s status only, so the next command may run after a failure. `set -o pipefail`."
     },
     "ps-grep-self-match": {
       "description": "ps piped into grep without a self-match guard",
       "match": {
-        "command": [
-          "grep",
-          "egrep",
-          "fgrep",
-          "rg",
-          "awk",
-          "sed"
-        ],
-        "any": [
-          {
-            "command": [
-              "grep",
-              "egrep",
-              "fgrep",
-              "rg"
-            ],
-            "not": {
-              "has": {
-                "regex": "^(-[A-Za-z]*v[A-Za-z]*|--invert-match)$"
-              }
-            }
-          },
-          {
-            "command": "awk",
-            "args": "(^|\\s)[\"']/[^/]|\\$0\\s*~"
-          },
-          {
-            "command": "sed",
-            "args": "(^|\\s)(-n\\s+)?[\"'](\\d+,)?/[^/]"
-          }
-        ],
+        "command": ["grep", "egrep", "fgrep", "rg"],
+        "not": {"flag": ["v", "invert-match"]},
         "inside": {
           "kind": "pipeline",
           "not": {
             "has": {
               "any": [
-                {
-                  "kind": "command",
-                  "regex": "\\[[A-Za-z0-9_.]\\]"
-                },
-                {
-                  "command": [
-                    "grep",
-                    "egrep",
-                    "fgrep",
-                    "rg"
-                  ],
-                  "args": "(^|\\s)(-[A-Za-z]*v[A-Za-z]*|--invert-match)\\s+[^|;&]*(grep|\\brg\\b)"
-                }
+                {"kind": "command", "regex": "\\[[A-Za-z0-9_.]\\]"},
+                {"command": ["grep", "egrep", "fgrep", "rg"], "flag": ["v", "invert-match"]}
               ],
               "stopBy": "end"
             }
@@ -1095,25 +63,7 @@
         "follows": {
           "command": "ps",
           "not": {
-            "any": [
-              {
-                "has": {
-                  "regex": "^-[A-Za-z]*p[A-Za-z0-9]*$|^--pid(=.*)?$|^-q$"
-                }
-              },
-              {
-                "all": [
-                  {
-                    "regex": "(^|\\s)-[A-Za-z]*o"
-                  },
-                  {
-                    "not": {
-                      "regex": "args|command|cmd"
-                    }
-                  }
-                ]
-              }
-            ]
+            "any": [{"flag": ["p", "pid", "q"]}, {"flag": "o", "not": {"has": {"regex": "args|command|cmd"}}}]
           },
           "stopBy": "end"
         }
@@ -1124,48 +74,14 @@
         {
           "when": {
             "matches": {
-              "any": [
-                {
-                  "has": {
-                    "regex": "^-[A-Za-z]*c[A-Za-z]*$"
-                  }
-                },
-                {
-                  "inside": {
-                    "kind": "pipeline",
-                    "has": {
-                      "command": "wc",
-                      "has": {
-                        "regex": "^-[A-Za-z]*l[A-Za-z]*$"
-                      }
-                    }
-                  }
-                }
-              ]
+              "any": [{"flag": "c"}, {"inside": {"kind": "pipeline", "has": {"command": "wc", "flag": "l"}}}]
             }
           },
           "text": "The count is off by about 2: `ps … | grep X` also counts the grep itself and your own shell (the tool wraps each command in `zsh -c … eval '…'`, which contains the pattern too).\nAdd `| grep -v grep` AFTER the match, or bracket the pattern (`grep '[c]argo'`), before counting.",
           "messageShort": "`ps | grep X` also counts the grep itself and your own shell, so a count is off by about 2: `| grep -v grep` after the match, or bracket the pattern (`grep '[c]argo'`)."
         },
         {
-          "when": {
-            "matches": {
-              "inside": {
-                "kind": "pipeline",
-                "has": {
-                  "any": [
-                    {
-                      "command": "awk",
-                      "args": "\\$[12]\\b"
-                    },
-                    {
-                      "command": "cut"
-                    }
-                  ]
-                }
-              }
-            }
-          },
+          "when": {"matches": {"inside": {"kind": "pipeline", "has": {"command": ["awk", "cut"]}}}},
           "text": "The PID you extract may be the grep's or your own shell's, not the process you meant: `ps … | grep X` also lists both (the tool wraps each command in `zsh -c … eval '…'`, which contains the pattern too). Read the output and confirm the PID (`ps -p PID -o command=`) before you use it.\nAdd `| grep -v grep` AFTER the match, or bracket the pattern (`grep '[c]argo'`), so only the real process is left.",
           "messageShort": "The extracted PID may be the grep's or your shell's: confirm it (`ps -p PID -o command=`) before using it; `| grep -v grep` after the match or a bracketed pattern (`grep '[c]argo'`) leaves only the real process."
         }
@@ -1175,64 +91,16 @@
     "tail-pipe-buffered": {
       "description": "a stage that buffers its output after tail -f in a Monitor",
       "match": {
-        "command": [
-          "cut",
-          "tr",
-          "uniq",
-          "awk",
-          "sed"
-        ],
+        "command": ["cut", "tr", "uniq", "awk", "sed"],
         "not": {
-          "any": [
-            {
-              "command": [
-                "sed",
-                "tr"
-              ],
-              "flag": [
-                "u",
-                "unbuffered"
-              ]
-            },
-            {
-              "regex": "fflush"
-            },
-            {
-              "via": "stdbuf"
-            }
-          ]
+          "any": [{"command": ["sed", "tr"], "flag": ["u", "unbuffered"]}, {"regex": "fflush"}, {"via": "stdbuf"}]
         },
-        "inside": {
-          "kind": "pipeline"
-        },
+        "inside": {"kind": "pipeline"},
         "follows": {
           "any": [
-            {
-              "command": "tail",
-              "flag": [
-                "f",
-                "F",
-                "follow"
-              ]
-            },
-            {
-              "command": "journalctl",
-              "flag": [
-                "f",
-                "follow"
-              ]
-            },
-            {
-              "command": [
-                "docker",
-                "kubectl"
-              ],
-              "args": "(^|\\s)logs(\\s|$)",
-              "flag": [
-                "f",
-                "follow"
-              ]
-            }
+            {"command": "tail", "flag": ["f", "F", "follow"]},
+            {"command": "journalctl", "flag": ["f", "follow"]},
+            {"any": [{"pattern": "docker logs $$$"}, {"pattern": "kubectl logs $$$"}], "flag": ["f", "follow"]}
           ],
           "stopBy": "end"
         }
@@ -1247,59 +115,21 @@
       "description": "a loop that waits for one specific 2xx status from curl",
       "match": {
         "all": [
+          {"any": [{"kind": "while_statement"}, {"kind": "for_statement"}]},
+          {"has": {"command": "curl", "stopBy": "end"}},
           {
             "any": [
-              {
-                "kind": "while_statement"
-              },
-              {
-                "kind": "for_statement"
-              }
-            ]
-          },
-          {
-            "has": {
-              "command": "curl",
-              "stopBy": "end"
-            }
-          },
-          {
-            "any": [
+              {"all": [{"pattern": "until $$$A"}, {"has": {"matcher": "preset.compares-2xx", "stopBy": "end"}}]},
               {
                 "all": [
-                  {
-                    "regex": "^until\\b"
-                  },
-                  {
-                    "has": {
-                      "kind": "test_command",
-                      "regex": "(^|\\s)(=|==|-eq)\\s*\"?2[0-9][0-9]\"?(\\s|\\])",
-                      "stopBy": "end"
-                    }
-                  }
-                ]
-              },
-              {
-                "all": [
-                  {
-                    "has": {
-                      "command": "break",
-                      "stopBy": "end"
-                    }
-                  },
-                  {
-                    "has": {
-                      "kind": "test_command",
-                      "regex": "(^|\\s)(=|==|-eq)\\s*\"?2[0-9][0-9]\"?(\\s|\\])",
-                      "stopBy": "end"
-                    }
-                  }
+                  {"has": {"command": "break", "stopBy": "end"}},
+                  {"has": {"matcher": "preset.compares-2xx", "stopBy": "end"}}
                 ]
               },
               {
                 "has": {
                   "kind": "case_item",
-                  "regex": "^2[0-9][0-9]\\)",
+                  "has": {"nthChild": 1, "matcher": "preset.status-2xx"},
                   "stopBy": "end"
                 }
               }
@@ -1311,70 +141,198 @@
       "message": "Do not wait for one specific success code: a 404, 401 or 3xx never becomes 200, so the loop spins until its timeout.\nLoop only while the status is 000 or 5xx, stop on anything else and read the code (`case $c in 000|5??) sleep 2;; *) echo $c; break;; esac`), or let curl retry: `curl --retry N --retry-connrefused -s -o /dev/null -w '%{{http_code}}' URL` (--retry only retries timeouts and HTTP 408, 429, 500, 502, 503, 504)."
     }
   },
+  "matchers": {
+    "preset.last-child": {"nthChild": {"position": 1, "reverse": true}},
+    "preset.status-carrier": {
+      "any": [
+        {"kind": "pipeline"},
+        {"kind": "list"},
+        {"kind": "subshell"},
+        {"kind": "compound_statement"},
+        {"kind": "redirected_statement"}
+      ]
+    },
+    "preset.tail-step": {
+      "all": [
+        {"matcher": "preset.status-carrier"},
+        {"any": [{"matcher": "preset.last-child"}, {"inside": {"kind": "redirected_statement"}}]}
+      ]
+    },
+    "preset.next-statement": {"nthChild": "n", "not": {"kind": "comment"}},
+    "preset.pipefail-word": {
+      "any": [
+        {"pattern": {"context": "\"$a\" pipefail", "selector": "word"}},
+        {"pattern": {"context": "\"$a\" pipe_fail", "selector": "word"}}
+      ]
+    },
+    "preset.pipefail-set": {
+      "any": [
+        {"command": "set", "flag": "o", "has": {"matcher": "preset.pipefail-word"}},
+        {"command": "setopt", "has": {"matcher": "preset.pipefail-word"}}
+      ]
+    },
+    "preset.status-checked": {
+      "any": [
+        {"follows": {"matcher": "preset.pipefail-set", "stopBy": "end"}},
+        {"inside": {"follows": {"matcher": "preset.pipefail-set", "stopBy": "end"}, "stopBy": "end"}},
+        {
+          "inside": {
+            "precedes": {"has": {"matcher": "preset.pipestatus-name", "stopBy": "end"}, "stopBy": "end"},
+            "stopBy": "end"
+          }
+        }
+      ]
+    },
+    "preset.pipestatus-name": {
+      "any": [
+        {"pattern": {"context": "${PIPESTATUS}", "selector": "variable_name"}},
+        {"pattern": {"context": "${pipestatus}", "selector": "variable_name"}}
+      ]
+    },
+    "preset.unchecked-pipeline-tail": {
+      "command": [
+        "head", "tail", "cat", "wc", "sort", "cut", "uniq", "tr", "sed", "tee", "column", "nl", "paste", "rev",
+        "fold", "less", "more"
+      ],
+      "nthChild": {"position": 1, "reverse": true},
+      "inside": {"kind": "pipeline"},
+      "not": {"matcher": "preset.status-checked"}
+    },
+    "preset.status-gates-and": {
+      "inside": {
+        "nthChild": 1,
+        "inside": {"pattern": "$A && $B"},
+        "stopBy": {"not": {"matcher": "preset.tail-step"}}
+      }
+    },
+    "preset.status-gates-or": {
+      "inside": {
+        "nthChild": 1,
+        "inside": {"pattern": "$A || $B", "not": {"any": [{"pattern": "$A || true"}, {"pattern": "$A || :"}]}},
+        "stopBy": {"not": {"matcher": "preset.tail-step"}}
+      }
+    },
+    "preset.status-tests-condition": {
+      "inside": {
+        "any": [
+          {"inside": {"any": [{"kind": "if_statement"}, {"kind": "while_statement"}], "field": "condition"}},
+          {"nthChild": 1, "inside": {"kind": "elif_clause"}}
+        ],
+        "stopBy": {"not": {"matcher": "preset.tail-step"}}
+      }
+    },
+    "preset.status-read-by-next": {
+      "inside": {
+        "matcher": "preset.status-carrier",
+        "nthChild": "n",
+        "not": {"any": [{"inside": {"kind": "list"}}, {"precedes": {"regex": "^&$"}}]},
+        "precedes": {
+          "any": [{"has": {"pattern": "$?", "stopBy": "end"}}, {"has": {"pattern": "${?}", "stopBy": "end"}}],
+          "stopBy": {"matcher": "preset.next-statement"}
+        },
+        "stopBy": {"not": {"matcher": "preset.tail-step"}}
+      }
+    },
+    "preset.status-negated": {"inside": {"kind": "pipeline", "has": {"kind": "negated_command"}}},
+    "preset.status-2xx": {"regex": "^\"?2[0-9][0-9]\"?$"},
+    "preset.equality": {
+      "any": [
+        {"pattern": {"context": "[ $A = $B ]", "selector": "binary_expression"}},
+        {"pattern": {"context": "[ $A == $B ]", "selector": "binary_expression"}},
+        {"pattern": {"context": "[ $A -eq $B ]", "selector": "binary_expression"}}
+      ]
+    },
+    "preset.compares-2xx": {
+      "kind": "test_command",
+      "has": {"matcher": "preset.equality", "has": {"matcher": "preset.status-2xx"}, "stopBy": "end"}
+    }
+  },
   "modes": {},
   "examples": {
     "pipe-status": {
       "catch": [
-        "make 2>&1 | tail -5 && echo ok",
         "make | head -20 || echo failed",
         "if make | tail -3; then echo ok; fi",
         "while make | wc -l; do sleep 1; done",
         "! make | tail",
         "cargo build 2>&1 | tail -20; echo \"exit=$?\"",
-        "make | tail > out.log && echo ok",
-        "set +o pipefail; make | tail && echo ok",
-        "git push 2>&1 | tail -3 && echo pushed",
-        "bash -c 'make | tail && echo ok'",
-        "(make | tail) && echo ok",
-        "(make | tail >log) && echo ok",
         "make | tail >/dev/null 2>&1 || echo failed",
-        "grep pat f | head && echo found",
-        "find . -name x | head && echo ok",
-        "make | tail | wc && echo ok",
-        "make | sort -u | tee out && echo ok",
-        "make 2>&1 | grep err | tail -5 && echo ok",
-        "make | tail && echo done",
-        "make | tail && echo \"done\"",
-        "make | tail && echo \"--- $x ---\"",
-        "make | tail && echo \"ok ---\"",
-        "make | tail && printf '%s\\n' done",
-        "cargo build 2>&1 | tail -3 && echo \"exit=$?\"",
-        "make | tail && echo ---; echo $?",
+        "set +o pipefail; make | tail || echo failed",
+        "bash -c 'make | tail || echo failed'",
+        "(make | tail) || echo failed",
+        "make | sort -u | tee out || echo failed",
+        "make 2>&1 | grep err | tail -5 || exit 1",
         "make | tail || false",
-        "make | tail && git status || true",
         "(make | tail); echo $?",
         "make | tail\necho $?",
         "{ make | tail; }; echo $?",
         "make | tail; [ $? -eq 0 ] && echo ok",
+        "make | tail # note\necho $?",
+        "make | tail || git status || true"
+      ],
+      "pass": [
+        "make | tail",
+        "set -o pipefail; make | tail || echo failed",
+        "set -eo pipefail; if make | tail; then x; fi",
+        "setopt pipefail; make | tail || echo failed",
+        "make | tail || echo failed; echo ${PIPESTATUS[0]}",
+        "make | tail; echo ${pipestatus[1]}",
+        "make | grep error || echo none",
+        "make | rg error || echo none",
+        "make | jq . || echo bad",
+        "make | awk '{print $1}' || echo bad",
+        "ls | xargs -n1 echo || echo y",
+        "if x; then make | tail; fi",
+        "for f in a b; do make $f | tail -3; done",
+        "make | tail; ls",
+        "make > out.log || tail out.log",
+        "make | tail || true",
+        "make | tail || :",
+        "make | tail >log || true",
+        "a | b | sort || true",
+        "x && make | tail || true",
+        "make | tail; echo x; echo $?",
+        "make | tail; true; echo $?",
+        "just test > log; echo \"exit=$?\"",
+        "make > out.log 2>&1; echo \"rc=$?\"",
+        "make | tail && echo ok",
+        "make | tail; echo x",
+        "make | tail & echo $?"
+      ]
+    },
+    "pipe-status-chain": {
+      "catch": [
+        "make 2>&1 | tail -5 && echo ok",
+        "make | tail && ls",
+        "make | tail > out.log && echo ok",
+        "(make | tail) && echo ok",
+        "{ make | tail; } && ls",
+        "x && make | tail && git status",
+        "make | tail | wc && echo ok",
+        "make | sort -u | tee out && echo ok",
+        "make 2>&1 | grep err | tail -5 && echo ok",
+        "cd x && make | tail && ls",
+        "ls | head -3 && echo ---",
+        "bash -c 'make | tail && echo ok'",
+        "set +o pipefail; make | tail && echo ok",
+        "make | tail && sudo ls",
+        "make | tail && timeout 300 cargo test",
+        "echo ${PIPESTATUS[0]}; make | tail && ls",
         "make | tail && git push",
-        "make | tail && git commit -m x",
-        "make | tail && git -C d push origin main",
-        "make | tail && git add -A",
-        "make | tail && git stash",
-        "make | tail && docker compose up -d",
-        "make | tail && sudo systemctl restart x",
-        "make | tail && rm -rf build",
-        "make | tail && ./run.sh",
-        "make | tail && ./target/release/app",
-        "make | tail && cargo run",
+        "make | tail && ./target/debug/x4c",
+        "make | tail && bash script.sh",
         "make | tail && python3 x.py",
-        "make | tail && ssh host ls",
-        "make | tail && kubectl apply -f x.yaml",
-        "make | tail && wrangler deploy",
-        "make | tail && git push 2>&1 | tail -2",
-        "(make | tail) && git push",
-        "x && make | tail && git push",
-        "make | tail && echo ok > log"
+        "make | tail && cargo publish",
+        "make | tail && timeout 5 git push",
+        "make | tail && rm -rf build"
       ],
       "pass": [
         "make | tail",
         "set -o pipefail; make | tail && echo ok",
-        "set -eo pipefail; if make | tail; then x; fi",
         "setopt pipefail; make | tail && echo ok",
         "make | tail && echo ok; echo ${PIPESTATUS[0]}",
-        "make | tail; echo ${pipestatus[1]}",
         "make | grep error && echo found",
-        "make | rg error || echo none",
+        "make | rg error && echo found",
         "make | jq . && echo ok",
         "make | awk '{print $1}' && echo ok",
         "ls | xargs -n1 echo && echo y",
@@ -1383,81 +341,12 @@
         "for f in a b; do make $f | tail -3; done",
         "make | tail; ls",
         "make > out.log && tail out.log",
-        "ls | head -3 && echo ---",
-        "git log | head -5 && git status",
-        "cat f | wc -l && echo done",
-        "bash -c 'set -o pipefail; make | tail && echo ok'",
-        "make | tail >log; echo done",
-        "ls | sort | head && echo ok",
-        "git log | sort | head -3 && git status",
-        "echo a | tr a b | wc && echo ok",
-        "ls | head -3 && echo ---",
-        "fd -t f . tests | sort && echo \"=====\"",
-        "make | tail && echo \"=====PYPROJECT=====\"",
-        "make | tail && echo \"--- listing ---\"",
-        "make | tail && echo \"### Section\"",
-        "make | tail && echo \"\"",
-        "make | tail && echo",
-        "make | tail && printf '\\n'",
-        "make | tail && printf '=== %s ===\\n' x",
-        "make | tail || echo \"---\"",
-        "make | tail || true",
-        "make | tail || :",
-        "make | tail >log || true",
-        "a | b | sort || true",
-        "(make | tail) && echo ---",
-        "x && make | tail || true",
-        "make | tail; echo x; echo $?",
-        "make | tail; true; echo $?",
-        "just test > log; echo \"exit=$?\"",
-        "make > out.log 2>&1; echo \"rc=$?\"",
-        "make | tail & echo $?",
-        "git push 2>&1 | tail -2 && git status",
-        "make | tail && ls",
-        "make | tail && git status",
-        "make | tail && git log | head",
-        "make | tail && git stash list",
-        "make | tail && git tag",
-        "make | tail && cargo build",
-        "make | tail && python3 -m pytest",
-        "make | tail && rg x | head",
-        "make | tail && docker ps",
-        "make | tail && true",
-        "(make | tail) && ls",
-        "make | tail && sudo ls"
-      ]
-    },
-    "pipe-status-chain": {
-      "catch": [
-        "git push 2>&1 | tail -2 && git status",
-        "make | tail && ls",
-        "make | tail && git log --oneline -3",
-        "make | tail && rg error log | head",
-        "make | tail && cargo build",
-        "make | tail && python3 -m pytest",
-        "cd x && make | tail && ls",
-        "(make | tail) && git diff",
-        "make | tail && git stash list",
-        "make | tail && true",
-        "make | sort | cat && git status",
-        "make | tail && sudo ls",
-        "make | tail && timeout 300 cargo test"
-      ],
-      "pass": [
-        "make | tail",
-        "make | tail && git push",
-        "make | tail && echo ok",
-        "make | tail && rm -rf x",
         "make | tail || echo failed",
-        "set -o pipefail; make | tail && ls",
-        "make | tail && echo ---",
         "make | tail || true",
-        "make | tail; ls",
-        "make | tail && ./run.sh",
-        "make | tail && cargo run",
-        "make > out.log && ls",
         "make | tail; echo $?",
-        "if make | tail; then ls; fi"
+        "if make | tail; then ls; fi",
+        "make | tail; git push",
+        "make && git push"
       ]
     },
     "ps-grep-self-match": {
@@ -1467,7 +356,6 @@
         "ps aux | grep vite | awk '{print $2}'",
         "ps aux | rg cargo",
         "ps aux | egrep 'a|b'",
-        "ps aux | awk '/cargo/ {print $2}'",
         "ps aux | grep cargo | cut -c1-80",
         "bash -c 'ps aux | grep cargo'",
         "ps -eo pid,command | grep vite",
@@ -1521,7 +409,8 @@
         "for i in $(seq 1 60); do c=$(curl -s -o /dev/null -w \"%{http_code}\" URL); [ \"$c\" = 200 ] && break; sleep 5; done",
         "until [ \"$(curl -s -o /dev/null -w %{http_code} URL)\" = 200 ]; do sleep 5; done",
         "while :; do c=$(curl -s -w %{http_code} URL); case $c in 200) break;; esac; sleep 2; done",
-        "until [[ $(curl -s -o /dev/null -w '%{http_code}' URL) == 204 ]]; do sleep 1; done"
+        "until [[ $(curl -s -o /dev/null -w '%{http_code}' URL) == 204 ]]; do sleep 1; done",
+        "until [ \"$(curl -s -o /dev/null -w %{http_code} URL)\" -eq 200 ]; do sleep 5; done"
       ],
       "pass": [
         "while :; do c=$(curl -s -o /dev/null -w '%{http_code}' URL); case $c in 000|5??) sleep 2;; *) echo $c; break;; esac; done",
@@ -1529,7 +418,10 @@
         "for i in 1 2 3; do curl -s URL; done",
         "curl -s URL",
         "curl --retry 5 --retry-connrefused -s -o /dev/null -w '%{http_code}' URL",
-        "while [ \"$(curl -s -o /dev/null -w '%{http_code}' URL)\" -eq 200 ]; do sleep 1; done"
+        "while [ \"$(curl -s -o /dev/null -w '%{http_code}' URL)\" -eq 200 ]; do sleep 1; done",
+        "until [ \"$(curl -s -o /dev/null -w %{http_code} URL)\" != 200 ]; do sleep 5; done",
+        "until [ \"$(curl -s -o /dev/null -w %{http_code} URL)\" -ne 200 ]; do sleep 5; done",
+        "until [ \"$(curl -s -o /dev/null -w %{http_code} URL)\" -ge 500 ]; do sleep 5; done"
       ]
     }
   }

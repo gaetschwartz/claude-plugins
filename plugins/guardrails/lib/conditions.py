@@ -19,6 +19,8 @@ import policy
 if TYPE_CHECKING:
     from collections.abc import Mapping
 
+    from rulebuilder import Inliner
+
 MAX_DEPTH = 8
 MAX_NODES = 64
 TOOLS = ("Bash", "Monitor")
@@ -225,6 +227,21 @@ def holds(node: Mapping[str, Any] | None, env: Env, hit: Hit | None = None) -> b
     if key == "not":
         return not holds(value, env, hit)
     return atom_holds(key, value, env, hit)
+
+
+def inlined(node: Any, inliner: Inliner, where: str) -> Any:
+    """The condition with the matcher references inside each `matches` atom expanded; a malformed node is left for
+    `check` to report."""
+    if not isinstance(node, dict) or len(node) != 1:
+        return node
+    ((key, value),) = node.items()
+    if key in ("all", "any") and isinstance(value, list):
+        return {key: [inlined(item, inliner, f"{where}.{key}[{i}]") for i, item in enumerate(value)]}
+    if key == "not":
+        return {key: inlined(value, inliner, f"{where}.not")}
+    if key == "matches":
+        return {key: inliner.rule(value, f"{where}.matches")}
+    return node
 
 
 def match_atoms(node: Mapping[str, Any]) -> Iterator[dict[str, Any]]:

@@ -93,7 +93,9 @@ class Card(AstIsolated):
         files = ["**Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` present",
                  "**Global** config `/Users/me/.config/dev.gaetans.guardrails/claude-plugin/config.json` present",
                  "**Project** config `/Users/me/src/app/.claude/guardrails.json` absent"]
-        text = render.status_listing(render.Status(files, True, False, rules, modes, ["text as reported"]))
+        matchers = [render.MatcherRow("preset.operand", ["global"], ["du-dust"])]
+        text = render.status_listing(render.Status(files, True, False, rules, modes, ["text as reported"],
+                                                   matchers=matchers))
         self.assertEqual(text, doc_block("**Managed** platform file"))
         self.assertNotIn("```\n", out)
 
@@ -157,7 +159,8 @@ class Card(AstIsolated):
         out = self.card({"match": {"kind": "program", "regex": regex}, "message": "m"}, [{"cmd": "ls"}])
         self.assertIn(f"\n**Raw** `` {regex} ``", out + "\n")
         for match, raw in (({"command": "x", "args": "-f"}, "-f"), ({"command": "x", "args": "-f", "regex": "zz"}, "-f | zz"),
-                           ({"command": "x", "has": {"pattern": "y $$$"}, "regex": "zz"}, "y $$$")):
+                           ({"command": "x", "has": {"pattern": "y $$$"}, "regex": "zz"}, "y $$$"),
+                           ({"command": "x", "has": {"pattern": {"context": "y z", "selector": "word"}}}, "y z")):
             self.assertTrue(self.card({"match": match, "message": "m"}, [{"cmd": "x"}]).rstrip("\n").endswith(f"**Raw** `{raw}`"))
         self.assertNotIn("**Raw**", self.card(PKILL, [{"cmd": "ls"}]))
         rule = {"match": {"command": "grep", "args": "-r", "regex": "zz"}, "message": "m"}

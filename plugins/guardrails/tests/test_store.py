@@ -270,7 +270,7 @@ class ManagedPath(Isolated):
             self.assertEqual(store.managed_path_for(platform), Path("/etc/claude-code/guardrails.json"))
 
     def test_the_layer_of_a_valid_absent_or_unusable_file(self) -> None:
-        self.assertEqual(store.load_managed(), ({"rules": {}, "modes": {}}, []))
+        self.assertEqual(store.load_managed(), ({"rules": {}, "modes": {}, "matchers": {}}, []))
         self.assertEqual(store.presence(self.mpath), "absent")
         self.put(self.mpath, {"rules": {"x": self.RULE}})
         state, problems = store.load_managed()
