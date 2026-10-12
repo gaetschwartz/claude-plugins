@@ -3,7 +3,7 @@
   "rules": {
     "find-fd": {
       "description": "find when fd is installed",
-      "match": {"command": "find", "not": {"via": "ssh"}},
+      "match": {"command": "find", "matcher": "preset.local-tool"},
       "when": {
         "bin": [
           "fd",
@@ -27,7 +27,7 @@
               }
             ]
           },
-          {"not": {"via": "ssh"}}
+          {"matcher": "preset.local-tool"}
         ]
       },
       "when": {
@@ -45,7 +45,7 @@
           "not": {"follows": {"matcher": "preset.operand", "stopBy": "end"}}
         },
         "not": {"flag": "doc"},
-        "all": [{"not": {"via": "ssh"}}]
+        "matcher": "preset.local-tool"
       },
       "when": {
         "bin": "cargo-nextest"
@@ -60,7 +60,7 @@
           {"command": "du", "has": {"capture": {"matcher": "preset.operand"}, "name": "PATH"}},
           {"command": "du"}
         ],
-        "not": {"via": "ssh"}
+        "matcher": "preset.local-tool"
       },
       "when": {
         "bin": "dust"
@@ -76,7 +76,8 @@
     }
   },
   "matchers": {
-    "preset.operand": {"kind": "word", "regex": "^[^-+]"}
+    "preset.operand": {"kind": "word", "regex": "^[^-+]"},
+    "preset.local-tool": {"not": {"via": "ssh"}}
   },
   "modes": {},
   "examples": {

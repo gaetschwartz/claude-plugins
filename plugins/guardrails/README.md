@@ -3,7 +3,7 @@
 A PreToolUse hook for the Bash and Monitor tools whose rules are data. Each command is parsed in process by the
 `ast-grep-py` library (its tree-sitter Bash grammar does all the lexing and parsing; guardrails has no shell parser of its
 own), and every rule is matched on the command as written, on its wrapper variants (`sudo`, `xargs`, `timeout`, ...) and on
-the scripts of `bash -c` and `eval`. Heredoc bodies and redirect targets are data. A Monitor call with only a `ws` URL has no
+the scripts of `bash -c`, `su -c`, `eval`, `ssh`, `watch` and heredocs fed to a shell. Heredoc bodies and redirect targets are data. A Monitor call with only a `ws` URL has no
 command and is ignored; monitors a plugin declares start without a tool call and are not covered.
 
 **Nothing is active after install.** Run the `guardrails:setup` skill to pick presets.
@@ -62,7 +62,7 @@ command the parser cannot finish or understand is allowed with a short notice th
 | project: `<project>/.claude/guardrails.json`, meant to be committed like `settings.json` (none when the project is the home directory) | config |
 | state: `${CLAUDE_PLUGIN_DATA}/state.json` (default `~/.claude/plugins/data/guardrails-gaetans-claude-plugins/`) | state |
 
-Config is what you set on purpose: `rules` (each with a `setBy` record of who changed it, when and why), `modes`
+Config is what you set on purpose: `rules` (each with a `setBy` record of who changed it, when and why), `matchers`, `modes`
 declarations and persistent activations, and `enabled` / `disabledReason` (`guardrails disable`). Only the CLI writes it,
 atomically, under a lock kept in the data dir (`config.lock`), never next to the config. State is what the hook remembers per
 session (retry acknowledgements, session modes, warnings shown), one table for every project since session ids are unique;
@@ -111,9 +111,9 @@ is a configuration change and needs the user's explicit request (`--as-user`).
 | preset | rules |
 |---|---|
 | `docs-first` | `no-strings` (deny, retry), `binary-spelunking` (otool/nm/objdump, warn); mode `reverse-engineering` |
-| `process-safety` | `no-pkill` (pkill/killall, deny, retry), `kill-9` (warn); mode `incident` |
+| `process-safety` | `no-pkill` (pkill/killall, deny, retry), `kill-9` (warn), `no-pgrep-status` and `no-unchecked-pid-lookup` (deny an unguarded `pgrep -f` whose status or output is used, or an unread PID lookup fed to `kill`), `warn-pgrep-in-loop`, `warn-pgrep-full-cmdline` (warn); mode `incident` |
 | `modern-cli` | `find-fd`, `grep-rg`, `cargo-nextest` (`cargo test` except `--doc`), `du-dust`: one-line warnings that nudge toward the faster tool, never blocking, each only when its tool is installed |
-| `shell-hygiene` | `pipe-status` (a pipeline's status read from a trailing `tail`/`head`/…: deny when read by `\|\|`, `$?`, a condition or `!`), `pipe-status-chain` (the same pipeline before `&&`, warn), `ps-grep-self-match` (`ps \| grep` without a guard, warn), `tail-pipe-buffered` (Monitor only: a buffered stage after `tail -f`, warn), `http-wait-exact-status` (a loop waiting for one 2xx from curl, warn) |
+| `shell-hygiene` | `pipe-status` (a pipeline ending in `head`/`tail` whose status is read by `\|\|`, `$?`, a condition or `!`: deny), `pipe-status-filter` (the same for `cat`/`sort`/`sed`/…: warn), `pipe-status-chain` (the same pipeline before `&&`, warn), `ps-grep-self-match` (`ps \| grep`/`awk`/`sed` without a guard, warn), `tail-pipe-buffered` (Monitor only: a stage that may buffer after `tail -f`, warn), `http-wait-exact-status` (a loop waiting for one 2xx from curl, warn) |
 
 ## CLI
 

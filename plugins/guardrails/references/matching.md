@@ -338,9 +338,8 @@ full); when none holds, the rule's own `message` and `messageShort` apply, so `m
 cases. A case's `when` takes every atom above plus two that read the hit (refused in a rule's own `when`, which runs
 before any command is read):
 
-- `{"matches": <rule>}`: the matched node also satisfies this rule, an ast-grep rule object that may use the
-  `command`, `assignment`, `wrapper`, `statement`, `redirect` and `discards` atoms and everything else `match` can (it
-  is built the same way; a `capture` is refused, it would bind nothing), tested with
+- `{"matches": <rule>}`: the matched node also satisfies this rule, an ast-grep rule object that may use the atoms and
+  everything else `match` can (it is built the same way; a `capture` is refused, it would bind nothing), tested with
   ast-grep's own node matcher on that one node. Relations look from that node: `has` sees its children, `inside` its
   ancestors.
 - `{"wrapped": true}` or `false`: the hit is wrapped (the `wrapped` tag of `rule test`) or direct.

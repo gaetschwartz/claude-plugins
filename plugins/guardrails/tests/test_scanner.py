@@ -1,12 +1,13 @@
 from __future__ import annotations  # noqa: I001
 
+import json
 import re
 import shlex
 import unittest
 from typing import Any
 from unittest import mock
 
-from helpers import GREP_RECURSIVE, MAINTAINER, AstIsolated, real_matchers, real_rules
+from helpers import GREP_RECURSIVE, ROOT, AstIsolated, real_matchers, real_rules
 
 import matching
 import policy
@@ -79,8 +80,8 @@ class JoinedRunners(AstIsolated):
         for command in (loop, f"ssh zgx '{loop}'", f"watch '{loop}'"):
             with self.subTest(command=command):
                 ev = matching.evaluate(command, rules)
-                self.assertIsNotNone(ev.kinds["no-pgrep-status"])
-                self.assertIsNotNone(ev.kinds["warn-pgrep-in-loop"])
+                self.assertIsNotNone(ev.kinds["process-safety-no-pgrep-status"])
+                self.assertIsNotNone(ev.kinds["process-safety-warn-pgrep-in-loop"])
 
     def test_a_unit_records_the_wrappers_and_runners_it_was_reached_through_outermost_first(self) -> None:
         self.assertEqual(self.chains(f"sudo ssh h '{K} x'", f"{K} x"), [("sudo", "ssh")])
@@ -257,7 +258,7 @@ class Units(AstIsolated):
 
 
 class RealRuleSet(AstIsolated):
-    """Cost and verdicts with the maintainer's eight rules and every preset rule loaded together."""
+    """Cost and verdicts with every preset rule loaded together."""
 
     def setUp(self) -> None:
         super().setUp()
@@ -280,13 +281,13 @@ class RealRuleSet(AstIsolated):
         return len(seen), sum(seen)
 
     def test_the_rules_catch_and_pass_their_documented_commands_through_the_whole_set(self) -> None:
-        known_miss = "$'p\\x6bill' x"
-        for rid, examples in MAINTAINER["examples"].items():
-            for kind, commands in examples.items():
-                for command in commands:
-                    with self.subTest(rule=rid, kind=kind, command=command):
-                        caught_it = matching.evaluate(command, self.rules).kinds[rid] is not None
-                        self.assertEqual(caught_it, kind == "catch" and command != known_miss)
+        for path in sorted((ROOT / "presets").glob("*.json")):
+            for rid, examples in json.loads(path.read_text()).get("examples", {}).items():
+                for kind, commands in examples.items():
+                    for command in commands:
+                        with self.subTest(rule=f"{path.stem}-{rid}", kind=kind, command=command):
+                            caught_it = matching.evaluate(command, self.rules).kinds[f"{path.stem}-{rid}"] is not None
+                            self.assertEqual(caught_it, kind == "catch")
 
     def test_identical_wrapped_lines_collapse_to_a_handful_of_variants(self) -> None:
         for command in ("sudo apt-get install -y x;\n" * 200, "sudo apt-get install -y x;" * 100):
@@ -317,7 +318,7 @@ class RealRuleSet(AstIsolated):
 
     def test_a_wrapper_inside_a_heredoc_statement_stays_with_its_statement(self) -> None:
         command = "sudo tee /etc/x <<'EOF'\nline\nEOF\n" + f"{K} x"
-        self.assertEqual(matching.evaluate(command, self.rules).kinds["no-kill-by-name"], Kind.DIRECT)
+        self.assertEqual(matching.evaluate(command, self.rules).kinds["process-safety-no-pkill"], Kind.DIRECT)
 
     def test_dense_wrapper_families_are_still_denied_with_their_cause(self) -> None:
         for command in ("sudo " * 4000, "sudo true; " * 6000, "xargs -r " * 2000 + "ls"):

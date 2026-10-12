@@ -48,11 +48,11 @@ Parse the text above; every long flag has a short one.
    - removal: confirm first with AskUserQuestion (`header` `Remove`, question "Remove rule `<id>` from `<scope>`?",
      options `Remove` and `Keep (Recommended)`) unless `-y`; then `guardrails rule rm <id> --scope <s>
      --as-user --reason "…"`
-3. A `match` may refer to config `matchers` (`{"matcher": "name"}`): changing one changes every rule that uses it;
-   `guardrails status` lists them. For a non-trivial change to `match`, read `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md`; worked rules
-   by shape are in `${CLAUDE_PLUGIN_ROOT}/references/ast/index.md` (read only the file that matches).
-   Follow the matcher ladder (a `command` atom, a `command` with `args`, a `pattern` with `inside` / `has`, a
-   whole-text `{"kind": "program", "regex": ...}`) and run `guardrails rule ast '<command>'` to read the node kinds
+3. A `match` may refer to config `matchers` (`{"matcher": "name"}`): changing one changes every rule that uses it
+   (`preset.*` ones belong to presets: the next `preset install` replaces them); `guardrails status` lists them. For a non-trivial change to `match`, read
+   `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md`; worked rules by shape are in
+   `${CLAUDE_PLUGIN_ROOT}/references/ast/index.md` (read only the file that matches). Follow the matcher ladder of
+   writing-rules.md (atoms first, a regex last) and run `guardrails rule ast '<command>'` to read the node kinds
    before writing relational rules. After a change to `match`, `wrappers`, `when` or `messages`, re-verify: write the
    commands the user gives, or sensible ones (a caught command, a wrapped form, a look-alike that must pass), as an examples list
    (`{"cmd", "source": "yours" | "inferred", "expect": "match" | "pass"}`, `expect` from what the user wants) on stdin

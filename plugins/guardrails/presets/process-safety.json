@@ -1,5 +1,5 @@
 {
-  "description": "Discourage broad process killing: pkill/killall by name, and SIGKILL as a first resort.",
+  "description": "Discourage broad process killing: pkill/killall by name, SIGKILL as a first resort, and pgrep -f or an unread PID lookup used to decide or to signal.",
   "rules": {
     "no-pkill": {
       "description": "Signalling processes by name pattern",
@@ -7,7 +7,15 @@
       "action": "deny",
       "retry": "same-command",
       "modes": ["incident"],
-      "message": "Don't signal processes by name: pkill/killall patterns match more than you expect and can kill the user's editors, agents or servers. Find the process with `pgrep -fl <pattern>`, confirm it is the right one, then `kill <pid>`, or ask the user to run it."
+      "message": "Do not kill by name (pkill, killall): it can match your own shell or an innocent process. To find a process, run `pgrep -xl <name>` as its own command, read the PID, confirm it is the right process, then `kill <pid>`.",
+      "messageShort": "No pkill/killall. Use `pgrep -xl <name>`, then `kill <pid>`.",
+      "messages": [
+        {
+          "when": {"matches": {"flag": ["f", "full"]}},
+          "text": "Do not kill by command-line pattern (pkill -f): it can match your own shell and unrelated processes. List the candidates as its own command, with a bracket in the pattern so it cannot match its own text (`pgrep -fl '[v]ite --port 5173'`), read the PID and the command line, confirm it is the right process, then `kill <pid>`.",
+          "messageShort": "No pkill -f. List with `pgrep -fl '[x]pattern'` alone, confirm the PID, then `kill <pid>`."
+        }
+      ]
     },
     "kill-9": {
       "description": "SIGKILL without trying SIGTERM first",
@@ -23,12 +31,363 @@
       },
       "action": "warn",
       "message": "SIGKILL gives the process no chance to clean up (temp files, locks, child processes). Send SIGTERM first (`kill <pid>`) and escalate only if it does not exit."
+    },
+    "no-pgrep-status": {
+      "description": "Never use the exit status of an unguarded pgrep -f (&&, ||, !, if, while, until).",
+      "match": {"statement": {"matcher": "preset.self-matching-pgrep"}, "matcher": "preset.status-used"},
+      "action": "deny",
+      "message": "Do not use pgrep's exit status in &&, ||, ! or if: with -f it can match your own shell and never turns false. Run `pgrep -fl '[x]pattern'` (or `pgrep -xl <name>`) as its own command and read the output. To wait for a process to exit, poll `kill -0 <pid>` with a PID you already identified.",
+      "messageShort": "No pgrep exit status in conditions. Poll `kill -0 <pid>`.",
+      "messages": [
+        {
+          "when": {"matches": {"inside": {"field": "condition", "kind": "while_statement", "stopBy": "end"}}},
+          "text": "Do not wait on a process by looping on pgrep: with -f it can match your own shell and the loop never ends. Get the PID once with `pgrep -fl '[x]pattern'` as its own command, then wait with `while kill -0 <pid> 2>/dev/null; do sleep 5; done` (or watch it from a Monitor).",
+          "messageShort": "No pgrep in a wait loop. Get the PID once (`pgrep -fl '[x]pattern'`), then poll `kill -0 <pid>`."
+        }
+      ]
+    },
+    "no-unchecked-pid-lookup": {
+      "description": "Never act on a PID lookup (pgrep, ps, pidof, lsof) that is piped or captured instead of read first.",
+      "match": {
+        "any": [
+          {
+            "matcher": "preset.self-matching-pgrep",
+            "inside": {
+              "any": [{"kind": "pipeline"}, {"kind": "command_substitution"}, {"kind": "process_substitution"}],
+              "stopBy": "end"
+            }
+          },
+          {"matcher": "preset.signal", "has": {"matcher": "preset.lookup-subst", "stopBy": "end"}},
+          {
+            "matcher": "preset.signal",
+            "has": {"matcher": "preset.unread-var", "stopBy": "end"},
+            "follows": {"matcher": "preset.lookup-assignment", "stopBy": "end"}
+          },
+          {
+            "matcher": "preset.signal",
+            "has": {"matcher": "preset.unread-var", "stopBy": "end"},
+            "inside": {"follows": {"matcher": "preset.lookup-assignment", "stopBy": "end"}, "stopBy": "end"}
+          },
+          {
+            "matcher": "preset.signal",
+            "inside": {"kind": "for_statement", "has": {"matcher": "preset.lookup-subst"}, "stopBy": "end"}
+          },
+          {
+            "matcher": "preset.signal",
+            "inside": {
+              "kind": "while_statement",
+              "inside": {"kind": "pipeline"},
+              "follows": {"matcher": "preset.lookup-stage", "stopBy": "end"},
+              "stopBy": "end"
+            }
+          },
+          {
+            "matcher": "preset.signal",
+            "inside": {"kind": "pipeline"},
+            "follows": {"matcher": "preset.lookup-stage", "stopBy": "end"}
+          },
+          {
+            "command": ["sh", "bash", "zsh", "dash", "ksh"],
+            "inside": {"kind": "pipeline"},
+            "follows": {
+              "regex": "\\bkill\\b",
+              "follows": {"matcher": "preset.lookup-stage", "stopBy": "end"},
+              "stopBy": "end"
+            }
+          }
+        ]
+      },
+      "action": "deny",
+      "message": "Do not pipe or capture a PID lookup (head, wc, tr, echo \"$(...)\"): with -f it can include your own shell, so lists and counts are off by one. Run it as its own command and read the output; for the newest or oldest PID use `pgrep -n` / `-o`. Put a bracket in the pattern (`'[x]pattern'`) so it cannot match itself.",
+      "messageShort": "No piped or captured PID lookups. Run it alone; `pgrep -n` / `-o` for the newest or oldest PID.",
+      "messages": [
+        {
+          "when": {
+            "matches": {
+              "any": [
+                {"command": ["kill", "xargs"]},
+                {"inside": {"command": ["kill", "xargs"], "stopBy": "end"}},
+                {"inside": {"kind": "pipeline", "has": {"command": "xargs"}, "stopBy": "end"}}
+              ]
+            }
+          },
+          "text": "Do not feed a PID lookup straight into kill or xargs kill: you would signal whatever it matched, possibly your own shell. Run the lookup as its own command (`pgrep -fl '[x]pattern'` or `pgrep -xl <name>`), confirm the PID, then `kill <pid>`.",
+          "messageShort": "No lookup straight into kill. Run it alone, confirm the PID, then `kill <pid>`."
+        }
+      ]
+    },
+    "warn-pgrep-in-loop": {
+      "description": "pgrep inside a loop or under watch: fine for reading, not for deciding.",
+      "match": {
+        "command": "pgrep",
+        "any": [
+          {"inside": {"any": [{"kind": "while_statement"}, {"kind": "for_statement"}], "stopBy": "end"}},
+          {"via": "watch"}
+        ]
+      },
+      "action": "warn",
+      "message": "pgrep inside a loop or under `watch`: make sure you only read its output. Do not loop on it to wait for a process or to choose what to signal. To wait for a process to exit, poll `kill -0 <pid>` with a PID you already identified.",
+      "messageShort": "pgrep in a loop or `watch`: read only. Poll `kill -0 <pid>` to wait."
+    },
+    "warn-pgrep-full-cmdline": {
+      "description": "pgrep -f matches full command lines, including your own shell.",
+      "match": {"matcher": "preset.self-matching-pgrep"},
+      "action": "warn",
+      "message": "`pgrep -f` matches full command lines, including your own shell's, so its output can list your shell. For a known process name use `pgrep -xl <name>`. For a command-line pattern bracket it, `pgrep -fl '[v]ite --port 5173'`, and do not spell the unbracketed text anywhere else in the same command (it would match your shell again).",
+      "messageShort": "`pgrep -f` can list your own shell. Use `-xl <name>` or bracket the pattern: `'[v]ite'`."
+    }
+  },
+  "matchers": {
+    "preset.and-or": {"any": [{"pattern": "$A && $B"}, {"pattern": "$A || $B"}]},
+    "preset.status-step": {
+      "all": [
+        {
+          "any": [
+            {"kind": "list"},
+            {"kind": "subshell"},
+            {"kind": "compound_statement"},
+            {"kind": "redirected_statement"}
+          ]
+        },
+        {"any": [{"nthChild": {"position": 1, "reverse": true}}, {"inside": {"kind": "redirected_statement"}}]}
+      ]
+    },
+    "preset.in-condition": {
+      "any": [
+        {
+          "inside": {
+            "any": [{"kind": "if_statement"}, {"kind": "while_statement"}],
+            "field": "condition",
+            "stopBy": "end"
+          }
+        },
+        {"nthChild": 1, "inside": {"kind": "elif_clause"}}
+      ]
+    },
+    "preset.status-used": {
+      "all": [
+        {
+          "any": [
+            {"nthChild": 1, "inside": {"matcher": "preset.and-or"}},
+            {
+              "inside": {
+                "nthChild": 1,
+                "inside": {"matcher": "preset.and-or"},
+                "stopBy": {"not": {"matcher": "preset.status-step"}}
+              }
+            },
+            {"inside": {"kind": "negated_command", "stopBy": "end"}},
+            {"matcher": "preset.in-condition"}
+          ]
+        },
+        {
+          "not": {
+            "all": [{"inside": {"kind": "pipeline"}}, {"not": {"nthChild": {"position": 1, "reverse": true}}}]
+          }
+        }
+      ]
+    },
+    "preset.pid-lookup": {
+      "any": [
+        {"command": ["pgrep", "pidof", "lsof"]},
+        {"command": "ps", "flag": "C"},
+        {
+          "command": "ps",
+          "inside": {"kind": "pipeline"},
+          "not": {"nthChild": {"position": 1, "reverse": true}},
+          "all": [{"not": {"flag": ["p", "pid", "q"]}}]
+        }
+      ]
+    },
+    "preset.lookup-stage": {
+      "any": [
+        {"matcher": "preset.pid-lookup"},
+        {"kind": "redirected_statement", "has": {"matcher": "preset.pid-lookup", "stopBy": "end"}}
+      ]
+    },
+    "preset.unread-var": {
+      "any": [
+        {"kind": "simple_expansion", "has": {"kind": "variable_name"}},
+        {"kind": "expansion", "has": {"kind": "variable_name"}}
+      ]
+    },
+    "preset.signal": {"command": "kill", "not": {"any": [{"flag": ["l", "L"]}, {"pattern": "kill -0 $$$"}]}},
+    "preset.lookup-subst": {
+      "kind": "command_substitution",
+      "has": {"matcher": "preset.pid-lookup", "stopBy": "end"}
+    },
+    "preset.lookup-assignment": {
+      "kind": "variable_assignment",
+      "has": {"matcher": "preset.lookup-subst", "stopBy": "end"}
+    },
+    "preset.self-matching-pgrep": {
+      "command": "pgrep",
+      "flag": ["f", "full"],
+      "not": {"any": [{"flag": ["x", "exact"]}, {"regex": "\\[[^\\]]\\]"}]}
     }
   },
   "modes": {
     "incident": {
       "description": "Actively firefighting; the user accepts broad process killing",
       "agentMayEnable": false
+    }
+  },
+  "examples": {
+    "no-pkill": {
+      "catch": [
+        "pkill node",
+        "sudo pkill -f vite",
+        "killall Safari",
+        "bash -c 'pkill x'",
+        "env A=1 pkill y",
+        "cd /tmp && pkill x"
+      ],
+      "pass": [
+        "pgrep -xl node",
+        "kill 4242",
+        "man pkill",
+        "echo \"pkill node\"",
+        "cat <<'EOF'\\npkill x\\nEOF",
+        "echo pkill"
+      ]
+    },
+    "kill-9": {
+      "catch": [
+        "kill -9 1",
+        "kill -KILL 1 2",
+        "kill -SIGKILL 1",
+        "kill -s 9 5",
+        "sudo kill -9 5",
+        "ps | xargs kill -9"
+      ],
+      "pass": [
+        "kill 1",
+        "kill -TERM 1",
+        "kill -15 5",
+        "kill -0 5",
+        "echo kill -9",
+        "man kill"
+      ]
+    },
+    "no-pgrep-status": {
+      "catch": [
+        "pgrep -fq x && echo up",
+        "pgrep -f x || start",
+        "a && pgrep -fq x && echo z",
+        "! pgrep -f x",
+        "if pgrep -fq x; then echo y; fi",
+        "if ! pgrep -f x; then y; fi",
+        "while pgrep -f x; do sleep 1; done",
+        "until pgrep -fq x; do sleep 1; done",
+        "until ! pgrep -f x; do sleep 1; done",
+        "pgrep -f X >/dev/null || echo gone",
+        "a && pgrep -f x >/dev/null || b",
+        "pgrep -fq x &>/dev/null && echo y",
+        "for i in 1 2; do pgrep -f x >/dev/null || { echo ended; break; }; done",
+        "(pgrep -f x) && echo y",
+        "x && y && pgrep -f z || w",
+        "elif_demo=1; if a; then b; elif pgrep -f x; then c; fi"
+      ],
+      "pass": [
+        "pgrep -xl a",
+        "pgrep -xl a; pgrep -xl b",
+        "cat <<'EOF'\\nif pgrep -f x; then :; fi\\nEOF",
+        "echo pgrep",
+        "cd /tmp && pgrep -xl y",
+        "echo hi || pgrep -xl y",
+        "a && b && pgrep -fl y",
+        "if true; then pgrep -fl x; fi",
+        "pgrep -fl X >/dev/null 2>&1; echo done",
+        "pgrep -f X > out.txt; cat out.txt",
+        "pgrep -q x && echo up",
+        "pgrep x || start",
+        "! pgrep x",
+        "if pgrep -q x; then echo y; fi",
+        "while pgrep x; do sleep 1; done",
+        "pgrep -x X 2>/dev/null && echo up",
+        "pgrep -fq '[x]pattern' && echo up",
+        "pgrep -fx 'a b' || start",
+        "pgrep -f '[v]ite' && echo up"
+      ]
+    },
+    "no-unchecked-pid-lookup": {
+      "catch": [
+        "kill $(pgrep -f vite)",
+        "PID=$(pgrep -f node)",
+        "echo \"$(pgrep -f x)\"",
+        "kill `pgrep x`",
+        "sudo kill $(pgrep x)",
+        "pgrep -f vite | xargs kill",
+        "pgrep -f x | head -1",
+        "pgrep -f x | wc -l",
+        "sudo pgrep -f x | cat",
+        "kill $(pidof node)",
+        "kill -9 $(ps aux | grep node | awk '{print $2}')",
+        "kill `lsof -ti :3000`",
+        "sudo kill $(lsof -t -i :80)",
+        "ps aux | grep x | awk '{print $2}' | xargs kill",
+        "lsof -ti :3000 | xargs kill -9",
+        "pidof x | xargs -r kill",
+        "PID=$(lsof -ti:80); kill $PID",
+        "for p in $(pidof foo); do kill $p; done",
+        "ps aux | grep X | awk '{print \"kill \" $2}' | sh"
+      ],
+      "pass": [
+        "pgrep -xl node",
+        "pgrep -x x | head -1",
+        "x=$(pgrep -xl y)",
+        "echo \"$(pgrep -x x)\"",
+        "pgrep -f '[x]pattern' | wc -l",
+        "pgrep x | wc -l",
+        "PID=$(pgrep node)",
+        "echo pgrep",
+        "cat <<'EOF'\\nkill $(pgrep x)\\nEOF",
+        "kill 4242",
+        "kill $(cat /tmp/app.pid)",
+        "kill $PID",
+        "lsof -i :3000",
+        "echo $(pidof node)",
+        "echo 4242 | xargs kill",
+        "cat pids.txt | xargs kill",
+        "lsof -i :3000 | head -3",
+        "kill -0 $(pidof x)",
+        "kill $(ps -p 1 -o ppid=)"
+      ]
+    },
+    "warn-pgrep-in-loop": {
+      "catch": [
+        "while true; do pgrep -xl x; sleep 1; done",
+        "for i in 1 2 3; do pgrep -xl x; done",
+        "until false; do pgrep -xl x; done",
+        "while sleep 1; do pgrep -xl x; done",
+        "watch pgrep -xl x",
+        "watch -n1 'pgrep x'"
+      ],
+      "pass": [
+        "pgrep -xl x",
+        "if true; then pgrep -xl x; fi",
+        "echo while pgrep",
+        "cat <<'EOF'\\nwhile true; do pgrep x; done\\nEOF",
+        "pgrep -xl a; pgrep -xl b",
+        "watch ls pgrep.txt"
+      ]
+    },
+    "warn-pgrep-full-cmdline": {
+      "catch": [
+        "pgrep -f vite",
+        "pgrep -fl node",
+        "pgrep -af x",
+        "pgrep --full x",
+        "sudo pgrep -f y"
+      ],
+      "pass": [
+        "pgrep -xl node",
+        "pgrep node",
+        "pgrep -l node",
+        "echo pgrep -f",
+        "pgrep -fl '[v]ite --port 5173'",
+        "pgrep -fx 'a b'"
+      ]
     }
   }
 }

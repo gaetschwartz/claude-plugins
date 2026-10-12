@@ -168,7 +168,7 @@ class Cli(AstIsolated):
         self.assertIn("matcher preset.status-2xx: added", out)
         self.assertNotIn("tail-step", out)
         self.assertEqual(sorted(self.get(self.gpath)["matchers"]),
-                         ["preset.compares-2xx", "preset.equality", "preset.status-2xx"])
+                         ["preset.compares-2xx", "preset.status-2xx"])
         self.assertIn("matcher preset.status-2xx: unchanged", self.cli("preset", "install", "shell-hygiene", "--only",
                                                                        "http-wait-exact-status")[1])
         self.assertIn("matcher preset.operand: added", self.cli("preset", "install", "modern-cli")[1])
@@ -192,7 +192,7 @@ class Cli(AstIsolated):
     def test_a_rule_test_card_shows_the_prefixed_matchers(self) -> None:
         self.cli("preset", "install", "modern-cli", "--only", "du-dust")
         card = self.cli("rule", "test", "--id", "du-dust", "du -sh /tmp")[1]
-        self.assertIn("matchers `preset.operand`", card)
+        self.assertIn("`preset.operand`", card)
 
     def test_a_reinstall_replaces_a_changed_matcher_so_a_release_can_upgrade_it(self) -> None:
         self.cli("preset", "install", "shell-hygiene", "--only", "http-wait-exact-status")

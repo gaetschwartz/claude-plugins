@@ -161,7 +161,7 @@ def rule_of(preset: str, rid: str) -> policy.Rule:
 
 class Examples(AstIsolated):
     def test_every_rule_of_the_tool_presets_has_catch_and_pass_examples_that_hold(self) -> None:
-        for name in ("modern-cli", "shell-hygiene"):
+        for name in cli.preset_names():
             preset = cli.load_preset(name)
             self.assertEqual(sorted(preset["examples"]), sorted(preset["rules"]))
             for rid, example in preset["examples"].items():
@@ -217,11 +217,52 @@ class Examples(AstIsolated):
         self.assertEqual(self.kinds_of("shell-hygiene", "http-wait-exact-status", [*caught, *passed]),
                          {**dict.fromkeys(caught, True), **dict.fromkeys(passed, False)})
 
-    def test_tail_pipe_buffered_warns_for_awk_unless_its_program_flushes(self) -> None:
-        kinds = self.kinds_of("shell-hygiene", "tail-pipe-buffered", ["tail -f log | awk '{print $1}'",
-                                                                      "tail -f log | awk '{print; fflush()}'",
-                                                                      "tail -f log | sed 's/a/b/'", "tail -f log | uniq"])
-        self.assertEqual(list(kinds.values()), [True, False, True, True])
+    def test_no_process_rule_fires_on_the_form_another_message_recommends(self) -> None:
+        doc = cli.load_preset("process-safety")
+        rules = {rid: policy.Rule.from_json(r, doc["matchers"]) for rid, r in doc["rules"].items()}
+        for command in ("pgrep -xl node", "pgrep -fl '[v]ite --port 5173'", "pgrep -fl '[x]pattern'", "pgrep -n node", "pgrep -o node",
+                        "kill -0 123", "while kill -0 123 2>/dev/null; do sleep 5; done", "kill 123"):
+            with self.subTest(command=command):
+                self.assertEqual([rid for rid, kind in matching.evaluate(command, rules).kinds.items() if kind], [])
+        for rule in rules.values():
+            for text in (rule.message, *(case.text for case in rule.messages)):
+                self.assertNotIn("pgrep -fl PATTERN", text)
+                self.assertNotIn("pgrep -fl <", text)
+
+    def test_the_watch_and_loop_forms_of_pgrep_are_a_warning_not_a_denial(self) -> None:
+        rules = {rid: rule_of("process-safety", rid) for rid in ("no-pgrep-status", "no-unchecked-pid-lookup", "warn-pgrep-in-loop")}
+        for command in ("watch pgrep -xl x", "watch -n1 'pgrep x'", "while true; do pgrep -xl x; sleep 1; done"):
+            with self.subTest(command=command):
+                hit = [rid for rid, kind in matching.evaluate(command, rules).kinds.items() if kind]
+                self.assertEqual(hit, ["warn-pgrep-in-loop"])
+        self.assertFalse(matching.evaluate("watch ls pgrep.txt", rules).kinds["warn-pgrep-in-loop"])
+
+    def test_the_pgrep_denials_need_an_unguarded_pgrep_f(self) -> None:
+        rules = {rid: rule_of("process-safety", rid) for rid in ("no-pgrep-status", "no-unchecked-pid-lookup")}
+        for command, denied in (("pgrep -f x && echo up", True), ("pgrep -x x && echo up", False), ("pgrep -f '[x]' && echo up", False),
+                                ("pgrep -fx 'a b' || start", False), ("echo $(pgrep -f x)", True), ("echo $(pgrep -fx x)", False),
+                                ("pgrep -f x | wc -l", True), ("pgrep -c rustc", False), ("pgrep -f x >/dev/null || echo gone", True),
+                                ("elif_x=1; if a; then b; elif pgrep -f x; then c; fi", True)):
+            with self.subTest(command=command):
+                kinds = matching.evaluate(command, rules).kinds
+                self.assertEqual(any(kinds.values()), denied)
+
+    def test_ps_grep_catches_awk_and_sed_line_filters_unless_guarded(self) -> None:
+        kinds = self.kinds_of("shell-hygiene", "ps-grep-self-match", [
+            "ps aux | awk '/vite/ {print $2}'", "ps aux | sed -n '/vite/p'", "ps aux | awk \"/vite/\"",
+            "ps aux | awk '/vite/ && !/awk/ {print $2}'", "ps aux | awk '$11 ~ /vite/'", "ps aux | awk '{print $2}'",
+            "ps -Ao pid,comm= | awk '/vite$/'", "ps -p 5 | awk '/x/'", "ps aux | awk '/vite/' | grep -v awk",
+            "ps aux | sed -n '/[v]ite/p'"])
+        self.assertEqual(list(kinds.values()), [True, True, True, False, False, False, False, False, False, False])
+
+    def test_tail_pipe_buffered_warns_for_any_stage_without_an_unbuffered_opt_in(self) -> None:
+        caught = ["tail -f log | grep error", "tail -f log | head -3", "tail -f log | jq .x", "journalctl -f | sort",
+                  "tail -f log | sed 's/a/b/'", "tail -f log | grep --line-buffered x | cut -c1-9", "docker logs -f a | uniq"]
+        passed = ["tail -f log | grep --line-buffered x", "tail -f log | jq --unbuffered .x", "tail -f log | sed -u s/a/b/",
+                  "tail -f log | tr -u a b", "tail -f log | awk '{print; fflush()}'", "tail -f log | stdbuf -oL cut -c1-9",
+                  "tail -n 20 log | grep x", "grep x log | head", "tail -f log"]
+        self.assertEqual(self.kinds_of("shell-hygiene", "tail-pipe-buffered", [*caught, *passed]),
+                         {**dict.fromkeys(caught, True), **dict.fromkeys(passed, False)})
 
     def test_modern_cli_messages_name_the_replacement(self) -> None:
         expect = {"cargo-nextest": ("cargo test -p foo my_test", ("cargo nextest run", "cargo test --doc", "`--nocapture` is `--no-capture`")),
@@ -250,10 +291,30 @@ class Examples(AstIsolated):
                               ("make 2>&1 | grep err | tail -5 || echo ok", "tail"),
                               ("grep pat f | wc -l || echo found", "wc")):
             with self.subTest(command=command):
-                self.assertIn(f"last command's (`{last}`)", self.says("shell-hygiene", "pipe-status", command))
+                rid = "pipe-status" if last in ("head", "tail") else "pipe-status-filter"
+                self.assertIn(f"last command's (`{last}`)", self.says("shell-hygiene", rid, command))
+
+    def denies(self, command: str) -> bool:
+        return matching.evaluate(command, {"r": rule_of("shell-hygiene", "pipe-status")}).kinds["r"] is not None
+
+    def filters(self, command: str) -> bool:
+        return matching.evaluate(command, {"r": rule_of("shell-hygiene", "pipe-status-filter")}).kinds["r"] is not None
 
     def fires(self, command: str) -> bool:
-        return matching.evaluate(command, {"r": rule_of("shell-hygiene", "pipe-status")}).kinds["r"] is not None
+        return self.denies(command) or self.filters(command)
+
+    def test_head_and_tail_deny_and_the_other_filters_only_warn_for_the_same_shapes(self) -> None:
+        for template in ("{} || echo failed", "! {}", "if {}; then ls; fi", "while {}; do sleep 1; done", "{}; echo $?"):
+            for stage, denied in (("tail -5", True), ("head -5", True), ("sort", False), ("wc -l", False), ("cat", False),
+                                  ("sed s/a/b/", False), ("tee log", False), ("uniq", False), ("cut -c1-9", False)):
+                command = template.format(f"make | {stage}")
+                with self.subTest(command=command):
+                    self.assertEqual((self.denies(command), self.filters(command)), (denied, not denied))
+        for command in ("make | grep x || echo none", "make | jq . || echo bad", "make | python3 -c x || echo bad"):
+            with self.subTest(command=command):
+                self.assertFalse(self.fires(command))
+        self.assertTrue(self.chain("make | sort && echo ok"))
+        self.assertFalse(self.filters("make | sort && echo ok"))
 
     def chain(self, command: str) -> bool:
         return matching.evaluate(command, {"r": rule_of("shell-hygiene", "pipe-status-chain")}).kinds["r"] is not None
@@ -274,9 +335,9 @@ class Examples(AstIsolated):
     def test_the_chain_is_a_warning_and_no_rule_names_a_follower(self) -> None:
         chain = rule_of("shell-hygiene", "pipe-status-chain")
         self.assertEqual((chain.action, chain.retry), (policy.Action.WARN, policy.Retry.NONE))
-        self.assertEqual(sorted(cli.load_preset("shell-hygiene")["rules"]), ["http-wait-exact-status", "pipe-status",
-                                                                              "pipe-status-chain", "ps-grep-self-match",
-                                                                              "tail-pipe-buffered"])
+        self.assertEqual(sorted(cli.load_preset("shell-hygiene")["rules"]),
+                         ["http-wait-exact-status", "pipe-status", "pipe-status-chain", "pipe-status-filter",
+                          "ps-grep-self-match", "tail-pipe-buffered"])
 
     def test_a_longer_chain_is_warned_once_for_each_masked_pipeline(self) -> None:
         self.assertTrue(self.chain("make | tail && echo ---"))
@@ -358,9 +419,13 @@ class Examples(AstIsolated):
         self.assertIn("grep -v grep", shown)
         self.assertIn("pgrep -fl", shown)
 
+    def test_ps_grep_awk_branch_does_not_claim_a_pid_extraction(self) -> None:
+        self.assertNotIn("confirm the PID", self.says("shell-hygiene", "ps-grep-self-match", "ps aux | awk '/vite/'"))
+        self.assertIn("confirm the PID", self.says("shell-hygiene", "ps-grep-self-match", "ps aux | awk '/vite/' | cut -c1-9"))
+
     def test_ps_grep_is_a_warning_and_the_others_deny(self) -> None:
         actions = {rid: str(rule_of("shell-hygiene", rid).action) for rid in cli.load_preset("shell-hygiene")["rules"]}
-        self.assertEqual(actions, {"pipe-status": "deny", "pipe-status-chain": "warn", "ps-grep-self-match": "warn",
+        self.assertEqual(actions, {"pipe-status": "deny", "pipe-status-filter": "warn", "pipe-status-chain": "warn", "ps-grep-self-match": "warn",
                                    "tail-pipe-buffered": "warn", "http-wait-exact-status": "warn"})
 
 

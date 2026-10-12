@@ -1,13 +1,8 @@
 from __future__ import annotations  # noqa: I001
 
-import json
-
-from helpers import ROOT, AstIsolated
+from helpers import AstIsolated, preset_rule
 
 import matching
-import policy
-
-DRAFT = json.loads((ROOT / "tests" / "lookup_family.extended.json").read_text())
 
 STILL_DENIED = [
     "kill $(pgrep -f x)", "pgrep -f x | xargs kill", "ps aux | grep x | xargs kill", "kill $(lsof -ti:80)",
@@ -66,20 +61,13 @@ PASSES = [
 
 
 class LookupFamily(AstIsolated):
-    def kind(self, command: str, rule: policy.Rule | None = None) -> str | None:
-        return matching.evaluate(command, {"r": rule or self.rule()}).kinds["r"]
+    def denied(self, command: str) -> bool:
+        return matching.evaluate(command, {"r": preset_rule("process-safety", "no-unchecked-pid-lookup")}).kinds["r"] is not None
 
     def assert_denied(self, commands: list[str]) -> None:
         for command in commands:
             with self.subTest(command=command):
-                self.assertIsNotNone(self.kind(command))
-
-    def rule(self) -> policy.Rule:
-        return policy.Rule.from_json(DRAFT)
-
-    def test_the_draft_keeps_the_live_alternatives_and_adds_four(self) -> None:
-        self.assertEqual(set(DRAFT), {"action", "description", "match", "message", "messageShort", "messages"})
-        self.assertEqual(len(DRAFT["match"]["any"]), 8)
+                self.assertTrue(self.denied(command))
 
     def test_existing_catches_stay_denied(self) -> None:
         self.assert_denied(STILL_DENIED)
@@ -99,10 +87,10 @@ class LookupFamily(AstIsolated):
     def test_verify_then_kill_and_precise_forms_pass(self) -> None:
         for command in PASSES:
             with self.subTest(command=command):
-                self.assertIsNone(self.kind(command))
+                self.assertFalse(self.denied(command))
 
-    def test_the_new_shapes_pass_today_and_are_denied_by_the_draft(self) -> None:
-        today = policy.Rule.from_json({**DRAFT, "match": {"any": DRAFT["match"]["any"][:4]}})
-        for command in (*ASSIGNED_THEN_KILLED, *LOOPED, *GENERATED_SCRIPT):
+    def test_a_guarded_or_exact_pgrep_is_no_lookup_to_refuse(self) -> None:
+        for command in ("pgrep -x node | head -1", "echo $(pgrep -x wild | wc -l)", "pgrep -f '[v]ite' | wc -l", "pgrep -c rustc",
+                        "x=$(pgrep node)", "kill -0 $(pidof x)", "lsof -ti:80 | xargs kill -0", "kill -l $(pgrep -x x)"):
             with self.subTest(command=command):
-                self.assertIsNone(self.kind(command, today))
+                self.assertFalse(self.denied(command))

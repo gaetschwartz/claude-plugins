@@ -1,9 +1,9 @@
 # AST cookbook: flags and arguments
 
 Flags are sibling words of the command. Patterns are literal, order-sensitive and anchored at the start (`rm -rf` is
-not `rm -fr` or `rm -r -f`), so match flag spellings with `has` + `regex` on a word, combine several words with `all`,
-allow alternatives with `any`, and carve out exceptions with `not` + `has`. The `command` atom selects the command by
-name in any spelling; its `args` is a regex over the command's whole text.
+not `rm -fr` or `rm -r -f`), so name flags with the `flag` atom (any `-abc` cluster, `--long`, `--long=value`, nothing
+after `--`), use `has` + `regex` on a word only for what it cannot say (a value, a path), and carve out exceptions with
+`not`. The `command` atom selects the command by name in any spelling; its `args` is a regex over the command's whole text.
 Every block is checked by `tests/test_ast_examples.py` against the real engine: each `catch` command matches, each
 `pass` command does not. Rule syntax and semantics: [matching.md](../matching.md).
 
@@ -14,10 +14,10 @@ Every block is checked by `tests/test_ast_examples.py` against the real engine: 
   "id": "no-force-push-any-form",
   "title": "force push, any spelling, not with lease",
   "rule": {
-    "kind": "command",
-    "has": {"field": "name", "regex": "^git$"},
-    "all": [{"has": {"regex": "^push$"}}, {"has": {"regex": "^(--force|-[A-Za-z]*f[A-Za-z]*|\\+.+)$"}}],
-    "not": {"has": {"regex": "^--force-with-lease"}}
+    "command": "git",
+    "has": {"regex": "^push$"},
+    "any": [{"flag": ["f", "force"]}, {"has": {"regex": "^\\+"}}],
+    "not": {"flag": "force-with-lease"}
   },
   "action": "deny",
   "catch": [
@@ -33,8 +33,8 @@ Every block is checked by `tests/test_ast_examples.py` against the real engine: 
 ```
 
 `-C dir` before `push`, clustered `-uf`, `--force` and a `+refspec` are all found; `--force-with-lease` is the
-allowed spelling (`not` + `has` only looks inside this command, so it is reliable). The `git push -u origin feat-f`
-pass shows why the flag regex is anchored to a whole word. Known gap: `--force-with-lease --force` is a real force
+allowed spelling (`not` + `flag` only looks inside this command, so it is reliable). The `git push -u origin feat-f`
+pass shows that a flag is a whole word. Known gap: `--force-with-lease --force` is a real force
 push that this rule allows.
 
 ## Flag clusters and targets
@@ -44,12 +44,9 @@ push that this rule allows.
   "id": "rm-recursive-root",
   "title": "recursive rm of / or home",
   "rule": {
-    "kind": "command",
-    "has": {"field": "name", "regex": "^rm$"},
-    "all": [
-      {"has": {"regex": "^(--recursive|-[A-Za-z]*[rR][A-Za-z]*)$"}},
-      {"has": {"regex": "^\"?(/|~|\\$HOME|\\$\\{HOME\\})/?\\*?\"?$"}}
-    ]
+    "command": "rm",
+    "flag": ["r", "R", "recursive"],
+    "has": {"regex": "^\"?(/|~|\\$HOME|\\$\\{HOME\\})/?\\*?\"?$"}
   },
   "action": "deny",
   "catch": [
@@ -62,7 +59,7 @@ push that this rule allows.
 }
 ```
 
-Two `has` clauses under `all`: a recursive flag in any spelling (`-rf`, `-fr`, `-r -f`, `--recursive`) and a target of
+A `flag` atom and a `has` clause: a recursive flag in any spelling (`-rf`, `-fr`, `-r -f`, `--recursive`) and a target of
 `/`, `~`, `$HOME`, `"$HOME"`, `${HOME}`, optionally with `/` or `*` after. The regexes run on node text, so
 `simple_expansion` and quoted `string` nodes both work. `rm -f /` has no recursive flag and passes; `rm -rf /tmp/x`
 passes because the whole word is anchored.
@@ -115,7 +112,7 @@ pass. `docker container run` and `docker -H h run` are not covered; add patterns
 {
   "id": "kill-sigkill",
   "title": "kill -9",
-  "rule": {"pattern": "kill $$$", "has": {"regex": "^-(9|KILL|SIGKILL)$"}},
+  "rule": {"any": [{"pattern": "kill -9 $$$"}, {"pattern": "kill -KILL $$$"}, {"pattern": "kill -SIGKILL $$$"}]},
   "action": "warn",
   "catch": [
     "kill -9 1234", "kill -KILL 1234", "sudo kill -9 1234"
@@ -127,8 +124,8 @@ pass. `docker container run` and `docker -H h run` are not covered; add patterns
 }
 ```
 
-tree-sitter reads `-9` as a `number`, not a `word`; a `regex` on the node text does not care, a `kind: word` filter
-would miss it. `-0` (existence check) and `-TERM` pass.
+tree-sitter reads `-9` as a `number`, not a `word`, and the `flag` atom skips digits, so each spelling is a `pattern`.
+`-0` (existence check) and `-TERM` pass.
 
 ## A command unless it carries a flag
 

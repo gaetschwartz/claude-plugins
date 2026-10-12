@@ -22,20 +22,33 @@ LIB = ROOT / "lib"
 sys.path.insert(0, str(LIB))
 
 import bootstrap
+import policy
 import render  # noqa: F401
 import store
 import telemetry
 
-GREP_RECURSIVE = json.loads((ROOT / "presets" / "modern-cli.json").read_text())["rules"]["grep-rg"]["match"]
-MAINTAINER = json.loads((ROOT / "tests" / "maintainer_rules.json").read_text())
+
+def grep_recursive() -> Any:
+    import rulebuilder
+
+    doc = json.loads((ROOT / "presets" / "modern-cli.json").read_text())
+    return rulebuilder.Inliner(doc["matchers"]).rule(doc["rules"]["grep-rg"]["match"])
+
+
+GREP_RECURSIVE = grep_recursive()
 
 
 def real_rules() -> dict[str, Any]:
-    """The maintainer's own eight rules plus every preset rule, as a state file's `rules` table."""
-    rules = dict(MAINTAINER["rules"])
+    """Every preset rule, as a state file's `rules` table."""
+    rules: dict[str, Any] = {}
     for path in sorted((ROOT / "presets").glob("*.json")):
         rules.update({f"{path.stem}-{rid}": rule for rid, rule in json.loads(path.read_text())["rules"].items()})
     return rules
+
+
+def preset_rule(preset: str, rid: str) -> policy.Rule:
+    doc = json.loads((ROOT / "presets" / f"{preset}.json").read_text())
+    return policy.Rule.from_json(doc["rules"][rid], doc.get("matchers"))
 
 
 def real_matchers() -> dict[str, Any]:

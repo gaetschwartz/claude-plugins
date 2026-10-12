@@ -263,12 +263,12 @@ class ManagedScope(AstIsolated):
         self.assertIn("not declared", err)
 
     def test_preset_install_and_status_labels_origins(self) -> None:
-        code, out, _ = self.managed("preset", "install", "process-safety")
+        code, out, _ = self.managed("preset", "install", "process-safety", "--only", "kill-9,no-pkill")
         self.assertEqual(code, 0)
         self.assertIn(f"installed preset process-safety into {self.mpath}", out)
         self.assertIn("rule kill-9: added (no modes: always enforced)", out)
         self.assertNotIn("always enforced", out.split("no-pkill")[1].split("\n")[0])
-        self.assertIn("rule kill-9: unchanged", self.managed("preset", "install", "process-safety")[1])
+        self.assertIn("rule kill-9: unchanged", self.managed("preset", "install", "process-safety", "--only", "kill-9,no-pkill")[1])
         self.cli("rule", "add", "no-pkill", "--json", BARE)
         self.cli("rule", "add", "mine", "--json", BARE, "--scope", "project")
         status = self.cli("status")[1]
