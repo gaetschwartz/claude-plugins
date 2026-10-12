@@ -3,7 +3,7 @@
   "rules": {
     "find-fd": {
       "description": "find when fd is installed",
-      "match": {"command": "find", "matcher": "preset.local-tool"},
+      "match": {"command": "find", "use": "@preset/local-tool"},
       "when": {
         "bin": [
           "fd",
@@ -27,7 +27,7 @@
               }
             ]
           },
-          {"matcher": "preset.local-tool"}
+          {"use": "@preset/local-tool"}
         ]
       },
       "when": {
@@ -42,10 +42,10 @@
         "command": "cargo",
         "has": {
           "pattern": {"context": "\"$a\" test", "selector": "word"},
-          "not": {"follows": {"matcher": "preset.operand", "stopBy": "end"}}
+          "not": {"follows": {"use": "@preset/operand", "stopBy": "end"}}
         },
         "not": {"flag": "doc"},
-        "matcher": "preset.local-tool"
+        "use": "@preset/local-tool"
       },
       "when": {
         "bin": "cargo-nextest"
@@ -57,10 +57,10 @@
       "description": "du when dust is installed",
       "match": {
         "any": [
-          {"command": "du", "has": {"capture": {"matcher": "preset.operand"}, "name": "PATH"}},
+          {"command": "du", "has": {"capture": {"use": "@preset/operand"}, "name": "PATH"}},
           {"command": "du"}
         ],
-        "matcher": "preset.local-tool"
+        "use": "@preset/local-tool"
       },
       "when": {
         "bin": "dust"
@@ -69,15 +69,15 @@
       "message": "Prefer `dust` over `du` (sorted, with bars): `dust -d 1` for one level; see `dust --help`.",
       "messages": [
         {
-          "when": {"matches": {"has": {"matcher": "preset.operand"}}},
+          "when": {"matches": {"has": {"use": "@preset/operand"}}},
           "text": "Prefer `dust` over `du` (sorted, with bars): `dust -d 1 {PATH}` for one level; see `dust --help`."
         }
       ]
     }
   },
   "matchers": {
-    "preset.operand": {"kind": "word", "regex": "^[^-+]"},
-    "preset.local-tool": {"not": {"via": "ssh"}}
+    "operand": {"kind": "word", "regex": "^[^-+]"},
+    "local-tool": {"not": {"via": "ssh"}}
   },
   "modes": {},
   "examples": {

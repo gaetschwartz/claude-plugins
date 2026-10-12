@@ -4,7 +4,7 @@
     "pipe-status": {
       "description": "A pipeline ending in a filter whose status is branched on or read as if it were the producer's",
       "match": {
-        "capture": {"all": [{"matcher": "preset.truncating-tail"}, {"matcher": "preset.status-consumed"}]},
+        "capture": {"all": [{"use": "@preset/truncating-tail"}, {"use": "@preset/status-consumed"}]},
         "name": "LAST",
         "field": "name"
       },
@@ -13,7 +13,7 @@
       "messageShort": "Pipe status is `{LAST}`'s. `set -o pipefail`, or write to a file and check it.",
       "messages": [
         {
-          "when": {"matches": {"matcher": "preset.status-read-by-next"}},
+          "when": {"matches": {"use": "@preset/status-read-by-next"}},
           "text": "`$?` after a pipe is the last command's status. Use `set -o pipefail` first, or read zsh `pipestatus[1]` / bash `PIPESTATUS[0]` in the very next command.",
           "messageShort": "`$?` is the last stage's. `set -o pipefail`, or `pipestatus[1]` (zsh) / `PIPESTATUS[0]` (bash)."
         },
@@ -27,7 +27,7 @@
     "pipe-status-filter": {
       "description": "A pipeline ending in a display filter (cat, sort, sed, ...) whose status is branched on or read as if it were the producer's",
       "match": {
-        "capture": {"all": [{"matcher": "preset.display-tail"}, {"matcher": "preset.status-consumed"}]},
+        "capture": {"all": [{"use": "@preset/display-tail"}, {"use": "@preset/status-consumed"}]},
         "name": "LAST",
         "field": "name"
       },
@@ -36,7 +36,7 @@
       "messageShort": "Pipe status is `{LAST}`'s. `set -o pipefail`, or write to a file and check it.",
       "messages": [
         {
-          "when": {"matches": {"matcher": "preset.status-read-by-next"}},
+          "when": {"matches": {"use": "@preset/status-read-by-next"}},
           "text": "`$?` after a pipe is the last command's status. Use `set -o pipefail` first, or read zsh `pipestatus[1]` / bash `PIPESTATUS[0]` in the very next command.",
           "messageShort": "`$?` is the last stage's. `set -o pipefail`, or `pipestatus[1]` (zsh) / `PIPESTATUS[0]` (bash)."
         }
@@ -47,8 +47,8 @@
       "match": {
         "capture": {
           "all": [
-            {"any": [{"matcher": "preset.truncating-tail"}, {"matcher": "preset.display-tail"}]},
-            {"matcher": "preset.status-gates-and"}
+            {"any": [{"use": "@preset/truncating-tail"}, {"use": "@preset/display-tail"}]},
+            {"use": "@preset/status-gates-and"}
           ]
         },
         "name": "LAST",
@@ -65,13 +65,13 @@
           {
             "command": ["grep", "egrep", "fgrep", "rg"],
             "not": {"flag": ["v", "invert-match"]},
-            "matcher": "preset.unguarded-ps-pipe"
+            "use": "@preset/unguarded-ps-pipe"
           },
           {
             "command": ["awk", "sed"],
-            "has": {"matcher": "preset.pattern-program"},
+            "has": {"use": "@preset/pattern-program"},
             "not": {"has": {"regex": "!/"}},
-            "matcher": "preset.unguarded-ps-pipe"
+            "use": "@preset/unguarded-ps-pipe"
           }
         ]
       },
@@ -134,17 +134,17 @@
           {"has": {"command": "curl", "stopBy": "end"}},
           {
             "any": [
-              {"all": [{"pattern": "until $$$A"}, {"has": {"matcher": "preset.compares-2xx", "stopBy": "end"}}]},
+              {"all": [{"pattern": "until $$$A"}, {"has": {"use": "@preset/compares-2xx", "stopBy": "end"}}]},
               {
                 "all": [
                   {"has": {"command": "break", "stopBy": "end"}},
-                  {"has": {"matcher": "preset.compares-2xx", "stopBy": "end"}}
+                  {"has": {"use": "@preset/compares-2xx", "stopBy": "end"}}
                 ]
               },
               {
                 "has": {
                   "kind": "case_item",
-                  "has": {"nthChild": 1, "matcher": "preset.status-2xx"},
+                  "has": {"nthChild": 1, "use": "@preset/status-2xx"},
                   "stopBy": "end"
                 }
               }
@@ -157,8 +157,8 @@
     }
   },
   "matchers": {
-    "preset.last-child": {"nthChild": {"position": 1, "reverse": true}},
-    "preset.status-carrier": {
+    "last-child": {"nthChild": {"position": 1, "reverse": true}},
+    "status-carrier": {
       "any": [
         {"kind": "pipeline"},
         {"kind": "list"},
@@ -167,80 +167,80 @@
         {"kind": "redirected_statement"}
       ]
     },
-    "preset.tail-step": {
+    "tail-step": {
       "all": [
-        {"matcher": "preset.status-carrier"},
-        {"any": [{"matcher": "preset.last-child"}, {"inside": {"kind": "redirected_statement"}}]}
+        {"use": "@preset/status-carrier"},
+        {"any": [{"use": "@preset/last-child"}, {"inside": {"kind": "redirected_statement"}}]}
       ]
     },
-    "preset.pipefail-word": {
+    "pipefail-word": {
       "any": [
         {"pattern": {"context": "\"$a\" pipefail", "selector": "word"}},
         {"pattern": {"context": "\"$a\" pipe_fail", "selector": "word"}}
       ]
     },
-    "preset.pipefail-set": {
+    "pipefail-set": {
       "any": [
-        {"command": "set", "flag": "o", "has": {"matcher": "preset.pipefail-word"}},
-        {"command": "setopt", "has": {"matcher": "preset.pipefail-word"}}
+        {"command": "set", "flag": "o", "has": {"use": "@preset/pipefail-word"}},
+        {"command": "setopt", "has": {"use": "@preset/pipefail-word"}}
       ]
     },
-    "preset.status-checked": {
+    "status-checked": {
       "any": [
-        {"follows": {"matcher": "preset.pipefail-set", "stopBy": "end"}},
-        {"inside": {"follows": {"matcher": "preset.pipefail-set", "stopBy": "end"}, "stopBy": "end"}},
+        {"follows": {"use": "@preset/pipefail-set", "stopBy": "end"}},
+        {"inside": {"follows": {"use": "@preset/pipefail-set", "stopBy": "end"}, "stopBy": "end"}},
         {
           "inside": {
-            "precedes": {"has": {"matcher": "preset.pipestatus-name", "stopBy": "end"}, "stopBy": "end"},
+            "precedes": {"has": {"use": "@preset/pipestatus-name", "stopBy": "end"}, "stopBy": "end"},
             "stopBy": "end"
           }
         }
       ]
     },
-    "preset.pipestatus-name": {
+    "pipestatus-name": {
       "any": [
         {"pattern": {"context": "${PIPESTATUS}", "selector": "variable_name"}},
         {"pattern": {"context": "${pipestatus}", "selector": "variable_name"}}
       ]
     },
-    "preset.status-gates-and": {
+    "status-gates-and": {
       "inside": {
         "nthChild": 1,
         "inside": {"pattern": "$A && $B"},
-        "stopBy": {"not": {"matcher": "preset.tail-step"}}
+        "stopBy": {"not": {"use": "@preset/tail-step"}}
       }
     },
-    "preset.status-gates-or": {
+    "status-gates-or": {
       "inside": {
         "nthChild": 1,
         "inside": {"pattern": "$A || $B", "not": {"any": [{"pattern": "$A || true"}, {"pattern": "$A || :"}]}},
-        "stopBy": {"not": {"matcher": "preset.tail-step"}}
+        "stopBy": {"not": {"use": "@preset/tail-step"}}
       }
     },
-    "preset.status-tests-condition": {
+    "status-tests-condition": {
       "inside": {
         "any": [
           {"inside": {"any": [{"kind": "if_statement"}, {"kind": "while_statement"}], "field": "condition"}},
           {"nthChild": 1, "inside": {"kind": "elif_clause"}}
         ],
-        "stopBy": {"not": {"matcher": "preset.tail-step"}}
+        "stopBy": {"not": {"use": "@preset/tail-step"}}
       }
     },
-    "preset.status-read-by-next": {
+    "status-read-by-next": {
       "inside": {
-        "matcher": "preset.status-carrier",
+        "use": "@preset/status-carrier",
         "nthChild": "n",
         "not": {"any": [{"inside": {"kind": "list"}}, {"precedes": {"regex": "^&$"}}]},
         "precedes": {
           "any": [{"has": {"pattern": "$?", "stopBy": "end"}}, {"has": {"pattern": "${?}", "stopBy": "end"}}],
           "stopBy": {"nthChild": "n", "not": {"kind": "comment"}}
         },
-        "stopBy": {"not": {"matcher": "preset.tail-step"}}
+        "stopBy": {"not": {"use": "@preset/tail-step"}}
       }
     },
-    "preset.status-negated": {"inside": {"kind": "pipeline", "has": {"kind": "negated_command"}}},
-    "preset.status-2xx": {"regex": "^\"?2[0-9][0-9]\"?$"},
-    "preset.compares-2xx": {
+    "status-negated": {"inside": {"kind": "pipeline", "has": {"kind": "negated_command"}}},
+    "status-2xx": {"regex": "^\"?2[0-9][0-9]\"?$"},
+    "compares-2xx": {
       "kind": "test_command",
       "has": {
         "any": [
@@ -248,32 +248,32 @@
           {"pattern": {"context": "[ $A == $B ]", "selector": "binary_expression"}},
           {"pattern": {"context": "[ $A -eq $B ]", "selector": "binary_expression"}}
         ],
-        "has": {"matcher": "preset.status-2xx"},
+        "has": {"use": "@preset/status-2xx"},
         "stopBy": "end"
       }
     },
-    "preset.unchecked-last-stage": {
-      "matcher": "preset.last-child",
+    "unchecked-last-stage": {
+      "use": "@preset/last-child",
       "inside": {"kind": "pipeline"},
-      "not": {"matcher": "preset.status-checked"}
+      "not": {"use": "@preset/status-checked"}
     },
-    "preset.truncating-tail": {"command": ["head", "tail"], "matcher": "preset.unchecked-last-stage"},
-    "preset.display-tail": {
+    "truncating-tail": {"command": ["head", "tail"], "use": "@preset/unchecked-last-stage"},
+    "display-tail": {
       "command": [
         "cat", "wc", "sort", "cut", "uniq", "tr", "sed", "tee", "column", "nl", "paste", "rev", "fold", "less",
         "more"
       ],
-      "matcher": "preset.unchecked-last-stage"
+      "use": "@preset/unchecked-last-stage"
     },
-    "preset.status-consumed": {
+    "status-consumed": {
       "any": [
-        {"matcher": "preset.status-gates-or"},
-        {"matcher": "preset.status-tests-condition"},
-        {"matcher": "preset.status-read-by-next"},
-        {"matcher": "preset.status-negated"}
+        {"use": "@preset/status-gates-or"},
+        {"use": "@preset/status-tests-condition"},
+        {"use": "@preset/status-read-by-next"},
+        {"use": "@preset/status-negated"}
       ]
     },
-    "preset.unguarded-ps-pipe": {
+    "unguarded-ps-pipe": {
       "inside": {
         "kind": "pipeline",
         "not": {
@@ -292,7 +292,7 @@
         "stopBy": "end"
       }
     },
-    "preset.pattern-program": {"regex": "^[\"']/"}
+    "pattern-program": {"regex": "^[\"']/"}
   },
   "modes": {},
   "examples": {

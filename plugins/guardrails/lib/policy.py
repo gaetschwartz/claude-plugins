@@ -24,7 +24,8 @@ UNKNOWN_FIELD_HINT = ("this version does not know it; reinstall the preset that 
                       "<name>`) or remove the field")
 LAYERS = ("managed", "global", "project")
 NAME = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*")
-PRESET_MATCHER_PREFIX = "preset."
+MATCHER_NAME = re.compile(r"[a-z0-9][a-z0-9-]*")
+LEGACY_MATCHER_PREFIX = "preset."
 
 
 class Invalid(Exception):
@@ -91,11 +92,13 @@ class Rule(NamedTuple):
     when: dict[str, Any] | None = None
     messages: tuple[Case, ...] = ()
     matchers: tuple[str, ...] = ()
+    deprecated_use: bool = False
+    written: tuple[str, ...] = ()
 
     @classmethod
     def from_json(cls, raw: object, matchers: Mapping[str, Any] | None = None) -> Self:
-        """The rule with every matcher reference of `match` and of the message cases' `matches` expanded from this
-        layer's `matchers`; `matchers` on the result names the ones it used."""
+        """The rule with every `use` reference of `match` and of the message cases' `matches` expanded from this
+        layer's `matchers` or from the built-in ones; `matchers` on the result names the references it used."""
         import conditions
         import messages as texts
         import rulebuilder
@@ -129,7 +132,7 @@ class Rule(NamedTuple):
         description = raw.get("description")
         rule = cls(match, message, action, retry, raw.get("enabled", True), modes, raw.get("messageShort"),
                    description if isinstance(description, str) else None, raw.get("wrappers", True), when, cases,
-                   tuple(sorted(inliner.used)))
+                   tuple(sorted(inliner.used)), inliner.deprecated, tuple(sorted(inliner.written)))
         texts.check_texts(texts.rule_texts(rule), any(conditions.bin_atoms(when)),
                            lambda: rulebuilder.bound_names(match))
         return rule
@@ -348,7 +351,19 @@ def matcher_problems(label: str, matchers: Mapping[str, Any]) -> list[str]:
     """One problem per matcher of a layer that does not expand and compile (a rule using it is invalid anyway)."""
     import rulebuilder
 
-    return [f"{label} matcher {name} is invalid: {why}" for name, why in rulebuilder.matcher_problems(matchers).items()]
+    return [f"{label} matcher @{name} is invalid: {why}" for name, why in rulebuilder.matcher_problems(matchers).items()]
+
+
+def ignored_matcher_problems(label: str, matchers: Mapping[str, Any]) -> list[str]:
+    """The names in a layer's `matchers` that are never defined: the legacy `preset.*` copies and the names outside the
+    grammar."""
+    legacy = sorted(name for name in matchers if name.startswith(LEGACY_MATCHER_PREFIX))
+    bad = sorted(name for name in matchers if name not in legacy and not MATCHER_NAME.fullmatch(name))
+    problems = [f"{label} matcher @{name} is ignored: a name must match {MATCHER_NAME.pattern}" for name in bad]
+    if legacy:
+        problems.append(f"{label} matchers {', '.join(f'@{name}' for name in legacy)} are legacy copies of built-in ones and are ignored (rules "
+                        "use @preset/...); `guardrails preset install <name>` or `guardrails matcher rm <name>` removes them")
+    return problems
 
 
 def managed_layer(doc: object, path: str) -> tuple[dict[str, Any], list[str]]:
@@ -356,7 +371,7 @@ def managed_layer(doc: object, path: str) -> tuple[dict[str, Any], list[str]]:
     problems = _shape_problems(path, doc)
     modes = _entries(doc, "modes")
     matchers = view(doc, "matchers")
-    problems += matcher_problems("managed", matchers)
+    problems += ignored_matcher_problems("managed", matchers) + matcher_problems("managed", matchers)
     rules: dict[str, dict[str, Any]] = {}
     for rid, raw in _entries(doc, "rules").items():
         try:

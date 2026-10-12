@@ -48,8 +48,8 @@ Parse the text above; every long flag has a short one.
    - removal: confirm first with AskUserQuestion (`header` `Remove`, question "Remove rule `<id>` from `<scope>`?",
      options `Remove` and `Keep (Recommended)`) unless `-y`; then `guardrails rule rm <id> --scope <s>
      --as-user --reason "…"`
-3. A `match` may refer to config `matchers` (`{"matcher": "name"}`): changing one changes every rule that uses it
-   (`preset.*` ones belong to presets: the next `preset install` replaces them); `guardrails status` lists them. For a non-trivial change to `match`, read
+3. A `match` may refer to config `matchers` (`{"use": "@name"}`): changing one changes every rule that uses it
+   (`@preset/...` ones are built into the plugin); `guardrails status` lists them. For a non-trivial change to `match`, read
    `${CLAUDE_PLUGIN_ROOT}/references/writing-rules.md`; worked rules by shape are in
    `${CLAUDE_PLUGIN_ROOT}/references/ast/index.md` (read only the file that matches). Follow the matcher ladder of
    writing-rules.md (atoms first, a regex last) and run `guardrails rule ast '<command>'` to read the node kinds

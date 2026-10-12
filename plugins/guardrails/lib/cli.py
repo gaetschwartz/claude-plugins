@@ -20,12 +20,13 @@ import matching
 import messages
 import policy
 import render
+import rulebuilder
 import store
 import telemetry
 from policy import Invalid, view
 from verdict import Evaluation
 
-PRESETS_DIR = store.HERE.parent / "presets"
+PRESETS_DIR = rulebuilder.PRESETS_DIR
 SETTABLE = ("action", "retry", "enabled", "modes", "message", "messageShort", "description", "match", "wrappers",
             "when", "messages")
 MATCHING = ("match", "wrappers", "when", "messages")
@@ -267,10 +268,22 @@ def snapshot(args: Args) -> Snapshot:
                 report(f"rule {rid}: mode '{m}' is not declared (the rule stays enforced)",
                        *rule_origins.get(rid, []))
     for label, doc in (("global", gconfig), ("project", pconfig)):
-        for text in policy.removed_key_problems((label, doc)) + policy.matcher_problems(label, view(doc, "matchers")):
+        defined = view(doc, "matchers")
+        for text in (policy.removed_key_problems((label, doc)) + policy.ignored_matcher_problems(label, defined)
+                     + policy.matcher_problems(label, defined)):
             report(text, label)
         if "matchers" in doc and not isinstance(doc["matchers"], dict):
             report(f"{label} config: 'matchers' must be an object, so its matchers are ignored", label)
+    owners = {rid: name for name in preset_names() for rid in view(load_preset(name), "rules")}
+    spelling = '{"matcher": ...}, a deprecated spelling of {"use": "@..."}'
+    for label in policy.LAYERS:
+        spelled = sorted(rid for rid, rule in rules.items() if rule.deprecated_use and rule_origins[rid][0] == label)
+        for name in sorted({owners[rid] for rid in spelled if rid in owners}):
+            ids = [rid for rid in spelled if owners.get(rid) == name]
+            report(f"{label} rules {', '.join(ids)} write {spelling}; `guardrails preset install {name}` rewrites "
+                   "them", label)
+        if others := [rid for rid in spelled if rid not in owners]:
+            report(f"{label} rules {', '.join(others)} write {spelling}", label)
     parsed = {rid: rule for rid, rule in rules.items() if rule.enabled
               and not any(p.startswith(f"rule {rid}:") for p in problems)}
     blind: set[str] = set()
@@ -336,9 +349,17 @@ def status_view(snap: Snapshot, scope: str | None) -> render.Status:
         else:
             on = "off"
         modes.append(render.ModeRow(name, on, snap.modes[name].agent_may_enable, snap.mode_origins.get(name, [])))
-    matchers = [render.MatcherRow(name, snap.matcher_origins.get(name, []),
-                                  sorted(rid for rid, rule in snap.rules.items() if name in rule.matchers))
-                for name in sorted(snap.matcher_origins) if keep(snap.matcher_origins, name)]
+
+    def users(ref: str, refs: Callable[[policy.Rule], tuple[str, ...]]) -> list[str]:
+        return sorted(rid for rid, rule in snap.rules.items() if rule.enabled and ref in refs(rule))
+
+    shipped = sorted({ref for rule in snap.rules.values() if rule.enabled for ref in rule.written
+                      if ref.startswith(rulebuilder.BUILTIN_SCOPE)})
+    matchers = [render.MatcherRow(ref, [render.BUILT_IN], users(ref, lambda rule: rule.written)) for ref in shipped] \
+        if scope is None else []
+    matchers += [render.MatcherRow(f"@{name}", snap.matcher_origins[name], users(f"@{name}", lambda rule: rule.matchers))
+                 for name in sorted(snap.matcher_origins)
+                 if policy.MATCHER_NAME.fullmatch(name) and keep(snap.matcher_origins, name)]
     notes = []
     if not snap.hook_on:
         reason = f" ({snap.gconfig['disabledReason']})" if snap.gconfig.get("disabledReason") else ""
@@ -572,9 +593,9 @@ def change_matchers(doc: store.Doc, name: str, fragment: Any) -> bool:
 
 def cmd_matcher_add(args: Args) -> int:
     require_user(args, "matcher add")
-    check_name("matcher", args.name)
-    if args.name.startswith(policy.PRESET_MATCHER_PREFIX):
-        raise Invalid(f"matcher names starting with '{policy.PRESET_MATCHER_PREFIX}' are reserved for presets; pick another name")
+    if not policy.MATCHER_NAME.fullmatch(args.name):
+        raise Invalid(f"matcher name {args.name!r} must match {policy.MATCHER_NAME.pattern}: lowercase letters, digits "
+                      "and '-', so it is referenced as @name")
     fragment = load_json(args.json, "--json")
     if not isinstance(fragment, dict) or not fragment:
         raise Invalid("--json must be a non-empty rule object")
@@ -935,8 +956,6 @@ def cmd_preset_install(args: Args) -> int:
     if unknown:
         raise Invalid(f"preset {args.name} has no rule {', '.join(unknown)} (it has {', '.join(sorted(rules))})")
     chosen = {rid: r for rid, r in rules.items() if not only or rid in only}
-    shared = view(preset, "matchers")
-    needed = sorted({name for r in chosen.values() for name in policy.Rule.from_json(r, shared).matchers})
     wanted = {m for r in chosen.values() for m in policy.json_modes(r)}
     modes = {name: m for name, m in view(preset, "modes").items() if name in wanted}
     scope = resolve_scope(args)
@@ -945,12 +964,11 @@ def cmd_preset_install(args: Args) -> int:
     report: list[str] = []
 
     def change(doc: store.Doc) -> None:
-        smatchers = table(doc, "matchers")
-        before = broken_rules(doc, smatchers)
-        for name in needed:
-            state = "added" if name not in smatchers else "unchanged" if smatchers[name] == shared[name] else "replaced"
-            report.append(f"matcher {name}: {state}")
-            smatchers[name] = shared[name]
+        smatchers = doc.get("matchers")
+        for name in sorted(smatchers if isinstance(smatchers, dict) else ()):
+            if name.startswith(policy.LEGACY_MATCHER_PREFIX):
+                del smatchers[name]
+                report.append(f"removed legacy matcher {name}")
         srules = table(doc, "rules")
         for rid, rule in sorted(chosen.items()):
             current = srules.get(rid)
@@ -969,8 +987,6 @@ def cmd_preset_install(args: Args) -> int:
             smodes[name] = {"description": str(mode.get("description", "")), "agentMayEnable": agent,
                             "active": False, "setBy": by}
             report.append(f"mode {name}: added (agent may enable: {'yes' if agent else 'no'})")
-        if newly := sorted(set(broken_rules(doc, smatchers)) - set(before)):
-            raise Invalid(f"rule {newly[0]} would stop loading with the preset's matchers, so nothing was installed")
 
     change_config(scope, path, change)
     print(f"installed preset {args.name} into {path}")
@@ -1029,7 +1045,7 @@ def build_parser() -> argparse.ArgumentParser:
     source = test.add_mutually_exclusive_group(required=True)
     source.add_argument("--json", help="a draft rule as a JSON object, @<file> or - for stdin; its match is one "
                         "ast-grep rule that may use the command, assignment, wrapper, statement, redirect, discards, "
-                        "via, flag, capture and matcher atoms")
+                        "via, flag, capture and use atoms")
     source.add_argument("--id", help="an installed rule's id")
     test.add_argument("commands", nargs="*", metavar="CMD")
     test.add_argument("--examples", help='JSON list of {"cmd", "source", "expect"} objects, @<file> or - for stdin')
@@ -1055,7 +1071,7 @@ def build_parser() -> argparse.ArgumentParser:
         toggle.add_argument("name")
         toggle.add_argument("--scope", choices=("session", *SCOPES), default="session")
 
-    matcher = verbs.add_parser("matcher", help="named match fragments rules refer to as {\"matcher\": name}").add_subparsers(
+    matcher = verbs.add_parser("matcher", help="named match fragments rules refer to as {\"use\": \"@name\"}").add_subparsers(
         dest="op", required=True)
     matcher_add = matcher.add_parser("add", parents=[common, scoped], help="add or replace a matcher")
     matcher_add.add_argument("name")
@@ -1067,7 +1083,7 @@ def build_parser() -> argparse.ArgumentParser:
     preset.add_parser("list", parents=[common], help="list presets")
     show = preset.add_parser("show", parents=[common], help="print a preset")
     show.add_argument("name")
-    install = preset.add_parser("install", parents=[common, scoped], help="copy a preset's rules, modes and the matchers they use into config")
+    install = preset.add_parser("install", parents=[common, scoped], help="copy a preset's rules and modes into config")
     install.add_argument("name")
     install.add_argument("--only", help="comma-separated rule ids to install")
 

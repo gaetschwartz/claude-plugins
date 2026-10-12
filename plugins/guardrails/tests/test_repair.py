@@ -120,7 +120,7 @@ class NewlineRepair(RepairCase):
         self.assertIsNone(matching.evaluate(GRAMMAR_BUG, {"r": swallowed}).kinds["r"])
         self.assertIsNotNone(matching.evaluate("echo a | sort | cat foo", {"r": swallowed}).kinds["r"])
         preset = json.loads((ROOT / "presets" / "shell-hygiene.json").read_text())
-        chain = policy.Rule.from_json(preset["rules"]["pipe-status-chain"], preset["matchers"])
+        chain = policy.Rule.from_json(preset["rules"]["pipe-status-chain"])
         self.assertIsNone(matching.evaluate("ls | sort | cat\nfoo && echo ok", {"r": chain}).kinds["r"])
         self.assertIsNotNone(matching.evaluate("make | sort | cat\nmake | tail && echo ok", {"r": chain}).kinds["r"])
 

@@ -7,7 +7,7 @@ import unittest
 from typing import Any
 from unittest import mock
 
-from helpers import GREP_RECURSIVE, ROOT, AstIsolated, real_matchers, real_rules
+from helpers import GREP_RECURSIVE, ROOT, AstIsolated, real_rules
 
 import matching
 import policy
@@ -75,7 +75,7 @@ class JoinedRunners(AstIsolated):
         })
 
     def test_a_remote_wait_loop_is_judged_like_a_local_one(self) -> None:
-        rules = policy.effective_rules({}, {"rules": real_rules(), "matchers": real_matchers()}, {})
+        rules = policy.effective_rules({}, {"rules": real_rules()}, {})
         loop = 'while pgrep -f "docker build -f Dockerfile.v0.29"; do sleep 20; done; echo done'
         for command in (loop, f"ssh zgx '{loop}'", f"watch '{loop}'"):
             with self.subTest(command=command):
@@ -262,7 +262,7 @@ class RealRuleSet(AstIsolated):
 
     def setUp(self) -> None:
         super().setUp()
-        self.rules = policy.effective_rules({}, {"rules": real_rules(), "matchers": real_matchers()}, {})
+        self.rules = policy.effective_rules({}, {"rules": real_rules()}, {})
 
     def cost(self, command: str) -> tuple[int, int]:
         """(texts parsed, bytes parsed) for one command, in process."""

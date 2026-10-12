@@ -17,6 +17,7 @@ import telemetry
 
 MAX_WIDTH = 40
 NEWLINE = "⏎"
+BUILT_IN = "built-in"
 
 
 class Source(StrEnum):
@@ -140,7 +141,7 @@ def compact(value: object) -> str:
 
 
 def uses_matchers(rule: policy.Rule) -> str:
-    return f"matchers {words(list(rule.matchers))}" if rule.matchers else ""
+    return f"uses {words(list(rule.written))}" if rule.written else ""
 
 
 def describe_match(rule: policy.Rule) -> str:
@@ -153,7 +154,7 @@ def describe_conditions(rule: policy.Rule) -> str:
     parts = [f"when {span(compact(rule.when))}"] if rule.when is not None else []
     if rule.messages:
         parts.append(plural(len(rule.messages), "message case"))
-    if rule.matchers:
+    if rule.written:
         parts.append(uses_matchers(rule))
     return " · ".join(parts)
 

@@ -95,16 +95,16 @@ tested or loaded, exit 2):
 ### Matchers
 
 A matcher is a named fragment of `match`, defined once in the config's top-level `"matchers": {"operand": {"kind":
-"word", "regex": "^[^-+]"}}` (also in presets and the managed file) and used as `{"matcher": "operand"}` wherever an
-atom goes: at the top, under `any` / `all` / `not`, as the rule of a relation or `stopBy`, inside a `capture`, in a
-message case's `matches`, inside another matcher. Keys next to a reference are ANDed with the fragment. References are
-expanded when the rule is loaded (at most 2000 nodes per rule), so the hash, `status` and `rule test` show the expanded
-rule and a changed matcher changes the hash of every rule using it. No parameters, overriding or recursion: a missing
-name or a cycle makes the rule invalid (`rule add` / `rule test` exit 2, `status` names it). A layer resolves references
-from its own `matchers` only, so a repo's project config cannot depend on a user's matchers or redefine a managed one.
-`guardrails matcher add|rm <name>` edits them (add a matcher after those it refers to). `preset install` writes the
-matchers its rules use as `preset.<name>`, replacing them like rules; that prefix is reserved, so a user matcher never
-collides. `status` lists them and the rules using each.
+"word", "regex": "^[^-+]"}}` (also in the managed file) and used as `{"use": "@operand"}` wherever an atom goes: at the
+top, under `any` / `all` / `not`, as the rule of a relation or `stopBy`, in a `capture`, a message case's `matches`,
+another matcher. Names are lowercase letters, digits and `-`; others (uppercase, `_`) are ignored. `{"use":
+"@preset/operand"}` is a built-in one the plugin ships, usable from every layer and referring only to built-ins; a
+plugin upgrade can change its meaning, and the hash with it. Keys next to a reference are ANDed with the fragment.
+References expand when the rule is loaded (at most 2000 nodes per rule), so the hash and `rule test` show the expanded
+rule. No parameters, overriding or recursion: a missing or ignored name, an unknown `@preset/` name or a cycle makes the
+rule invalid. A layer resolves `@name` from its own `matchers` only, so a project config cannot depend on a user's
+matchers or redefine a managed one. `guardrails matcher add|rm` edits them. `{"matcher": "name"}` is a temporary alias
+of `use` (`preset.x` reads as `@preset/x`); `status --problems` names the rules using it and ignored `preset.*` copies.
 
 ### Redirects wrap statements
 

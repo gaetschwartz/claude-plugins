@@ -32,7 +32,7 @@ def grep_recursive() -> Any:
     import rulebuilder
 
     doc = json.loads((ROOT / "presets" / "modern-cli.json").read_text())
-    return rulebuilder.Inliner(doc["matchers"]).rule(doc["rules"]["grep-rg"]["match"])
+    return rulebuilder.Inliner({}).rule(doc["rules"]["grep-rg"]["match"])
 
 
 GREP_RECURSIVE = grep_recursive()
@@ -48,13 +48,7 @@ def real_rules() -> dict[str, Any]:
 
 def preset_rule(preset: str, rid: str) -> policy.Rule:
     doc = json.loads((ROOT / "presets" / f"{preset}.json").read_text())
-    return policy.Rule.from_json(doc["rules"][rid], doc.get("matchers"))
-
-
-def real_matchers() -> dict[str, Any]:
-    """The matchers every preset defines, as a config's `matchers` table."""
-    return {name: fragment for path in sorted((ROOT / "presets").glob("*.json"))
-            for name, fragment in json.loads(path.read_text()).get("matchers", {}).items()}
+    return policy.Rule.from_json(doc["rules"][rid])
 
 
 DEV_DATA = Path.home() / ".cache" / "guardrails-runtime-dev"

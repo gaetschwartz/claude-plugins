@@ -18,8 +18,8 @@ A rule matches a command and says what happens:
   any spelling, optionally with `args`, a regex over its text, and transparent to a redirect around it),
   `{"assignment": {"name": "LD_PRELOAD"}}`, `{"wrapper": true}`, `{"statement": ...}`, `{"redirect": ...}`,
   `{"discards": "all"}`, `{"via": "ssh"}`, `{"flag": "f"}`, `{"capture": ..., "name": "LAST"}` (binds the matched node to
-  a `{LAST}` placeholder of the message) and `{"matcher": "name"}` (a fragment from the config's `matchers`, shared
-  between rules). Its keys are ANDed; `any` says "either". `wrappers: false` keeps the rule off commands reached
+  a `{LAST}` placeholder of the message) and `{"use": "@name"}` (a fragment from the config's `matchers`, or a built-in
+  `@preset/name`). Its keys are ANDed; `any` says "either". `wrappers: false` keeps the rule off commands reached
   through `sudo`, `env`, `xargs` and the other wrappers. [references/matching.md](references/matching.md) has the
   semantics, the node kinds and the known limits.
 - `action`: `deny` (the agent gets the message and the call is blocked) or `warn` (the message arrives as context, once per

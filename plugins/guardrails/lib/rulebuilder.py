@@ -4,10 +4,13 @@ of it is data for ast-grep; nothing here reads shell syntax."""
 
 from __future__ import annotations
 
+import functools
+import json
 import re
 import string
 from collections.abc import Iterator, Mapping, Sequence
-from typing import TYPE_CHECKING, Any, TypedDict
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
 
 import policy
 import redirects
@@ -25,7 +28,10 @@ SHELLS = ("bash", "sh", "zsh", "dash", "ksh", "script", "su")
 JOINED_RUNNERS = ("eval", "ssh", "watch")
 RUNNERS = (*SHELLS, *JOINED_RUNNERS)
 VIA_CLASSES = ("wrapper", "runner")
-MATCHER = "matcher"
+USE = "use"
+DEPRECATED_USE = "matcher"  # temporary alias of USE, to drop once installed configs have been migrated
+BUILTIN_SCOPE = "@preset/"
+PRESETS_DIR = Path(__file__).resolve().parent.parent / "presets"
 MAX_EXPANDED_NODES = 2000
 ATOMS = ("command", "wrapper", "assignment", "statement", "redirect", "discards", "via", "flag")
 ALWAYS: Rule = {"regex": ""}
@@ -391,65 +397,146 @@ def expanded(node: object, where: str = "match", at: str = "node") -> Any:
     return {**core, **params}
 
 
+class Builtin(NamedTuple):
+    preset: str
+    fragment: Any
+
+
+@functools.cache
+def builtin_matchers() -> dict[str, Builtin]:
+    """The matchers the plugin ships, by name, from the `matchers` of its preset files."""
+    found: dict[str, Builtin] = {}
+    for path in sorted(PRESETS_DIR.glob("*.json")):
+        try:
+            table = json.loads(path.read_text()).get("matchers", {})
+        except (OSError, ValueError, AttributeError) as exc:
+            raise policy.Invalid(f"the plugin's preset file {path.name} cannot be read ({exc}); reinstall the "
+                                 "plugin") from exc
+        if not isinstance(table, dict):
+            raise policy.Invalid(f"the plugin's preset file {path.name} has a 'matchers' that is not an object")
+        for name, fragment in table.items():
+            if name in found:
+                raise policy.Invalid(f"built-in matcher {name} is defined by both {found[name].preset} and "
+                                     f"{path.stem}")
+            found[name] = Builtin(path.stem, fragment)
+    return found
+
+
+class Reference(NamedTuple):
+    """A `use` (or the deprecated `matcher`) key: `text` is `@name` for the layer's matcher or `@preset/name` for a
+    built-in one."""
+
+    text: str
+    deprecated: bool
+
+    @property
+    def builtin(self) -> bool:
+        return self.text.startswith(BUILTIN_SCOPE)
+
+    @property
+    def name(self) -> str:
+        return self.text.removeprefix(BUILTIN_SCOPE if self.builtin else "@")
+
+
+def reference(node: Mapping[str, Any], where: str) -> Reference | None:
+    """The reference a rule object makes, if any; the deprecated `matcher` key is read as `use` (`preset.x` as
+    `@preset/x`, `x` as `@x`)."""
+    if USE not in node and DEPRECATED_USE not in node:
+        return None
+    if USE in node and DEPRECATED_USE in node:
+        raise policy.Invalid(f"'{where}' has both '{USE}' and '{DEPRECATED_USE}': keep '{USE}'")
+    key = USE if USE in node else DEPRECATED_USE
+    value = node[key]
+    if not isinstance(value, str) or not value:
+        raise policy.Invalid(f"'{where}.{key}' must be a reference such as \"@name\" or \"@preset/name\"")
+    if key == DEPRECATED_USE:
+        if value.startswith("@"):
+            raise policy.Invalid(f"'{where}.{key}' takes a bare name; write {{\"{USE}\": \"{value}\"}}")
+        legacy = value.removeprefix(policy.LEGACY_MATCHER_PREFIX)
+        return Reference(f"{BUILTIN_SCOPE}{legacy}" if legacy != value else f"@{value}", True)
+    if not value.startswith("@"):
+        raise policy.Invalid(f"'{where}.{key}': references start with @, write \"@{value}\"")
+    return Reference(value, False)
+
+
 class Inliner:
-    """Expands each `{"matcher": name}` reference into the named fragment of one config layer, within a node budget;
-    `used` collects the names reached, the ones inside other matchers included."""
+    """Expands each `{"use": "@name"}` reference into the named fragment of one config layer, or `@preset/name` into the
+    plugin's built-in one, within a node budget; `used` collects the references reached, the ones inside other matchers
+    included, `written` those the rule itself writes, and `deprecated` whether any was written with the old `matcher`
+    key."""
 
     def __init__(self, matchers: Mapping[str, Any]) -> None:
-        self.matchers = matchers
+        self.matchers = {name: body for name, body in matchers.items() if policy.MATCHER_NAME.fullmatch(name)}
+        self.ignored = frozenset(name for name in matchers if not policy.MATCHER_NAME.fullmatch(name))
         self.used: set[str] = set()
+        self.written: set[str] = set()
         self.nodes = 0
+        self.deprecated = False
 
-    def rule(self, node: object, where: str = "match", path: tuple[str, ...] = ()) -> Any:
+    def rule(self, node: object, where: str = "match", path: tuple[str, ...] = (), layer: bool = True) -> Any:
         self.nodes += 1
         if self.nodes > MAX_EXPANDED_NODES:
             raise policy.Invalid(f"matchers expand to more than {MAX_EXPANDED_NODES} nodes in one rule; a matcher that "
                                  "repeats another several times grows exponentially, so reuse smaller ones")
         if isinstance(node, list):
-            return [self.rule(item, f"{where}[{i}]", path) for i, item in enumerate(node)]
+            return [self.rule(item, f"{where}[{i}]", path, layer) for i, item in enumerate(node)]
         if not isinstance(node, dict):
             return node
-        out = {key: self.rule(value, f"{where}.{key}", path) if key in (*NESTED, "statement", "capture") else value
-               for key, value in node.items() if key != MATCHER}
-        if MATCHER not in node:
+        out = {key: self.rule(value, f"{where}.{key}", path, layer) if key in (*NESTED, "statement", "capture") else value
+               for key, value in node.items() if key not in (USE, DEPRECATED_USE)}
+        ref = reference(node, where)
+        if ref is None:
             return out
-        fragment = self.fragment(node[MATCHER], f"{where}.{MATCHER}", path)
+        fragment = self.fragment(ref, where, path, layer)
         if not out:
             return fragment
         return {**fragment, **out} if not fragment.keys() & out.keys() else {"all": [fragment, out]}
 
-    def fragment(self, name: object, where: str, path: tuple[str, ...]) -> dict[str, Any]:
-        if not isinstance(name, str) or name not in self.matchers:
-            known = ", ".join(sorted(self.matchers)) or "none"
-            raise policy.Invalid(f"{where.removesuffix('.matcher')} refers to no matcher {name!r} (this config defines: "
-                                 f"{known})")
-        if name in path:
-            raise policy.Invalid(f"matcher cycle: {' -> '.join((*path, name))}")
-        body = self.matchers[name]
+    def fragment(self, ref: Reference, where: str, path: tuple[str, ...], layer: bool) -> dict[str, Any]:
+        if ref.text in path:
+            raise policy.Invalid(f"matcher cycle: {' -> '.join((*path, ref.text))}")
+        if ref.builtin:
+            shipped = builtin_matchers().get(ref.name)
+            if shipped is None:
+                raise policy.Invalid(f"{where}: this guardrails version does not ship {ref.text}; update the plugin")
+            body = shipped.fragment
+        elif not layer:
+            raise policy.Invalid(f"{where}: a built-in matcher can only refer to built-in ones (@preset/...), not "
+                                 f"{ref.text}")
+        elif ref.name in self.ignored:
+            raise policy.Invalid(f"{where}: matcher {ref.text} is ignored because its name does not match "
+                                 f"{policy.MATCHER_NAME.pattern}; rename it")
+        elif ref.name not in self.matchers:
+            known = ", ".join(f"@{name}" for name in sorted(self.matchers) if f"@{name}" not in path) or "none"
+            raise policy.Invalid(f"{where} refers to no matcher {ref.text!r} (this config defines: {known})")
+        else:
+            body = self.matchers[ref.name]
         if not isinstance(body, dict) or not body:
-            raise policy.Invalid(f"matcher '{name}' must be a non-empty rule object")
-        self.used.add(name)
-        inner: dict[str, Any] = self.rule(body, f"matcher '{name}'", (*path, name))
-        expanded(inner, f"matcher '{name}'")
+            raise policy.Invalid(f"matcher {ref.text} must be a non-empty rule object")
+        self.used.add(ref.text)
+        if not path:
+            self.written.add(ref.text)
+        self.deprecated = self.deprecated or ref.deprecated
+        inner: dict[str, Any] = self.rule(body, ref.text, (*path, ref.text), not ref.builtin)
+        expanded(inner, ref.text)
         return inner
 
 
 def matcher_problems(matchers: Mapping[str, Any]) -> dict[str, str]:
     """Matcher name -> what is wrong with it, for the matchers of a layer that fail on their own or sit in a cycle; one
     that only fails through another matcher is left to the rule that uses it."""
+    named = {name: body for name, body in matchers.items() if policy.MATCHER_NAME.fullmatch(name)}
     found: dict[str, str] = {}
     failing: dict[str, str] = {}
-    for name in matchers:
+    for name in named:
         try:
-            if not policy.NAME.fullmatch(name):
-                raise policy.Invalid(f"name must match {policy.NAME.pattern}")
-            check_regexes(Inliner(matchers).fragment(name, "matcher", ()))
+            check_regexes(Inliner(named).fragment(Reference(f"@{name}", False), "matcher", (), True))
         except policy.Invalid as exc:
             failing[name] = str(exc)
-    stubs: dict[str, Any] = {name: {"kind": "word"} for name in matchers}
+    stubs: dict[str, Any] = {name: {"kind": "word"} for name in named}
     for name, why in failing.items():
         try:
-            check_regexes(Inliner({**stubs, name: matchers[name]}).fragment(name, "matcher", ()))
+            check_regexes(Inliner({**stubs, name: named[name]}).fragment(Reference(f"@{name}", False), "matcher", (), True))
         except policy.Invalid as exc:
             found[name] = str(exc)
         else:

@@ -9,6 +9,7 @@ import cli
 import engine
 import matching
 import policy
+import rulebuilder
 
 
 class Presets(AstIsolated):
@@ -19,11 +20,17 @@ class Presets(AstIsolated):
             self.assertTrue(preset.get("description"))
             for rid, rule in preset["rules"].items():
                 with self.subTest(preset=name, rule=rid):
-                    policy.Rule.from_json(rule, preset.get("matchers"))
+                    self.assertFalse(policy.Rule.from_json(rule).deprecated_use)
                     for mode in policy.json_modes(rule):
                         self.assertIn(mode, preset.get("modes", {}))
-            used = {m for rule in preset["rules"].values() for m in policy.Rule.from_json(rule, preset.get("matchers")).matchers}
-            self.assertEqual(sorted(preset.get("matchers", {})), sorted(used), f"{name}: every matcher is used")
+
+    def test_built_in_matchers_are_unique_across_presets_and_each_is_used(self) -> None:
+        names = [name for preset in cli.preset_names() for name in cli.load_preset(preset).get("matchers", {})]
+        self.assertEqual(len(names), len(set(names)), "a built-in matcher name is shared by two presets")
+        self.assertEqual(sorted(rulebuilder.builtin_matchers()), sorted(names))
+        used = {ref for preset in cli.preset_names() for rule in cli.load_preset(preset)["rules"].values()
+                for ref in policy.Rule.from_json(rule).matchers}
+        self.assertEqual(sorted(used), sorted(f"@preset/{name}" for name in names))
 
     def test_no_regex_is_written_twice_or_grows_big(self) -> None:
         found: list[str] = []
@@ -156,7 +163,7 @@ class Presets(AstIsolated):
 
 def rule_of(preset: str, rid: str) -> policy.Rule:
     doc = cli.load_preset(preset)
-    return policy.Rule.from_json(doc["rules"][rid], doc.get("matchers"))
+    return policy.Rule.from_json(doc["rules"][rid])
 
 
 class Examples(AstIsolated):
@@ -219,7 +226,7 @@ class Examples(AstIsolated):
 
     def test_no_process_rule_fires_on_the_form_another_message_recommends(self) -> None:
         doc = cli.load_preset("process-safety")
-        rules = {rid: policy.Rule.from_json(r, doc["matchers"]) for rid, r in doc["rules"].items()}
+        rules = {rid: policy.Rule.from_json(r) for rid, r in doc["rules"].items()}
         for command in ("pgrep -xl node", "pgrep -fl '[v]ite --port 5173'", "pgrep -fl '[x]pattern'", "pgrep -n node", "pgrep -o node",
                         "kill -0 123", "while kill -0 123 2>/dev/null; do sleep 5; done", "kill 123"):
             with self.subTest(command=command):

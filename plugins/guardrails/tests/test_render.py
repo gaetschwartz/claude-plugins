@@ -93,7 +93,7 @@ class Card(AstIsolated):
         files = ["**Managed** platform file `/Library/Application Support/ClaudeCode/guardrails.json` present",
                  "**Global** config `/Users/me/.config/dev.gaetans.guardrails/claude-plugin/config.json` present",
                  "**Project** config `/Users/me/src/app/.claude/guardrails.json` absent"]
-        matchers = [render.MatcherRow("preset.operand", ["global"], ["du-dust"])]
+        matchers = [render.MatcherRow("@preset/operand", [render.BUILT_IN], ["du-dust"])]
         text = render.status_listing(render.Status(files, True, False, rules, modes, ["text as reported"],
                                                    matchers=matchers))
         self.assertEqual(text, doc_block("**Managed** platform file"))

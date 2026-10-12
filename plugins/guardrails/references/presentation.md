@@ -132,7 +132,7 @@ Output:
     - `reverse-engineering` on (by agent: user said RE work) · agent may enable: yes · global
 
     **Matchers**
-    - `preset.operand` global · used by 1 rule: `du-dust`
+    - `@preset/operand` built-in · used by 1 rule: `du-dust`
 
     **Problems**
     - text as reported
@@ -143,7 +143,7 @@ Output:
 - Rule state is one of `always enforced`, `suspended by <modes>` (only modes that are on now), `disabled`,
   `inactive here: its when does not hold` (judged for a Bash call here; the hook skips the rule), `enabled`. A rule with
   a `when` adds ` · when <condition as compact JSON>`, one with message cases ` · N message cases`, one that uses
-  matchers ` · matchers <names>` (the `**Matchers**` group, when any exist, lists each with its layers). Ids are padded to
+  matchers ` · uses <names>` (the `**Matchers**` group lists the built-in ones those rules use and each layer's own). Ids are padded to
   the longest id (capped at 40), modes to the longest mode name.
 - `--scope` keeps only rules, modes and problems that belong to that layer. `--problems` prints only the `**Problems**` group,
   or `No problems.`. `--rule <id>` prints just that rule's row (used after a write). A `**Note**` line follows the

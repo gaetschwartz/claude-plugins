@@ -34,7 +34,7 @@
     },
     "no-pgrep-status": {
       "description": "Never use the exit status of an unguarded pgrep -f (&&, ||, !, if, while, until).",
-      "match": {"statement": {"matcher": "preset.self-matching-pgrep"}, "matcher": "preset.status-used"},
+      "match": {"statement": {"use": "@preset/self-matching-pgrep"}, "use": "@preset/status-used"},
       "action": "deny",
       "message": "Do not use pgrep's exit status in &&, ||, ! or if: with -f it can match your own shell and never turns false. Run `pgrep -fl '[x]pattern'` (or `pgrep -xl <name>`) as its own command and read the output. To wait for a process to exit, poll `kill -0 <pid>` with a PID you already identified.",
       "messageShort": "No pgrep exit status in conditions. Poll `kill -0 <pid>`.",
@@ -51,47 +51,47 @@
       "match": {
         "any": [
           {
-            "matcher": "preset.self-matching-pgrep",
+            "use": "@preset/self-matching-pgrep",
             "inside": {
               "any": [{"kind": "pipeline"}, {"kind": "command_substitution"}, {"kind": "process_substitution"}],
               "stopBy": "end"
             }
           },
-          {"matcher": "preset.signal", "has": {"matcher": "preset.lookup-subst", "stopBy": "end"}},
+          {"use": "@preset/signal", "has": {"use": "@preset/lookup-subst", "stopBy": "end"}},
           {
-            "matcher": "preset.signal",
-            "has": {"matcher": "preset.unread-var", "stopBy": "end"},
-            "follows": {"matcher": "preset.lookup-assignment", "stopBy": "end"}
+            "use": "@preset/signal",
+            "has": {"use": "@preset/unread-var", "stopBy": "end"},
+            "follows": {"use": "@preset/lookup-assignment", "stopBy": "end"}
           },
           {
-            "matcher": "preset.signal",
-            "has": {"matcher": "preset.unread-var", "stopBy": "end"},
-            "inside": {"follows": {"matcher": "preset.lookup-assignment", "stopBy": "end"}, "stopBy": "end"}
+            "use": "@preset/signal",
+            "has": {"use": "@preset/unread-var", "stopBy": "end"},
+            "inside": {"follows": {"use": "@preset/lookup-assignment", "stopBy": "end"}, "stopBy": "end"}
           },
           {
-            "matcher": "preset.signal",
-            "inside": {"kind": "for_statement", "has": {"matcher": "preset.lookup-subst"}, "stopBy": "end"}
+            "use": "@preset/signal",
+            "inside": {"kind": "for_statement", "has": {"use": "@preset/lookup-subst"}, "stopBy": "end"}
           },
           {
-            "matcher": "preset.signal",
+            "use": "@preset/signal",
             "inside": {
               "kind": "while_statement",
               "inside": {"kind": "pipeline"},
-              "follows": {"matcher": "preset.lookup-stage", "stopBy": "end"},
+              "follows": {"use": "@preset/lookup-stage", "stopBy": "end"},
               "stopBy": "end"
             }
           },
           {
-            "matcher": "preset.signal",
+            "use": "@preset/signal",
             "inside": {"kind": "pipeline"},
-            "follows": {"matcher": "preset.lookup-stage", "stopBy": "end"}
+            "follows": {"use": "@preset/lookup-stage", "stopBy": "end"}
           },
           {
             "command": ["sh", "bash", "zsh", "dash", "ksh"],
             "inside": {"kind": "pipeline"},
             "follows": {
               "regex": "\\bkill\\b",
-              "follows": {"matcher": "preset.lookup-stage", "stopBy": "end"},
+              "follows": {"use": "@preset/lookup-stage", "stopBy": "end"},
               "stopBy": "end"
             }
           }
@@ -131,15 +131,15 @@
     },
     "warn-pgrep-full-cmdline": {
       "description": "pgrep -f matches full command lines, including your own shell.",
-      "match": {"matcher": "preset.self-matching-pgrep"},
+      "match": {"use": "@preset/self-matching-pgrep"},
       "action": "warn",
       "message": "`pgrep -f` matches full command lines, including your own shell's, so its output can list your shell. For a known process name use `pgrep -xl <name>`. For a command-line pattern bracket it, `pgrep -fl '[v]ite --port 5173'`, and do not spell the unbracketed text anywhere else in the same command (it would match your shell again).",
       "messageShort": "`pgrep -f` can list your own shell. Use `-xl <name>` or bracket the pattern: `'[v]ite'`."
     }
   },
   "matchers": {
-    "preset.and-or": {"any": [{"pattern": "$A && $B"}, {"pattern": "$A || $B"}]},
-    "preset.status-step": {
+    "and-or": {"any": [{"pattern": "$A && $B"}, {"pattern": "$A || $B"}]},
+    "status-step": {
       "all": [
         {
           "any": [
@@ -152,7 +152,7 @@
         {"any": [{"nthChild": {"position": 1, "reverse": true}}, {"inside": {"kind": "redirected_statement"}}]}
       ]
     },
-    "preset.in-condition": {
+    "in-condition": {
       "any": [
         {
           "inside": {
@@ -164,20 +164,20 @@
         {"nthChild": 1, "inside": {"kind": "elif_clause"}}
       ]
     },
-    "preset.status-used": {
+    "status-used": {
       "all": [
         {
           "any": [
-            {"nthChild": 1, "inside": {"matcher": "preset.and-or"}},
+            {"nthChild": 1, "inside": {"use": "@preset/and-or"}},
             {
               "inside": {
                 "nthChild": 1,
-                "inside": {"matcher": "preset.and-or"},
-                "stopBy": {"not": {"matcher": "preset.status-step"}}
+                "inside": {"use": "@preset/and-or"},
+                "stopBy": {"not": {"use": "@preset/status-step"}}
               }
             },
             {"inside": {"kind": "negated_command", "stopBy": "end"}},
-            {"matcher": "preset.in-condition"}
+            {"use": "@preset/in-condition"}
           ]
         },
         {
@@ -187,7 +187,7 @@
         }
       ]
     },
-    "preset.pid-lookup": {
+    "pid-lookup": {
       "any": [
         {"command": ["pgrep", "pidof", "lsof"]},
         {"command": "ps", "flag": "C"},
@@ -199,28 +199,28 @@
         }
       ]
     },
-    "preset.lookup-stage": {
+    "lookup-stage": {
       "any": [
-        {"matcher": "preset.pid-lookup"},
-        {"kind": "redirected_statement", "has": {"matcher": "preset.pid-lookup", "stopBy": "end"}}
+        {"use": "@preset/pid-lookup"},
+        {"kind": "redirected_statement", "has": {"use": "@preset/pid-lookup", "stopBy": "end"}}
       ]
     },
-    "preset.unread-var": {
+    "unread-var": {
       "any": [
         {"kind": "simple_expansion", "has": {"kind": "variable_name"}},
         {"kind": "expansion", "has": {"kind": "variable_name"}}
       ]
     },
-    "preset.signal": {"command": "kill", "not": {"any": [{"flag": ["l", "L"]}, {"pattern": "kill -0 $$$"}]}},
-    "preset.lookup-subst": {
+    "signal": {"command": "kill", "not": {"any": [{"flag": ["l", "L"]}, {"pattern": "kill -0 $$$"}]}},
+    "lookup-subst": {
       "kind": "command_substitution",
-      "has": {"matcher": "preset.pid-lookup", "stopBy": "end"}
+      "has": {"use": "@preset/pid-lookup", "stopBy": "end"}
     },
-    "preset.lookup-assignment": {
+    "lookup-assignment": {
       "kind": "variable_assignment",
-      "has": {"matcher": "preset.lookup-subst", "stopBy": "end"}
+      "has": {"use": "@preset/lookup-subst", "stopBy": "end"}
     },
-    "preset.self-matching-pgrep": {
+    "self-matching-pgrep": {
       "command": "pgrep",
       "flag": ["f", "full"],
       "not": {"any": [{"flag": ["x", "exact"]}, {"regex": "\\[[^\\]]\\]"}]}
