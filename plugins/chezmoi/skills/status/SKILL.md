@@ -3,7 +3,7 @@ name: status
 description: Use when the user asks about the state of their chezmoi dotfiles - "chezmoi status", "are my dotfiles in sync", "what's drifted", "do I have anything to push", "anything to pull", "did my dotfiles change", checking before a machine handover or reinstall, or diagnosing why an expected dotfile change has not appeared.
 allowed-tools: Bash(chezmoi:*), Bash(${CLAUDE_SKILL_DIR}/state.sh:*)
 context: fork
-model: sonnet
+model: haiku
 background: false
 ---
 
