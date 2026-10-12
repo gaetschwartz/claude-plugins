@@ -141,7 +141,8 @@ def compact(value: object) -> str:
 
 
 def uses_matchers(rule: policy.Rule) -> str:
-    return f"uses {words(list(rule.written))}" if rule.written else ""
+    refs = [rule.source] if rule.source else list(rule.written)
+    return f"uses {words(refs)}" if refs else ""
 
 
 def describe_match(rule: policy.Rule) -> str:
@@ -154,7 +155,7 @@ def describe_conditions(rule: policy.Rule) -> str:
     parts = [f"when {span(compact(rule.when))}"] if rule.when is not None else []
     if rule.messages:
         parts.append(plural(len(rule.messages), "message case"))
-    if rule.written:
+    if uses_matchers(rule):
         parts.append(uses_matchers(rule))
     return " · ".join(parts)
 

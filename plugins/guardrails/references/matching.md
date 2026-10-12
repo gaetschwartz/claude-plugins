@@ -95,16 +95,15 @@ tested or loaded, exit 2):
 ### Matchers
 
 A matcher is a named fragment of `match`, defined once in the config's top-level `"matchers": {"operand": {"kind":
-"word", "regex": "^[^-+]"}}` (also in the managed file) and used as `{"use": "@operand"}` wherever an atom goes: at the
-top, under `any` / `all` / `not`, as the rule of a relation or `stopBy`, in a `capture`, a message case's `matches`,
-another matcher. Names are lowercase letters, digits and `-`; others (uppercase, `_`) are ignored. `{"use":
-"@preset/operand"}` is a built-in one the plugin ships, usable from every layer and referring only to built-ins; a
-plugin upgrade can change its meaning, and the hash with it. Keys next to a reference are ANDed with the fragment.
-References expand when the rule is loaded (at most 2000 nodes per rule), so the hash and `rule test` show the expanded
-rule. No parameters, overriding or recursion: a missing or ignored name, an unknown `@preset/` name or a cycle makes the
-rule invalid. A layer resolves `@name` from its own `matchers` only, so a project config cannot depend on a user's
-matchers or redefine a managed one. `guardrails matcher add|rm` edits them. `{"matcher": "name"}` is a temporary alias
-of `use` (`preset.x` reads as `@preset/x`); `status --problems` names the rules using it and ignored `preset.*` copies.
+"word", "regex": "^[^-+]"}}` (also in the managed file) and used as `{"use": "@operand"}` wherever an atom goes (under
+`any` / `all` / `not`, a relation, `stopBy`, `capture`, a message case's `matches`, another matcher). Names are
+lowercase letters, digits and `-`; others (uppercase, `_`) are ignored. `{"use": "@preset/operand"}` is a built-in one
+the plugin ships, usable from every layer and referring only to built-ins; a plugin upgrade can change what it, or an
+imported rule, enforces and the hash. Keys next to a reference are ANDed with the fragment. References expand when the
+rule is loaded (at most 2000 nodes per rule), so the hash and `rule test` show the expanded rule. No parameters,
+overriding or recursion: a missing or ignored name, an unknown `@preset/` name or a cycle makes the rule invalid. A
+layer resolves `@name` from its own `matchers` only, so a project cannot use a user's matchers or redefine a managed
+one. `{"matcher": "name"}` is a temporary alias of `use` (`preset.x` reads as `@preset/x`).
 
 ### Redirects wrap statements
 

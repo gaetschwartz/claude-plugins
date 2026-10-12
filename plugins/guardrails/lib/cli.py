@@ -269,7 +269,8 @@ def snapshot(args: Args) -> Snapshot:
                        *rule_origins.get(rid, []))
     for label, doc in (("global", gconfig), ("project", pconfig)):
         defined = view(doc, "matchers")
-        for text in (policy.removed_key_problems((label, doc)) + policy.ignored_matcher_problems(label, defined)
+        for text in (policy.removed_key_problems((label, doc)) + policy.layer_shape_problems((label, doc))
+                     + policy.ignored_matcher_problems(label, defined)
                      + policy.matcher_problems(label, defined)):
             report(text, label)
         if "matchers" in doc and not isinstance(doc["matchers"], dict):
@@ -457,7 +458,8 @@ def cmd_rule_add(args: Args) -> int:
     path = scope_path(scope)
     parsed = policy.Rule.from_json(rule, layer_matchers(path))
     unchecked = check_ast_rule(parsed)
-    rule["setBy"] = stamp(args.reason)
+    if isinstance(rule, dict):
+        rule["setBy"] = stamp(args.reason)
 
     def change(doc: store.Doc) -> bool:
         rules = table(doc, "rules")
@@ -520,6 +522,8 @@ def cmd_rule_set(args: Args) -> int:
 
     def change(doc: store.Doc) -> None:
         rules = table(doc, "rules")
+        if isinstance(rules.get(args.id), str):
+            rules[args.id] = {"use": rules[args.id]}
         if not isinstance(rules.get(args.id), dict):
             if base is None:
                 raise Invalid(f"no rule '{args.id}' in {path}")
@@ -685,6 +689,17 @@ def example_list(data: Any) -> list[Example]:
     return out
 
 
+def shipped_examples(source: str, taken: set[str]) -> list[Example]:
+    """The catch and pass examples the plugin ships for the built-in rule a rule imports."""
+    shipped = rulebuilder.builtin_rules()[source.removeprefix(rulebuilder.BUILTIN_SCOPE)].examples
+    shown = shipped if isinstance(shipped, dict) else {}
+    out: list[Example] = []
+    for key, expect in (("catch", render.Expect.MATCH), ("pass", render.Expect.PASS)):
+        cmds = shown.get(key, [])
+        out += [Example(cmd, render.Source.INFERRED, expect) for cmd in cmds if isinstance(cmd, str) and cmd not in taken]
+    return out
+
+
 def outcome_of(ev: Evaluation, rid: str) -> render.Outcome:
     kind = ev.kinds[rid]
     if rid in ev.unevaluated:
@@ -740,10 +755,14 @@ def cmd_rule_test(args: Args) -> int:
         layers = policy.origins("rules", mconfig, gconfig, pconfig)[args.id]
         rid, scope = args.id, "+".join(layers)
 
+    extra = shipped_examples(rule.source, {e.cmd for e in examples}) if rule.source else []
+    examples += extra
     if not examples:
         raise Invalid("give at least one command or --examples")
     env = call_env(args, store.project_root())
     notes = effect_notes(args, rule, layers, mconfig, gconfig, pconfig, env)
+    if extra:
+        notes.append(f"also ran the {len(extra)} catch and pass examples shipped with {rule.source}")
     evaluations = [matching.evaluate(cmd, {rid: rule}, env) for cmd, _, _ in examples]
     broken = {rid_: why for ev in evaluations for rid_, why in ev.invalid.items()}
     if broken:
@@ -947,6 +966,44 @@ def cmd_preset_show(args: Args) -> int:
     return 0
 
 
+TUNABLE = {"action": "action", "retry": "retry", "enabled": "enabled", "modes": "modes", "message": "message",
+           "messageShort": "message_short", "description": "description", "wrappers": "wrappers", "when": "when",
+           "messages": "messages"}
+
+
+KEPT = frozenset({"enabled", "modes"})
+
+
+def imported_entry(rid: str, current: Any, matchers: dict[str, Any], by: dict[str, str], force: bool) -> tuple[Any, str]:
+    """The entry that imports built-in rule `rid` in place of `current`, and what was done to it. A copy that matches
+    the built-in becomes a bare import and one that differs only in `enabled` or `modes` keeps those; any other
+    difference, or an entry that does not load, is left as it is unless `force`."""
+    ref = f"{rulebuilder.BUILTIN_SCOPE}{rid}"
+    if current is None:
+        return ref, "added as an import"
+    try:
+        mine = policy.Rule.from_json(current, matchers)._asdict()
+    except Invalid:
+        differs = ["it does not load"]
+    else:
+        shipped = policy.Rule.from_json(ref)._asdict()
+        differs = [key for key, field in TUNABLE.items() if mine[field] != shipped[field]]
+        differs += ["match"] * (mine["match"] != shipped["match"])
+        kept = [key for key in differs if key in KEPT]
+        if not set(differs) - KEPT:
+            if not kept:
+                return ref, "unchanged" if current == ref else "replaced the copy by an import"
+            entry = {"use": ref, **{key: mine[TUNABLE[key]] if key == "enabled" else list(mine["modes"]) for key in kept}}
+            own = current if isinstance(current, dict) else {}
+            if {k: v for k, v in own.items() if k != "setBy"} == entry:
+                return current, "unchanged"
+            return {**entry, "setBy": own.get("setBy", by)}, f"replaced the copy by an import, keeping {' and '.join(kept)}"
+    what = ", ".join(differs)
+    if force:
+        return ref, f"replaced by an import (it differed in {what})"
+    return current, f"differs from the built-in ({what}); left as is. Re-run with --force to replace it with the import"
+
+
 def cmd_preset_install(args: Args) -> int:
     require_user(args, "preset install")
     preset = load_preset(args.name)
@@ -971,13 +1028,11 @@ def cmd_preset_install(args: Args) -> int:
                 report.append(f"removed legacy matcher {name}")
         srules = table(doc, "rules")
         for rid, rule in sorted(chosen.items()):
-            current = srules.get(rid)
-            if isinstance(current, dict) and {k: v for k, v in current.items() if k != "setBy"} == rule:
-                report.append(f"rule {rid}: unchanged")
-                continue
+            entry, state = imported_entry(rid, srules.get(rid), view(doc, "matchers"), by, args.force)
             always = " (no modes: always enforced)" if scope == "managed" and not policy.json_modes(rule) else ""
-            report.append(f"rule {rid}: {'replaced' if rid in srules else 'added'}{always}")
-            srules[rid] = {**rule, "setBy": by}
+            left = state == "unchanged" or state.startswith("differs")
+            report.append(f"rule {rid}: {state}{'' if left else always}")
+            srules[rid] = entry
         smodes = table(doc, "modes")
         for name, mode in sorted(modes.items()):
             if name in smodes:
@@ -1086,6 +1141,7 @@ def build_parser() -> argparse.ArgumentParser:
     install = preset.add_parser("install", parents=[common, scoped], help="copy a preset's rules and modes into config")
     install.add_argument("name")
     install.add_argument("--only", help="comma-separated rule ids to install")
+    install.add_argument("--force", action="store_true", help="also replace entries that differ from the built-in rule")
 
     engine = verbs.add_parser("engine", help="the managed runtime (uv, Python, ast-grep-py) that matches "
                               "rules; installed automatically, so this is for diagnosis (not a "

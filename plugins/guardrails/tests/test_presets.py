@@ -70,11 +70,11 @@ class Presets(AstIsolated):
     def test_install_global_and_idempotent(self) -> None:
         code, out, _ = self.cli("preset", "install", "docs-first")
         self.assertEqual(code, 0)
-        self.assertIn("rule no-strings: added", out)
+        self.assertIn("rule no-strings: added as an import", out)
         self.assertIn("mode reverse-engineering: added (agent may enable: yes)", out)
         state = self.get(self.gpath)
         self.assertEqual(sorted(state["rules"]), ["binary-spelunking", "no-strings"])
-        self.assertEqual(state["rules"]["no-strings"]["setBy"]["reason"], "preset docs-first")
+        self.assertEqual(state["rules"]["no-strings"], "@preset/no-strings")
         self.assertTrue(state["modes"]["reverse-engineering"]["agentMayEnable"])
         out = self.cli("preset", "install", "docs-first")[1]
         self.assertIn("rule no-strings: unchanged", out)

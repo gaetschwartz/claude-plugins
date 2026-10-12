@@ -62,8 +62,8 @@ command the parser cannot finish or understand is allowed with a short notice th
 | project: `<project>/.claude/guardrails.json`, meant to be committed like `settings.json` (none when the project is the home directory) | config |
 | state: `${CLAUDE_PLUGIN_DATA}/state.json` (default `~/.claude/plugins/data/guardrails-gaetans-claude-plugins/`) | state |
 
-Config is what you set on purpose: `rules` (each with a `setBy` record of who changed it, when and why), `matchers`, `modes`
-declarations and persistent activations, and `enabled` / `disabledReason` (`guardrails disable`). Only the CLI writes it,
+Config is what you set on purpose: `rules` (each with a `setBy` record; `"@preset/id"` imports a built-in rule, `{"use": "@preset/id", ...}` tunes
+it, `match` excepted), `matchers`, `modes` declarations and persistent activations, and `enabled` / `disabledReason` (`guardrails disable`). Only the CLI writes it,
 atomically, under a lock kept in the data dir (`config.lock`), never next to the config. State is what the hook remembers per
 session (retry acknowledgements, session modes, warnings shown), one table for every project since session ids are unique;
 the hook writes nothing else, never config, and the state is pruned after 7 days. `guardrails status` names each config

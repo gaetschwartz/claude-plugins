@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import copy
 import hashlib
 import json
 import re
@@ -69,6 +70,38 @@ def json_modes(raw: object) -> list[str]:
     return [m for m in modes if isinstance(m, str)] if isinstance(modes, list) else []
 
 
+def resolve_entry(raw: object) -> tuple[object, str | None]:
+    """A rule entry with its import of a built-in rule resolved: `"@preset/id"`, or an object with `"use"` whose other
+    keys override the built-in's; `match` can never be overridden. Returns the entry and the reference it imported."""
+    import rulebuilder
+
+    if isinstance(raw, str):
+        ref, overrides = raw, {}
+    elif isinstance(raw, dict) and "use" in raw:
+        ref, overrides = raw["use"], {key: value for key, value in raw.items() if key != "use"}
+    else:
+        return raw, None
+    if not (isinstance(ref, str) and ref.startswith(rulebuilder.BUILTIN_SCOPE)):
+        raise Invalid(f"a rule imports a built-in one as \"{rulebuilder.BUILTIN_SCOPE}<id>\", not {ref!r}")
+    if "match" in overrides:
+        raise Invalid(f"'match' of {ref} cannot be overridden: write the rule out in full to change what it matches")
+    name = ref.removeprefix(rulebuilder.BUILTIN_SCOPE)
+    built = rulebuilder.builtin_rules().get(name)
+    if built is None:
+        if name in rulebuilder.builtin_matchers():
+            raise Invalid(f"{ref} is a matcher, not a rule")
+        raise Invalid(f"this guardrails version does not ship {ref}; update the plugin")
+    return {**copy.deepcopy(built.fragment), **overrides}, ref
+
+
+def override_of(raw: object) -> Mapping[str, Any]:
+    """The part of a rule entry from a lower layer that tunes a rule defined above it: an import contributes only its
+    own keys."""
+    if not isinstance(raw, dict):
+        return {}
+    return {key: value for key, value in raw.items() if key != "use"}
+
+
 def match_of(raw: object, inliner: Inliner | None = None) -> dict[str, Any]:
     import rulebuilder
 
@@ -94,15 +127,18 @@ class Rule(NamedTuple):
     matchers: tuple[str, ...] = ()
     deprecated_use: bool = False
     written: tuple[str, ...] = ()
+    source: str | None = None
 
     @classmethod
     def from_json(cls, raw: object, matchers: Mapping[str, Any] | None = None) -> Self:
         """The rule with every `use` reference of `match` and of the message cases' `matches` expanded from this
-        layer's `matchers` or from the built-in ones; `matchers` on the result names the references it used."""
+        layer's `matchers` or from the built-in ones; `matchers` on the result names the references it used. A rule
+        entry that imports a built-in rule is resolved first, and `source` names the import."""
         import conditions
         import messages as texts
         import rulebuilder
 
+        raw, source = resolve_entry(raw)
         if not isinstance(raw, dict):
             raise Invalid("a rule must be a JSON object")
         if removed := next((key for key in REMOVED_FIELDS if key in raw), None):
@@ -132,7 +168,7 @@ class Rule(NamedTuple):
         description = raw.get("description")
         rule = cls(match, message, action, retry, raw.get("enabled", True), modes, raw.get("messageShort"),
                    description if isinstance(description, str) else None, raw.get("wrappers", True), when, cases,
-                   tuple(sorted(inliner.used)), inliner.deprecated, tuple(sorted(inliner.written)))
+                   tuple(sorted(inliner.used)), inliner.deprecated, tuple(sorted(inliner.written)), source)
         texts.check_texts(texts.rule_texts(rule), any(conditions.bin_atoms(when)),
                            lambda: rulebuilder.bound_names(match))
         return rule
@@ -254,8 +290,8 @@ def merge_rule(base: Rule, override: Mapping[str, Any], reword: bool = True) -> 
     return base._replace(**changes)
 
 
-def _entries(doc: object, key: str) -> dict[str, dict[str, Any]]:
-    return {str(k): v for k, v in view(doc, key).items() if isinstance(v, dict)}
+def _entries(doc: object, key: str) -> dict[str, Any]:
+    return {str(k): v for k, v in view(doc, key).items() if isinstance(v, dict) or (key == "rules" and isinstance(v, str))}
 
 
 def origins(key: str, managed: object, global_config: object, project_config: object) -> dict[str, list[str]]:
@@ -299,12 +335,16 @@ def effective(managed: object, global_config: object, project_config: object) ->
         add(rid, raw, view(managed, "matchers"))
         if rid in rules:
             rules[rid] = rules[rid]._replace(modes=tuple(m for m in rules[rid].modes if m in declared))
-    for doc in [global_config, *([project_config] if project_enabled(project_config) else [])]:
+    for label, doc in [("global", global_config), *([("project", project_config)] if project_enabled(project_config) else [])]:
         for rid, raw in _entries(doc, "rules").items():
             if rid in problems:
                 continue
             if rid in rules:
-                rules[rid] = merge_rule(rules[rid], raw, rid not in managed_rules)
+                try:
+                    resolve_entry(raw)
+                except Invalid as exc:
+                    problems[f"{rid} ({label} import)"] = str(exc)
+                rules[rid] = merge_rule(rules[rid], override_of(raw), rid not in managed_rules)
             else:
                 add(rid, raw, view(doc, "matchers"))
     return Effective(rules, problems)
@@ -312,6 +352,11 @@ def effective(managed: object, global_config: object, project_config: object) ->
 
 def effective_rules(managed: object, global_config: object, project_config: object) -> dict[str, Rule]:
     return effective(managed, global_config, project_config).rules
+
+
+def layer_shape_problems(*layers: tuple[str, object]) -> list[str]:
+    """Shape problems of the rules and modes tables of the global and project configs."""
+    return [text for label, doc in layers for text in shape_problems(f"{label} config", doc, ("rules", "modes"))]
 
 
 def removed_key_problems(*layers: tuple[str, object]) -> list[str]:
@@ -333,17 +378,18 @@ def effective_modes(managed: object, global_config: object, project_config: obje
     return modes
 
 
-def _shape_problems(path: str, doc: object) -> list[str]:
+def shape_problems(where: str, doc: object, keys: tuple[str, ...] = ("rules", "modes", "matchers")) -> list[str]:
+    """What is wrong with the shape of a config's tables: a table that is not an object, an entry that is not."""
     problems = []
-    for key in ("rules", "modes", "matchers"):
+    for key in keys:
         if not isinstance(doc, dict) or key not in doc:
             continue
         table = doc[key]
         if not isinstance(table, dict):
-            problems.append(f"managed file {path}: '{key}' must be an object, so all its entries are ignored")
+            problems.append(f"{where}: '{key}' must be an object, so all its entries are ignored")
             continue
-        problems += [f"managed file {path}: {key} entry '{name}' is not an object and is ignored"
-                     for name, entry in table.items() if not isinstance(entry, dict)]
+        problems += [f"{where}: {key} entry '{name}' is not an object and is ignored"
+                     for name, entry in table.items() if not (isinstance(entry, dict) or (key == "rules" and isinstance(entry, str)))]
     return problems
 
 
@@ -368,7 +414,7 @@ def ignored_matcher_problems(label: str, matchers: Mapping[str, Any]) -> list[st
 
 def managed_layer(doc: object, path: str) -> tuple[dict[str, Any], list[str]]:
     """The managed file as a layer, and what is wrong with it."""
-    problems = _shape_problems(path, doc)
+    problems = shape_problems(f"managed file {path}", doc)
     modes = _entries(doc, "modes")
     matchers = view(doc, "matchers")
     problems += ignored_matcher_problems("managed", matchers) + matcher_problems("managed", matchers)
@@ -381,7 +427,7 @@ def managed_layer(doc: object, path: str) -> tuple[dict[str, Any], list[str]]:
             continue
         problems += [f"managed rule {rid} lists mode '{m}', which the managed file does not declare, so it cannot "
                      "suspend the rule" for m in rule.modes if m not in modes]
-        rules[rid] = {**raw, "modes": [m for m in rule.modes if m in modes]}
+        rules[rid] = {**({"use": raw} if isinstance(raw, str) else raw), "modes": [m for m in rule.modes if m in modes]}
     return {"rules": rules, "modes": modes, "matchers": matchers}, problems
 
 

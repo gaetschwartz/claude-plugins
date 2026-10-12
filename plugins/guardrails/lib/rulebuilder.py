@@ -400,26 +400,37 @@ def expanded(node: object, where: str = "match", at: str = "node") -> Any:
 class Builtin(NamedTuple):
     preset: str
     fragment: Any
+    examples: Any = None
 
 
-@functools.cache
-def builtin_matchers() -> dict[str, Builtin]:
-    """The matchers the plugin ships, by name, from the `matchers` of its preset files."""
+def shipped(section: str) -> dict[str, Builtin]:
+    """What the plugin's preset files ship under `matchers` or `rules`, by name; a name in two files is refused."""
     found: dict[str, Builtin] = {}
     for path in sorted(PRESETS_DIR.glob("*.json")):
         try:
-            table = json.loads(path.read_text()).get("matchers", {})
+            doc = json.loads(path.read_text())
+            table = doc.get(section, {})
         except (OSError, ValueError, AttributeError) as exc:
             raise policy.Invalid(f"the plugin's preset file {path.name} cannot be read ({exc}); reinstall the "
                                  "plugin") from exc
         if not isinstance(table, dict):
-            raise policy.Invalid(f"the plugin's preset file {path.name} has a 'matchers' that is not an object")
+            raise policy.Invalid(f"the plugin's preset file {path.name} has a '{section}' that is not an object")
         for name, fragment in table.items():
             if name in found:
-                raise policy.Invalid(f"built-in matcher {name} is defined by both {found[name].preset} and "
-                                     f"{path.stem}")
-            found[name] = Builtin(path.stem, fragment)
+                raise policy.Invalid(f"built-in {section.removesuffix('s')} {name} is defined by both "
+                                     f"{found[name].preset} and {path.stem}")
+            found[name] = Builtin(path.stem, fragment, policy.view(doc, "examples").get(name))
     return found
+
+
+@functools.cache
+def builtin_matchers() -> dict[str, Builtin]:
+    return shipped("matchers")
+
+
+@functools.cache
+def builtin_rules() -> dict[str, Builtin]:
+    return shipped("rules")
 
 
 class Reference(NamedTuple):

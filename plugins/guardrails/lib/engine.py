@@ -287,7 +287,8 @@ def run_hook(stdin: IO[str], stdout: IO[str]) -> telemetry.Recorder | None:
     layers = store.Layers(managed, {}, {}) if killed else store.Layers(managed, gconfig, pconfig)
     if not killed:
         warnings += tuple(f"guardrails: {problem}" for problem in
-                          policy.removed_key_problems(("global", gconfig), ("project", pconfig)))
+                          policy.removed_key_problems(("global", gconfig), ("project", pconfig))
+                          + policy.layer_shape_problems(("global", gconfig), ("project", pconfig)))
     warnings += tuple(f"guardrails: {problem}" for problem in
                       store.stray_config_problems(state) + store.old_project_problems(root))
     found = policy.effective(*layers)

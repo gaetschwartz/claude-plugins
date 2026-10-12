@@ -277,7 +277,7 @@ class Cli(AstIsolated):
         self.assertEqual(self.cli("preset", "install", "modern-cli")[0], 0)
         self.assertNotIn("matchers", self.get(self.gpath))
         status = self.cli("status")[1]
-        self.assertIn("uses `@preset/compares-2xx`", status)
+        self.assertIn("uses `@preset/http-wait-exact-status`", status)
         self.assertRegex(status, r"`@preset/operand\s*` built-in · used by 2 rules: `cargo-nextest`, `du-dust`")
         self.assertEqual(self.cli("status", "--problems")[1].strip(), "No problems.")
 
@@ -302,11 +302,11 @@ class Cli(AstIsolated):
         self.put(self.gpath, {"rules": {"du-dust": rule({"matcher": "preset.operand"})},
                               "matchers": {"preset.operand": {"command": "x"}, "preset.gone": {"command": "y"},
                                            "keep": {"command": "git"}}})
-        code, out, _ = self.cli("preset", "install", "modern-cli", "--only", "du-dust")
+        code, out, _ = self.cli("preset", "install", "modern-cli", "--only", "du-dust", "--force")
         self.assertEqual(code, 0)
         self.assertIn("removed legacy matcher preset.operand", out)
         self.assertIn("removed legacy matcher preset.gone", out)
-        self.assertIn("rule du-dust: replaced", out)
+        self.assertIn("rule du-dust: replaced by an import", out)
         state = self.get(self.gpath)
         self.assertEqual(state["matchers"], {"keep": {"command": "git"}})
         self.assertNotIn('"matcher"', json.dumps(state["rules"]))
@@ -325,7 +325,8 @@ class Cli(AstIsolated):
     def test_a_rule_test_card_shows_the_built_ins_a_rule_uses(self) -> None:
         self.cli("preset", "install", "modern-cli", "--only", "du-dust")
         card = self.cli("rule", "test", "--id", "du-dust", "du -sh /tmp")[1]
-        self.assertIn("`@preset/operand`", card)
+        self.assertIn("uses `@preset/du-dust`", card)
+        self.assertIn("**Verified** matcher checked with `rule test`, 12 commands, 0 mismatches", card)
 
     def test_status_lists_only_the_built_ins_that_enabled_rules_use(self) -> None:
         self.cli("preset", "install", "modern-cli", "--only", "du-dust,find-fd")
@@ -352,6 +353,154 @@ class Cli(AstIsolated):
         code, _, err = self.cli("matcher", "add", "x", "--json", '{"command": "x"}', agent=True)
         self.assertEqual((code, "matcher add changes guardrails configuration" in err), (3, True))
         self.assertEqual(self.cli("matcher", "rm", "x", agent=True)[0], 3)
+
+
+class Imports(AstIsolated):
+    def test_a_stub_is_the_built_in_rule_for_every_shipped_rule(self) -> None:
+        for name in cli.preset_names():
+            for rid, raw in cli.load_preset(name)["rules"].items():
+                with self.subTest(preset=name, rule=rid):
+                    stub = policy.Rule.from_json(f"@preset/{rid}")
+                    full = policy.Rule.from_json(raw)
+                    self.assertEqual(stub, full._replace(source=f"@preset/{rid}"))
+                    self.assertEqual(policy.rule_hash(stub), policy.rule_hash(full))
+                    self.assertEqual(policy.Rule.from_json({"use": f"@preset/{rid}"}), stub)
+
+    def test_overrides_tune_a_rule_and_match_is_refused(self) -> None:
+        tuned = policy.Rule.from_json({"use": "@preset/find-fd", "action": "deny", "message": "use fd", "enabled": False})
+        self.assertEqual((tuned.action, tuned.message, tuned.enabled), (policy.Action.DENY, "use fd", False))
+        self.assertEqual(tuned.match, policy.Rule.from_json("@preset/find-fd").match)
+        for entry, text in (({"use": "@preset/find-fd", "match": {"command": "x"}}, "'match' of @preset/find-fd cannot be overridden"),
+                            ("@preset/nope", "this guardrails version does not ship @preset/nope; update the plugin"),
+                            ("@local", "a rule imports a built-in one as"),
+                            ({"use": 3}, "a rule imports a built-in one as")):
+            with self.subTest(entry), self.assertRaises(policy.Invalid) as caught:
+                policy.Rule.from_json(entry)
+            self.assertIn(text, str(caught.exception))
+
+    def test_a_lower_layer_tightens_an_imported_rule_like_any_other(self) -> None:
+        self.put(self.mpath, {"rules": {"find-fd": "@preset/find-fd"}})
+        found = policy.effective(store.load_managed()[0], {"rules": {"find-fd": {"use": "@preset/find-fd", "action": "deny",
+                                                                                   "message": "ignored"}}}, {})
+        self.assertEqual(found.problems, {})
+        self.assertEqual(found.rules["find-fd"].source, "@preset/find-fd")
+        self.assertEqual((found.rules["find-fd"].action, found.rules["find-fd"].message),
+                         (policy.Action.DENY, policy.Rule.from_json("@preset/find-fd").message))
+
+    def test_an_unknown_built_in_invalidates_only_its_rule_and_a_stub_denies_in_the_hook(self) -> None:
+        self.put(self.gpath, {"rules": {"no-pkill": "@preset/no-pkill", "stale": "@preset/nope"}})
+        reply = self.hook("pkill node")
+        assert reply is not None
+        self.assertEqual(reply["hookSpecificOutput"]["permissionDecision"], "deny")
+        self.assertIn("guardrails:no-pkill#", reply["hookSpecificOutput"]["permissionDecisionReason"])
+        problems = self.cli("status", "--problems")[1]
+        self.assertIn("rule stale: this guardrails version does not ship @preset/nope; update the plugin", problems)
+        self.assertNotIn("rule no-pkill: this guardrails", problems)
+        self.assertIn("uses `@preset/no-pkill`", self.cli("status")[1])
+
+    def test_rule_test_runs_the_built_ins_examples_for_a_stub(self) -> None:
+        self.put(self.gpath, {"rules": {"find-fd": "@preset/find-fd"}})
+        card = self.cli("rule", "test", "--id", "find-fd")[1]
+        self.assertIn("uses `@preset/find-fd`", card)
+        examples = cli.load_preset("modern-cli")["examples"]["find-fd"]
+        self.assertIn(f"{len(examples['catch']) + len(examples['pass'])} commands, 0 mismatches", card)
+        self.assertEqual(self.cli("rule", "ast", "find .")[0], 0)
+
+    def test_install_imports_exact_copies_and_leaves_customised_entries_alone_until_forced(self) -> None:
+        shipped_rules = cli.load_preset("modern-cli")["rules"]
+        self.put(self.gpath, {"rules": {
+            "find-fd": {**shipped_rules["find-fd"], "setBy": {"by": "user"}},
+            "grep-rg": {**shipped_rules["grep-rg"], "action": "deny", "message": "mine"},
+            "du-dust": rule({"command": "du"}),
+            "cargo-nextest": {**shipped_rules["cargo-nextest"], "enabled": False, "setBy": {"by": "user"}},
+            "mine": rule({"command": "x"})}})
+        before = self.get(self.gpath)["rules"]
+        code, out, _ = self.cli("preset", "install", "modern-cli")
+        self.assertEqual(code, 0)
+        self.assertIn("rule find-fd: replaced the copy by an import", out)
+        self.assertIn("rule grep-rg: differs from the built-in (action, message); left as is. Re-run with --force", out)
+        self.assertRegex(out, r"rule du-dust: differs from the built-in \([^)]*match\); left as is")
+        self.assertIn("rule cargo-nextest: replaced the copy by an import, keeping enabled", out)
+        rules = self.get(self.gpath)["rules"]
+        self.assertEqual(rules["find-fd"], "@preset/find-fd")
+        self.assertEqual((rules["grep-rg"], rules["du-dust"], rules["mine"]),
+                         (before["grep-rg"], before["du-dust"], before["mine"]))
+        self.assertEqual(rules["cargo-nextest"], {"use": "@preset/cargo-nextest", "enabled": False, "setBy": {"by": "user"}})
+        again = self.cli("preset", "install", "modern-cli")[1]
+        self.assertIn("rule find-fd: unchanged", again)
+        self.assertIn("rule cargo-nextest: unchanged", again)
+        forced = self.cli("preset", "install", "modern-cli", "--force")[1]
+        self.assertIn("rule grep-rg: replaced by an import (it differed in action, message)", forced)
+        self.assertRegex(forced, r"rule du-dust: replaced by an import \(it differed in [^)]*match\)")
+        rules = self.get(self.gpath)["rules"]
+        self.assertEqual((rules["grep-rg"], rules["du-dust"]), ("@preset/grep-rg", "@preset/du-dust"))
+        self.assertEqual(rules["mine"], rule({"command": "x"}))
+
+    def test_install_leaves_an_entry_that_does_not_load_until_forced(self) -> None:
+        self.put(self.gpath, {"rules": {"find-fd": {"message": "no match"}}})
+        out = self.cli("preset", "install", "modern-cli", "--only", "find-fd")[1]
+        self.assertIn("rule find-fd: differs from the built-in (it does not load); left as is", out)
+        self.assertEqual(self.get(self.gpath)["rules"]["find-fd"], {"message": "no match"})
+        self.assertIn("replaced by an import (it differed in it does not load)",
+                      self.cli("preset", "install", "modern-cli", "--only", "find-fd", "--force")[1])
+        self.assertEqual(self.get(self.gpath)["rules"]["find-fd"], "@preset/find-fd")
+
+    def test_rule_set_and_rule_rm_work_on_a_stub(self) -> None:
+        self.put(self.gpath, {"rules": {"find-fd": "@preset/find-fd", "grep-rg": "@preset/grep-rg"}})
+        self.assertEqual(self.set_rule("find-fd", {"action": "deny"})[0], 0)
+        stored = self.get(self.gpath)["rules"]["find-fd"]
+        self.assertEqual({k: v for k, v in stored.items() if k != "setBy"}, {"use": "@preset/find-fd", "action": "deny"})
+        self.assertIn("deny · global", self.cli("status", "--rule", "find-fd")[1])
+        code, _, err = self.set_rule("find-fd", {"match": {"command": "x"}})
+        self.assertEqual((code, "cannot be overridden" in err), (2, True))
+        self.assertEqual(self.cli("rule", "rm", "grep-rg")[0], 0)
+        self.assertEqual(sorted(self.get(self.gpath)["rules"]), ["find-fd"])
+        self.assertEqual(self.cli("rule", "add", "pk", "--json", '"@preset/no-pkill"')[0], 0)
+        self.assertEqual(self.get(self.gpath)["rules"]["pk"], "@preset/no-pkill")
+
+    def test_a_managed_stub_with_undeclared_modes_is_reported_and_stays_enforced(self) -> None:
+        self.put(self.mpath, {"rules": {"no-pkill": "@preset/no-pkill"}})
+        layer, problems = store.load_managed()
+        self.assertTrue(any("lists mode 'incident', which the managed file does not declare" in p for p in problems))
+        self.assertEqual(layer["rules"]["no-pkill"]["modes"], [])
+        self.assertEqual(policy.effective(layer, {}, {}).rules["no-pkill"].source, "@preset/no-pkill")
+
+    def test_entries_that_are_neither_a_string_nor_an_object_are_reported(self) -> None:
+        self.put(self.gpath, {"rules": {"a": 3, "b": "@preset/no-pkill"}, "modes": {"m": []}})
+        self.put(self.ppath, {"rules": {"c": [1]}})
+        problems = self.cli("status", "--problems")[1]
+        for text in ("global config: rules entry 'a' is not an object and is ignored",
+                     "global config: modes entry 'm' is not an object and is ignored",
+                     "project config: rules entry 'c' is not an object and is ignored"):
+            self.assertIn(text, problems)
+        self.assertNotIn("entry 'b'", problems)
+        self.assertIsNotNone(self.hook("pkill node"))
+
+    def test_an_invalid_import_in_a_lower_layer_is_reported_though_only_its_keys_are_read(self) -> None:
+        self.put(self.mpath, {"rules": {"find-fd": "@preset/find-fd"}})
+        self.put(self.gpath, {"rules": {"find-fd": {"use": "@preset/find-fd", "match": {"command": "x"}}}})
+        found = policy.effective(store.load_managed()[0], self.get(self.gpath), {})
+        self.assertIn("'match' of @preset/find-fd cannot be overridden", found.problems["find-fd (global import)"])
+        self.assertIn("find-fd", found.rules)
+        self.assertIn("rule find-fd (global import):", self.cli("status", "--problems")[1])
+
+    def test_a_matcher_name_used_as_a_rule_says_so(self) -> None:
+        with self.assertRaises(policy.Invalid) as caught:
+            policy.Rule.from_json("@preset/operand")
+        self.assertIn("@preset/operand is a matcher, not a rule", str(caught.exception))
+
+    def test_rule_test_names_the_shipped_examples_it_added(self) -> None:
+        self.put(self.gpath, {"rules": {"find-fd": "@preset/find-fd"}})
+        code, card, _ = self.cli("rule", "test", "--id", "find-fd", "find .")
+        self.assertEqual(code, 0)
+        self.assertIn("shipped with @preset/find-fd", card)
+
+    def test_a_built_in_rule_id_in_two_preset_files_is_refused(self) -> None:
+        for name in ("a", "b"):
+            (self.tmp / f"{name}.json").write_text('{"rules": {"same": {"message": "m", "match": {"command": "x"}}}}')
+        with mock.patch.object(rulebuilder, "PRESETS_DIR", self.tmp), self.assertRaises(policy.Invalid) as caught:
+            rulebuilder.builtin_rules.__wrapped__()
+        self.assertIn("built-in rule same is defined by both a and b", str(caught.exception))
 
 
 class Hardening(AstIsolated):

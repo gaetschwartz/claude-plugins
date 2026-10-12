@@ -59,6 +59,7 @@ questions only when the user did not pass `-y`.
 6. Run `guardrails status` and show the result as rule rows in the style of
    `${CLAUDE_PLUGIN_ROOT}/references/presentation.md`.
 
-On a re-run, compare with the current state: `preset install` reports added / replaced / unchanged, and keeps existing
-mode declarations. Remove only rules the user deselects (`guardrails rule rm <id> --as-user`).
+On a re-run, `preset install` writes imports (`"@preset/id"`), reports what it did, leaves customised entries untouched
+(`--force` replaces them) and keeps mode declarations. Remove only rules the user deselects (`guardrails rule rm <id>
+--as-user`).
 On a not-writable scope the CLI prints a message and a `sudo …` command: show both and stop.
