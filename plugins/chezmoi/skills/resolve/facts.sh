@@ -6,7 +6,7 @@ set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd -P)
 out=$("$here/../status/report.sh")
-printf '%s\n' "$out"
+printf '%s\n' "$out" | grep -v '^OFFER (copy verbatim)'
 [ "$out" = "✅ in sync" ] && exit 0
 
 tmp=$(mktemp -d)

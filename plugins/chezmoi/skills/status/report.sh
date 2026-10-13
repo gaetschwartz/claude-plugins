@@ -292,6 +292,7 @@ fi
 joined=""
 for x in "${parts[@]}"; do joined="${joined:+$joined · }$x"; done
 echo "STATUS_LINE (copy verbatim): $joined"
+echo "OFFER (copy verbatim): 🛠️ \`chezmoi:resolve\` can fix all of this"
 if [ -s "$tmp/blocks" ] || [ -n "$cfg_block" ] || [ -s "$tmp/scripts" ]; then
 echo "LEGEND (copy verbatim): 📄 plain · 🧩 template · ⚙️ config · 🔒 hidden · ± lines · ➕ added · ➖ removed · ✏️ changed · 🔁 only on re-init · ⚠️ erases a hand edit · 💥 both sides changed · ▶️ script · ∅ absent · blank = same as Apply"
 fi

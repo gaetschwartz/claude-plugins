@@ -28,6 +28,7 @@ Lines marked `(copy verbatim)` are copied character for character. Everything el
 3. One entry per `### SCRIPT` block.
 4. The LEGEND value, when the facts have one, copied exactly as one single line: do not rewrite, split, shorten or add to it.
 5. `## 🗂️ Repo`, then `## ⚠️ Watch`, then `## ➡️ Next`, each only if it has content. A heading is followed directly by its content, with no blank line.
+6. The OFFER value, alone on the very last line, after one blank line, copied exactly. Every reply whose facts are not the single line `✅ in sync` ends with it, whatever else the reply contains.
 
 ### Errors
 
