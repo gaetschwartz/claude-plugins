@@ -10,6 +10,7 @@ chezmoi dotfile-manager expertise for Claude Code, plus a drift advisor hook.
 | `chezmoi:push` | Publishing changes. Captures uncaptured destination edits first, commits, pushes, and on rejection integrates rather than forcing — then reports what was pushed, what came back, and what changed locally. |
 | `chezmoi:status` | Answering "is anything drifted / do I need to push or pull". Loads the live picture up front so the answer needs no tool round-trips. A script gathers the facts and a Haiku agent lays them out as a fixed report: one table per drifted file (disk, template, what `apply` writes, and what a config re-init would change), pending scripts, repo position and the next steps, or a single `✅ in sync`. |
 | `chezmoi:diff` | Showing how a drifted file differs from its source, as a readable line-numbered diff drawn in the direction that actually drifted. |
+| `chezmoi:resolve` | Bringing a machine back to a clean status in one pass. Reads the same facts as `chezmoi:status` plus the last-written base of each file, then captures hand edits, merges disjoint changes, applies source updates, commits, rebases and runs safe scripts itself. It asks only when it is genuinely unclear which side to adopt (conflicting values, a file deleted on disk, a script with `sudo` or installs, a config regeneration that would drop machine-only keys) and before publishing. Backs up every file it will overwrite first. |
 | `chezmoi:hook` | Turning the drift hook off or on, and reading its state. |
 | `chezmoi:edit` | Adding, changing and removing managed files: which way each command moves data, and the template/encrypted exceptions to `re-add`. |
 | `chezmoi:templates` | Making a file vary per machine, and testing a render before applying. |
@@ -18,7 +19,7 @@ chezmoi dotfile-manager expertise for Claude Code, plus a drift advisor hook.
 
 ### Embedded shell execution
 
-All five skills use skill-injected commands — `` !`…` `` in the body, pre-approved with
+The status, diff, update, push and resolve skills use skill-injected commands — `` !`…` `` in the body, pre-approved with
 `allowed-tools` — so live state is already in context when the model starts reasoning,
 instead of costing several tool calls. The `status` facts take about 0.4 s when everything is in sync, and up to about 1.5 s on a drifted tree with a stale config.
 

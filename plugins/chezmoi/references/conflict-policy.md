@@ -1,6 +1,6 @@
 # chezmoi conflict policy
 
-Shared by the `chezmoi:update` and `chezmoi:push` skills. It decides **which conflicts you
+Shared by the `chezmoi:update`, `chezmoi:push` and `chezmoi:resolve` skills. It decides **which conflicts you
 resolve yourself and which ones you put to the user as a decision.**
 
 ## The fact that drives every call here
