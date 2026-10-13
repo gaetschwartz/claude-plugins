@@ -5,6 +5,18 @@
 # command aborts the skill.
 set -uo pipefail
 
+here=$(cd "$(dirname "$0")" && pwd -P)
+. "$here/../../lib/remote.sh"
+czr_fail() {
+  echo "STATUS_LINE (copy verbatim): ❗ errors"
+  echo
+  echo "### ERRORS"
+  echo "$1"
+  exit 0
+}
+czr_dispatch "$0" "$@"
+set -- ${CZR_ARGS[@]+"${CZR_ARGS[@]}"}
+
 CAP=${CHEZMOI_REPORT_CAP:-40}
 common=(--no-pager --color=false --no-tty --skip-secrets)
 stale='/^chezmoi: warning: config file template has changed/d'
@@ -19,7 +31,7 @@ trap 'rm -rf "$tmp"' EXIT
 
 short() { printf '%s' "${1/#$HOME/\~}"; }
 tildify() { sed "s|$HOME|~|g"; }
-sha() { shasum -a 256 | cut -d' ' -f1; }
+sha() { czr_sha256; }
 capped() {
   local text lines
   text=$(cat)
@@ -284,15 +296,19 @@ parts=()
 [ "$in_repo" = 1 ] && [ -z "$upstream" ] && parts+=("🔗 no upstream")
 [ -n "$errors" ] && parts+=("❗ errors")
 
+host=
+[ -n "${CZR_HOST:-}" ] && host=" · 🌐 $CZR_HOST"
+
 if [ "${#parts[@]}" -eq 0 ]; then
-  echo "✅ in sync"
+  echo "✅ in sync$host"
   exit 0
 fi
 
 joined=""
 for x in "${parts[@]}"; do joined="${joined:+$joined · }$x"; done
-echo "STATUS_LINE (copy verbatim): $joined"
-echo "OFFER (copy verbatim): 🛠️ \`chezmoi:resolve\` can fix all of this"
+echo "STATUS_LINE (copy verbatim): $joined$host"
+[ -n "${CZR_FLAG:-}" ] && echo "REMOTE (copy verbatim): $CZR_FLAG"
+echo "OFFER (copy verbatim): 🛠️ \`chezmoi:resolve${CZR_FLAG:+ $CZR_FLAG}\` can fix all of this"
 if [ -s "$tmp/blocks" ] || [ -n "$cfg_block" ] || [ -s "$tmp/scripts" ]; then
 echo "LEGEND (copy verbatim): 📄 plain · 🧩 template · ⚙️ config · 🔒 hidden · ± lines · ➕ added · ➖ removed · ✏️ changed · 🔁 only on re-init · ⚠️ erases a hand edit · 💥 both sides changed · ▶️ script · ∅ absent · blank = same as Apply"
 fi

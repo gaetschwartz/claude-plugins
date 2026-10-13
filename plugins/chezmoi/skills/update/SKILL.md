@@ -1,7 +1,8 @@
 ---
 name: update
 description: Use when pulling dotfile changes into a chezmoi-managed machine - "update my dotfiles", "chezmoi update", "pull my dotfiles", "sync this machine", picking up changes made on another machine, or when a chezmoi pull, rebase, or apply reports a conflict, leaves conflict markers, or would overwrite local edits.
-allowed-tools: Bash(chezmoi:*)
+argument-hint: "[--ssh <host or ssh command>]"
+allowed-tools: Bash(chezmoi:*), Bash(czr:*)
 ---
 
 # Updating a chezmoi machine
@@ -15,16 +16,18 @@ opaque step it can lose work in two different places, so drive the steps yoursel
 decides what you fix silently and what you put to the user. You resolve conflicts; the user
 only ever chooses between outcomes you have already worked out.
 
+**Remote host.** With `--ssh <ssh>` in the arguments, every command below runs on that machine: read `../../references/remote.md` first and write `czr --ssh <ssh> chezmoi ...` wherever this skill says `chezmoi ...`.
+
 ## State on this machine right now
 
 Destination drift (settle this before applying):
-!`chezmoi status --no-pager --color=false --no-tty --skip-secrets --path-style=absolute 2>&1 | grep . || echo "(no drift - destination matches target state)"`
+!`czr --args "$ARGUMENTS" chezmoi status --no-pager --color=false --no-tty --skip-secrets --path-style=absolute 2>&1 | grep . || echo "(no drift - destination matches target state)"`
 
 Uncommitted source changes:
-!`chezmoi git -- status --short 2>&1 | head -30 | grep . || echo "(source working tree clean)"`
+!`czr --args "$ARGUMENTS" chezmoi git -- status --short 2>&1 | head -30 | grep . || echo "(source working tree clean)"`
 
 Sync position (cached refs - fetch in step 2 for the truth):
-!`chezmoi git -- status -sb 2>&1 | head -1 || echo "(unknown)"`
+!`czr --args "$ARGUMENTS" chezmoi git -- status -sb 2>&1 | head -1 || echo "(unknown)"`
 
 ## Two layers, two kinds of loss
 

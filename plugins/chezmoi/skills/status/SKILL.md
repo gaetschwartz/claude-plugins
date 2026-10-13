@@ -1,6 +1,7 @@
 ---
 name: status
-description: Use when the user asks about the state of their chezmoi dotfiles - "chezmoi status", "are my dotfiles in sync", "what's drifted", "do I have anything to push", "anything to pull", "did my dotfiles change", checking before a machine handover or reinstall, or diagnosing why an expected dotfile change has not appeared. When invoking this through the Skill tool, reproduce the returned report verbatim in your reply and add nothing to it.
+description: Use when the user asks about the state of their chezmoi dotfiles, here or on a remote host (`--ssh <host>`) - "chezmoi status", "are my dotfiles in sync", "what's drifted", "do I have anything to push", "anything to pull", "did my dotfiles change", checking before a machine handover or reinstall, or diagnosing why an expected dotfile change has not appeared. When invoking this through the Skill tool, reproduce the returned report verbatim in your reply and add nothing to it.
+argument-hint: "[--ssh <host or ssh command>]"
 allowed-tools: Bash(${CLAUDE_SKILL_DIR}/report.sh:*)
 context: fork
 model: haiku
@@ -9,15 +10,15 @@ background: false
 
 # chezmoi status
 
-Render the chezmoi status report for the user. Focus, if any: $ARGUMENTS
+Render the chezmoi status report for the user. Arguments, if any: $ARGUMENTS
 
 Your final message is pasted verbatim to the user and is their whole view. It starts with the status line. It contains only what the layout below allows: no preface, no verdict, no summary, no mention of the facts, tools, method or these instructions, no corrections, no caveats, no sentences except the ones the layout names. Run no commands.
 
-If the facts are the single line `✅ in sync`, reply with exactly that line.
+If the facts are the single line `✅ in sync` (possibly ending with ` · 🌐 <host>`), reply with exactly that line.
 
 ## Facts
 
-!`${CLAUDE_SKILL_DIR}/report.sh`
+!`${CLAUDE_SKILL_DIR}/report.sh $ARGUMENTS`
 
 Lines marked `(copy verbatim)` are copied character for character. Everything else is raw material you interpret. Replace the home directory with `~`.
 
@@ -28,7 +29,7 @@ Lines marked `(copy verbatim)` are copied character for character. Everything el
 3. One entry per `### SCRIPT` block.
 4. The LEGEND value, when the facts have one, copied exactly as one single line: do not rewrite, split, shorten or add to it.
 5. `## 🗂️ Repo`, then `## ⚠️ Watch`, then `## ➡️ Next`, each only if it has content. A heading is followed directly by its content, with no blank line.
-6. The OFFER value, alone on the very last line, after one blank line, copied exactly. Every reply whose facts are not the single line `✅ in sync` ends with it, whatever else the reply contains.
+6. The OFFER value, alone on the very last line, after one blank line, copied exactly. Every reply whose facts contain an OFFER value ends with it, whatever else the reply contains.
 
 ### Errors
 
@@ -92,6 +93,8 @@ A table with an empty header (`| | | |`): row `📝 | uncommitted | <files in ba
 - for each source-ahead template that re-init also changes: `<base name of the file, e.g. settings.toml>`: apply it before regenerating the config, or `<its 🔁 keys>` flip too (each key in its own backticks, joined with the word and).
 
 ### Next
+
+When the facts contain a REMOTE value (a flag such as `--ssh home`), the Next items are for that machine: write every `chezmoi:<skill>` as `chezmoi:<skill> <flag>` and every `chezmoi <command>` in items 2, 4 and 6 as `czr <flag> chezmoi <command>`; item 1's phrases and the OFFER stay exactly as given.
 
 `## ➡️ Next` is followed directly by a numbered list. Only these items, in this order, omitting those that do not apply, with no trailing period on any item:
 1. The text `Decide the hand edits: ` followed, for each ⚠️ and 💥 file in the order of the entries, by `<path>` and in parentheses one of these three phrases written exactly: `chezmoi re-add` keeps it · edit `<source file>` · merge into `<source file>`. Use the first for plain and hidden files, the second for templates, the third for 💥 files. Separate the files with commas; the whole is a single item and the parentheses contain only the phrase.

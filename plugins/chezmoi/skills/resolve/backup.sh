@@ -4,6 +4,11 @@
 # and print the directory. Run before anything that overwrites a deployed file.
 set -uo pipefail
 
+here=$(cd "$(dirname "$0")" && pwd -P)
+. "$here/../../lib/remote.sh"
+czr_dispatch "$0" "$@"
+set -- ${CZR_ARGS[@]+"${CZR_ARGS[@]}"}
+
 d="${XDG_STATE_HOME:-$HOME/.local/state}/chezmoi-resolve/$(date +%Y%m%d-%H%M%S)"
 mkdir -p "$d"
 for p in "$@"; do

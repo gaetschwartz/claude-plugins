@@ -5,9 +5,12 @@
 set -uo pipefail
 
 here=$(cd "$(dirname "$0")" && pwd -P)
+. "$here/../../lib/remote.sh"
+czr_dispatch "$0" "$@"
+set -- ${CZR_ARGS[@]+"${CZR_ARGS[@]}"}
 out=$("$here/../status/report.sh")
 printf '%s\n' "$out" | grep -v '^OFFER (copy verbatim)'
-[ "$out" = "✅ in sync" ] && exit 0
+case $out in "✅ in sync"*) exit 0 ;; esac
 
 tmp=$(mktemp -d)
 trap 'rm -rf "$tmp"' EXIT

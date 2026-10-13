@@ -30,6 +30,20 @@ invocation**, and injected commands never prompt for permission, so an `ask` or 
 aborts too. Guard every command so it exits 0 and prints something explicit when there is
 nothing to report.
 
+### Remote hosts
+
+`status`, `diff`, `resolve`, `update`, `push`, `setup` and `edit` take `--ssh <ssh>`: a host name
+(`--ssh home`, run as `ssh home`) or a whole command (`--ssh "ssh -p 2222 me@box"`). The target is
+the remote machine's chezmoi: its home, source repository and config.
+
+- The fact scripts ship themselves as a tar over the same connection, run there, and print their
+  facts here; the status line carries `🌐 <host>` and the offered next steps carry the flag.
+- Agent-driven steps go through `bin/czr`, which runs chezmoi and nothing else, and reads or
+  writes only the remote's chezmoi source and config directories (never `.git`, never
+  `private_` or `encrypted_` entries). So `Bash(czr:*)` is all the skills need pre-approved, not `Bash(ssh:*)`.
+- Connections never prompt (`BatchMode`) and time out after 10 s. The remote needs bash, chezmoi,
+  git, jq, tar and python3 3.11+. The drift hook and the knowledge-only skills stay local.
+
 ### Conflict handling
 
 `chezmoi:update` and `chezmoi:push` share one policy, in

@@ -1,7 +1,8 @@
 ---
 name: resolve
-description: Use when the user wants their chezmoi dotfiles brought back to a clean state - "fix my dotfiles", "resolve the drift", "resolve chezmoi conflicts", "make chezmoi clean", "sync everything up", "clean up my dotfiles status" - or after chezmoi:status reports drift, a stale config, pending scripts or unpushed or unpulled commits. Fixes everything itself, asks only when it is genuinely unclear which side to adopt, and never asks the user to run a chezmoi command. Pass `push` to publish without the final yes/no.
-allowed-tools: Bash(chezmoi:*), Bash(${CLAUDE_SKILL_DIR}/facts.sh:*), Bash(${CLAUDE_SKILL_DIR}/base.sh:*), Bash(${CLAUDE_SKILL_DIR}/backup.sh:*), Read, Edit, Write, AskUserQuestion
+description: Use when the user wants their chezmoi dotfiles brought back to a clean state - "fix my dotfiles", "resolve the drift", "resolve chezmoi conflicts", "make chezmoi clean", "sync everything up", "clean up my dotfiles status" - or after chezmoi:status reports drift, a stale config, pending scripts or unpushed or unpulled commits. Fixes everything itself, asks only when it is genuinely unclear which side to adopt, and never asks the user to run a chezmoi command. Pass `push` to publish without the final yes/no, `--ssh <host or ssh command>` to resolve a remote machine.
+argument-hint: "[push] [--ssh <host or ssh command>]"
+allowed-tools: Bash(chezmoi:*), Bash(czr:*), Bash(${CLAUDE_SKILL_DIR}/facts.sh:*), Bash(${CLAUDE_SKILL_DIR}/base.sh:*), Bash(${CLAUDE_SKILL_DIR}/backup.sh:*), Read, Edit, Write, AskUserQuestion
 ---
 
 # Resolving a chezmoi machine
@@ -12,23 +13,23 @@ command yourself. The user never types a chezmoi command, and is asked only when
 have no defensible winner. Arguments: $ARGUMENTS
 
 **REQUIRED: read `../../references/drift-policy.md` and `../../references/conflict-policy.md`
-before deciding anything.** The first says what to do with each kind of drift, the second what
+before deciding anything.** With `--ssh <ssh>` in the arguments also read `../../references/remote.md`: the facts below are the remote machine's, every `chezmoi` command becomes `czr --ssh <ssh> chezmoi ...`, `base.sh` and `backup.sh` take `--ssh <ssh>` as an argument, and source files are read and written with `czr ... get` and `put`. The first says what to do with each kind of drift, the second what
 to do with source-repo conflicts, and both say what is a question.
 
 ## Facts
 
-!`${CLAUDE_SKILL_DIR}/facts.sh`
+!`${CLAUDE_SKILL_DIR}/facts.sh $ARGUMENTS`
 
 The first part is the same facts as `chezmoi:status`: one `### FILE` block per drifted file
 (status, flags, `apply_diff`, template source, `reinit_diff`), the `### CONFIG` block, `### SCRIPT`
 blocks with their bodies, `### REPO`. `### RESOLVE-FACTS` adds, per file, its `class`, the
 recent source history and, when the last-written content could be recovered, a three-way merge
-preview. `-` is the disk and `+` is the source in `apply_diff`. A single line `✅ in sync`
+preview. `-` is the disk and `+` is the source in `apply_diff`. A single line starting `✅ in sync`
 means there is nothing to do.
 
 ## Workflow
 
-1. **Nothing to do?** If the facts are `✅ in sync`, reply with that line and stop.
+1. **Nothing to do?** If the facts are the single line `✅ in sync`, reply with that line and stop.
 2. **Fetch.** `chezmoi git -- fetch`, then read what is incoming: the `⬇` counts above are
    only as fresh as the last fetch.
 3. **Decide every aspect** with the drift policy. Gather before deciding: read each script

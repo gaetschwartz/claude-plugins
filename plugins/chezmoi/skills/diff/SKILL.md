@@ -1,7 +1,7 @@
 ---
 name: diff
 description: Use when the user wants to see how a chezmoi-managed file differs from its source - "check the diff of <file>", "what changed in <dotfile>", "what would chezmoi apply change", "why is <dotfile> different from source", or after a drift notice flags a file. When invoking this through the Skill tool, reproduce the returned diff blocks verbatim in your reply and add nothing to them.
-argument-hint: "[path]"
+argument-hint: "[--ssh <host or ssh command>] [path]"
 allowed-tools: Bash(chezmoi:*), Bash(${CLAUDE_SKILL_DIR}/diff.sh:*)
 context: fork
 model: sonnet
@@ -10,10 +10,10 @@ background: false
 
 # chezmoi diff
 
-Show how chezmoi-managed files differ from their source. Path, if any: $ARGUMENTS
+Show how chezmoi-managed files differ from their source. Path and `--ssh <ssh>`, if any: $ARGUMENTS
 
 Drifted entries and their diffs, captured when this skill loaded. Each block starts with a
-`==` marker line for you — the user never sees it. No path means every drifted entry.
+`==` marker line for you — the user never sees it. No path means every drifted entry. With `--ssh <ssh>` the entries are the remote machine's, and every footer command is written `czr --ssh <ssh> chezmoi ...` and every `chezmoi:<skill>` pointer gets ` --ssh <ssh>`; start the reply with `🌐 <ssh>` on its own line.
 
 !`${CLAUDE_SKILL_DIR}/diff.sh $ARGUMENTS`
 

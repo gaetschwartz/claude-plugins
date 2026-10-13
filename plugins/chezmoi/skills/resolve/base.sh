@@ -4,6 +4,11 @@
 # against every historical version of the source file. Prints "(base not found)" when none matches.
 set -uo pipefail
 
+here=$(cd "$(dirname "$0")" && pwd -P)
+. "$here/../../lib/remote.sh"
+czr_dispatch "$0" "$@"
+set -- ${CZR_ARGS[@]+"${CZR_ARGS[@]}"}
+
 p=${1:?target path}
 want=$(chezmoi state dump --format json 2>/dev/null | jq -r --arg p "$p" '.entryState[$p].contentsSHA256 // empty')
 if [ -z "$want" ]; then
@@ -23,7 +28,7 @@ for h in $(chezmoi git -- log --format=%H -- "$rel" 2>/dev/null); do
     *.tmpl) chezmoi execute-template <"$tmp/raw" >"$tmp/out" 2>/dev/null || continue ;;
     *) cp "$tmp/raw" "$tmp/out" ;;
   esac
-  if [ "$(shasum -a 256 <"$tmp/out" | cut -d' ' -f1)" = "$want" ]; then
+  if [ "$(czr_sha256 <"$tmp/out")" = "$want" ]; then
     cat "$tmp/out"
     exit 0
   fi

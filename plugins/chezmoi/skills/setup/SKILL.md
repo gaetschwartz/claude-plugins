@@ -5,6 +5,8 @@ description: Use when setting up chezmoi dotfiles on a new machine, when chezmoi
 
 # Setup and config
 
+**Remote host.** To do this on another machine, read `../../references/remote.md` and prefix every `chezmoi ...` command with `czr --ssh <ssh>`; files are read and written with `czr ... get` and `put`.
+
 ## New machine
 
 `chezmoi init <repo>`, then `chezmoi diff`, then `chezmoi apply`: don't skip the preview

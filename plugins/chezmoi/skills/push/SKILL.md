@@ -1,7 +1,8 @@
 ---
 name: push
 description: Use when publishing local dotfile changes from a chezmoi source directory to its remote - "push my dotfiles", "commit and push my dotfiles", "ship my chezmoi changes", after adding or editing managed files, or when a dotfiles push is rejected as non-fast-forward and needs integrating with what the remote has.
-allowed-tools: Bash(chezmoi:*)
+argument-hint: "[--ssh <host or ssh command>]"
+allowed-tools: Bash(chezmoi:*), Bash(czr:*)
 ---
 
 # Publishing chezmoi changes
@@ -16,17 +17,19 @@ has moved on, so the push is rejected and you must integrate before retrying.
 decides what you fix silently and what you put to the user. You resolve conflicts; the user
 only ever chooses between outcomes you have already worked out.
 
+**Remote host.** With `--ssh <ssh>` in the arguments, every command below runs on that machine: read `../../references/remote.md` first and write `czr --ssh <ssh> chezmoi ...` wherever this skill says `chezmoi ...`.
+
 ## State on this machine right now
 
 Destination edits not yet captured into the source:
-!`chezmoi status --no-pager --color=false --no-tty --skip-secrets --path-style=absolute 2>&1 | grep . || echo "(no drift - destination matches target state)"`
+!`czr --args "$ARGUMENTS" chezmoi status --no-pager --color=false --no-tty --skip-secrets --path-style=absolute 2>&1 | grep . || echo "(no drift - destination matches target state)"`
 
 Uncommitted source changes:
-!`chezmoi git -- status --short 2>&1 | head -30 | grep . || echo "(source working tree clean)"`
+!`czr --args "$ARGUMENTS" chezmoi git -- status --short 2>&1 | head -30 | grep . || echo "(source working tree clean)"`
 
 Unpushed commits, and whether add/re-add will publish on its own:
-!`chezmoi git -- log --oneline '@{u}..HEAD' 2>&1 | head -20 | grep . || echo "(nothing unpushed)"`
-!`chezmoi dump-config --format=json 2>/dev/null | python3 -c "import json,sys;g={k.lower():v for k,v in (json.load(sys.stdin).get('git') or {}).items()};print('autoCommit:',g.get('autocommit'),' autoPush:',g.get('autopush'))" 2>/dev/null || echo "(config unreadable)"`
+!`czr --args "$ARGUMENTS" chezmoi git -- log --oneline '@{u}..HEAD' 2>&1 | head -20 | grep . || echo "(nothing unpushed)"`
+!`czr --args "$ARGUMENTS" chezmoi dump-config --format=json 2>/dev/null | python3 -c "import json,sys;g={k.lower():v for k,v in (json.load(sys.stdin).get('git') or {}).items()};print('autoCommit:',g.get('autocommit'),' autoPush:',g.get('autopush'))" 2>/dev/null || echo "(config unreadable)"`
 
 If all three are empty there is nothing to push - say so instead of manufacturing a commit.
 

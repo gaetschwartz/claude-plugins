@@ -5,6 +5,8 @@ description: Use when adding a file to chezmoi, changing a chezmoi-managed dotfi
 
 # Changing managed files
 
+**Remote host.** To do this on another machine, read `../../references/remote.md` and prefix every `chezmoi ...` command with `czr --ssh <ssh>`; files are read and written with `czr ... get` and `put`.
+
 Every managed file exists twice: the **source** (`chezmoi source-path <path>`) and the
 deployed file in `$HOME`. Each command moves data one way:
 

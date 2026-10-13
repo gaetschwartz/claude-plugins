@@ -1,0 +1,58 @@
+#!/usr/bin/env bash
+# czr [--ssh <host|ssh command>] [--args "<text holding --ssh ...>"] chezmoi <args>...
+# czr [--ssh ...] get <path>
+# czr [--ssh ...] put <path>          (content on stdin)
+# Runs chezmoi, or reads and writes the chezmoi source and config files, on this machine or over
+# ssh, and nothing else: the one entry point the skills are allowed to use for a remote host.
+set -uo pipefail
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd -P)"
+. "$ROOT/lib/remote.sh"
+
+czr_fail() { echo "czr: $1" >&2; exit 255; }
+
+ssh=
+while [ $# -gt 0 ]; do
+  case $1 in
+    --ssh) [ $# -ge 2 ] || czr_fail "--ssh needs a host or an ssh command"; ssh=$2; shift 2 ;;
+    --ssh=*) ssh=${1#--ssh=}; shift ;;
+    --args)
+      [ $# -ge 2 ] || czr_fail "--args needs a value"
+      # pick --ssh out of free-form skill arguments and ignore the rest
+      ssh=$(python3 -I -c '
+import shlex, sys
+try:
+    w = shlex.split(sys.argv[1])
+except ValueError:
+    w = []
+for i, x in enumerate(w):
+    if x == "--ssh" and i + 1 < len(w):
+        print(w[i + 1]); break
+    if x.startswith("--ssh="):
+        print(x[6:]); break
+' "$2")
+      shift 2 ;;
+    *) break ;;
+  esac
+done
+
+verb=${1:-}
+[ $# -gt 0 ] && shift
+case $verb in
+  chezmoi | get | put) ;;
+  *) echo "usage: czr [--ssh <host|ssh command>] chezmoi <args>... | get <path> | put <path>" >&2; exit 2 ;;
+esac
+
+if [ -n "$ssh" ]; then
+  czr_set_transport "$ssh" || czr_fail "--ssh needs a host or an ssh command"
+fi
+
+case $verb in
+  chezmoi)
+    if [ -z "$ssh" ]; then exec chezmoi "$@"; fi
+    cmd="${CZR_PATHFIX}exec chezmoi"
+    for a in "$@"; do cmd+=" $(czr_arg "$a")"; done
+    exec "${CZR_SSH[@]}" "$cmd" ;;
+  get | put)
+    [ $# -eq 1 ] || { echo "usage: czr [--ssh ...] $verb <path>" >&2; exit 2; }
+    czr_file "$verb" "$1" ;;
+esac

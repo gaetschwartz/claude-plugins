@@ -3,6 +3,11 @@
 # Consumed by the chezmoi:diff skill; the markers are for the rendering agent, not the user.
 set -uo pipefail
 
+here=$(cd "$(dirname "$0")" && pwd -P)
+. "$here/../../lib/remote.sh"
+czr_dispatch "$0" "$@"
+set -- ${CZR_ARGS[@]+"${CZR_ARGS[@]}"}
+
 CAP=${CHEZMOI_DIFF_CAP:-150}
 MAX_ENTRIES=${CHEZMOI_DIFF_MAX_ENTRIES:-15}
 common=(--no-pager --color=false --no-tty --skip-secrets)
