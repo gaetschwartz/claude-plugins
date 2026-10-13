@@ -6,8 +6,9 @@ set -uo pipefail
 CAP=${CHEZMOI_DIFF_CAP:-150}
 MAX_ENTRIES=${CHEZMOI_DIFF_MAX_ENTRIES:-15}
 common=(--no-pager --color=false --no-tty --skip-secrets)
+stale='/^chezmoi: warning: config file template has changed/d'
 
-if ! status=$(chezmoi status "${common[@]}" --path-style=absolute ${1+"$@"} 2>&1); then
+if ! status=$(chezmoi status "${common[@]}" --path-style=absolute ${1+"$@"} 2>&1 | sed "$stale"); then
   echo "$status"
   exit 0
 fi
@@ -39,7 +40,7 @@ while IFS= read -r line; do
     flag=
   fi
   echo "== $path :: $dir :: status='$st' :: source=$src =="
-  out=$(chezmoi diff "${common[@]}" --exclude=scripts ${flag:+"$flag"} -- "$path" 2>&1)
+  out=$(chezmoi diff "${common[@]}" --exclude=scripts ${flag:+"$flag"} -- "$path" 2>&1 | sed "$stale")
   lines=$(printf '%s\n' "$out" | wc -l | tr -d ' ')
   if [ "$lines" -gt "$CAP" ]; then
     printf '%s\n' "$out" | head -n "$CAP"
