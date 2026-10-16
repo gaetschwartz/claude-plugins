@@ -7,7 +7,6 @@ the code that runs on whatever interpreter the host has.
 from __future__ import annotations
 
 import contextlib
-import fcntl
 import json
 import os
 import sys
@@ -15,6 +14,11 @@ import time
 from collections.abc import Generator
 from pathlib import Path
 from typing import Literal, NamedTuple, TypedDict
+
+if sys.platform == "win32":
+    import msvcrt
+else:
+    import fcntl
 
 LIB = Path(__file__).resolve().parent
 REPEAT_SECONDS = 600
@@ -89,10 +93,12 @@ def platform_problem() -> Platform:
 
     arch = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "x86_64", "amd64": "x86_64"}.get(platform.machine().lower())
     system = platform.system()
-    if arch is None or system not in ("Darwin", "Linux"):
+    if arch is None or system not in ("Darwin", "Linux", "Windows"):
         return Platform("", f"{system} {platform.machine()}")
     if system == "Darwin":
         return Platform(f"darwin-{arch}", None)
+    if system == "Windows":
+        return Platform("windows-x86_64", None) if arch == "x86_64" else Platform("", f"Windows {platform.machine()}")
     try:
         libc = os.confstr("CS_GNU_LIBC_VERSION") or ""
     except (OSError, ValueError):
@@ -105,8 +111,14 @@ def platform_problem() -> Platform:
 
 
 def runtime_dir(data: Path, pins: Pins) -> Path:
-    """The path everything runs from: a symlink to the current build, swapped atomically by an install."""
+    """The directory everything runs from: one per set of pins, complete once its marker exists."""
     return data / "runtime" / pins.runtime_id
+
+
+def venv_python(rt: Path) -> Path:
+    """The interpreter of the runtime's venv, wherever the platform puts it."""
+    candidates = (rt / "venv" / "bin" / "python", rt / "venv" / "Scripts" / "python.exe")
+    return next((path for path in candidates if path.exists()), candidates[0])
 
 
 def marker_problem(rt: Path, pins: Pins) -> str | None:
@@ -155,17 +167,31 @@ def mark_broken(data: Path) -> None:
         (runtime_dir(data, load_pins()) / "broken").touch()
 
 
+def lock_exclusive(fd: int, wait: bool) -> bool:
+    """Take an exclusive lock on an open file that the OS releases if we die; False when `wait` is off and it is held."""
+    if sys.platform != "win32":
+        try:
+            fcntl.flock(fd, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
+        except OSError:
+            return False
+        return True
+    while True:
+        try:
+            os.lseek(fd, 0, os.SEEK_SET)
+            msvcrt.locking(fd, msvcrt.LK_LOCK if wait else msvcrt.LK_NBLCK, 1)
+        except OSError:
+            if not wait:
+                return False
+        else:
+            return True
+
+
 @contextlib.contextmanager
 def locked(data: Path, wait: bool) -> Generator[bool]:
-    """Hold the install lock (the OS releases it if we die); False when `wait` is off and another install holds it."""
+    """Hold the install lock; False when `wait` is off and another install holds it."""
     (data / "runtime").mkdir(parents=True, mode=0o700, exist_ok=True)
     with open(data / "runtime" / "lock", "a") as handle:
-        try:
-            fcntl.flock(handle, fcntl.LOCK_EX | (0 if wait else fcntl.LOCK_NB))
-        except OSError:
-            yield False
-            return
-        yield True
+        yield lock_exclusive(handle.fileno(), wait)
 
 
 def ensure(data: Path, *, wait: bool = True, retry_now: bool = False) -> Outcome:

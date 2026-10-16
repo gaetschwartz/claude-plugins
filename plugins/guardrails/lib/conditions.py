@@ -24,7 +24,7 @@ if TYPE_CHECKING:
 MAX_DEPTH = 8
 MAX_NODES = 64
 TOOLS = ("Bash", "Monitor")
-OSES = ("linux", "macos")
+OSES = ("linux", "macos", "windows")
 ARCHES = ("arm64", "x86_64")
 COMBINATORS = ("all", "any", "not")
 ENVIRONMENT_ATOMS = ("bin", "os", "arch", "host", "env", "file", "tool", "background")
@@ -176,7 +176,8 @@ def hostname() -> str:
 
 
 def current_os() -> str:
-    return "macos" if sys.platform == "darwin" else "linux" if sys.platform.startswith("linux") else sys.platform
+    known = {"darwin": "macos", "win32": "windows"}
+    return known.get(sys.platform, "linux" if sys.platform.startswith("linux") else sys.platform)
 
 
 def current_arch() -> str | None:

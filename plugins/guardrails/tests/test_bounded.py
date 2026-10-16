@@ -2,13 +2,14 @@ from __future__ import annotations  # noqa: I001
 
 import io
 import json
+import multiprocessing
 import os
 import sys
 import unittest
 from typing import Any
 from unittest import mock
 
-from helpers import HOOKS, AstIsolated
+from helpers import FORK_ONLY, HOOKS, AstIsolated
 
 import bounded
 import engine
@@ -47,28 +48,43 @@ def boom() -> str:
     raise ValueError("x")
 
 
+def big() -> str:
+    return "x" * 300_000
+
+
+def one() -> int:
+    return 1
+
+
+TOUCHED: list[int] = []
+
+
+def touch() -> None:
+    TOUCHED.append(1)
+
+
 class Call(unittest.TestCase):
     def test_the_answer_comes_back_and_every_failure_is_classified(self) -> None:
-        self.assertEqual(bounded.call(lambda: "x" * 300_000, 10), bounded.Result(DONE, "x" * 300_000))
+        self.assertEqual(bounded.call(big, 10), bounded.Result(DONE, "x" * 300_000))
         for work, outcome in ((spin, TIMEOUT), (crash, CRASHED), (boom, CRASHED), (object, CRASHED)):
             with self.subTest(work=work.__name__):
                 self.assertEqual(bounded.call(work, 0.5).outcome, outcome)
         with mock.patch.object(json, "loads", side_effect=ValueError):
-            self.assertEqual(bounded.call(lambda: 1, 5).outcome, bounded.Outcome.GARBLED)
-        with self.assertRaises(ChildProcessError):
-            os.waitpid(-1, os.WNOHANG)
+            self.assertEqual(bounded.call(one, 5).outcome, bounded.Outcome.GARBLED)
+        self.assertEqual(multiprocessing.active_children(), [])
 
     def test_streams_that_cannot_be_flushed_do_not_stop_the_fork(self) -> None:
         with mock.patch.object(sys, "stdout", None), mock.patch.object(sys, "stderr", io.StringIO()):
-            self.assertEqual(bounded.call(lambda: 1, 5), bounded.Result(DONE, 1))
+            self.assertEqual(bounded.call(one, 5), bounded.Result(DONE, 1))
 
     def test_the_parent_keeps_no_state_from_the_child(self) -> None:
-        box: list[int] = []
-        bounded.call(lambda: box.append(1), 5)
-        self.assertEqual(box, [])
+        bounded.call(touch, 5)
+        self.assertEqual(TOUCHED, [])
 
 
 class Pathological(AstIsolated):
+    inline_children = False
+
     def setUp(self) -> None:
         super().setUp()
         self.put(self.gpath, {"rules": {
@@ -153,6 +169,7 @@ class Crashes(AstIsolated):
         self.assertEqual(timeout, 10)
         self.assertLessEqual(matching.DEADLINE_SECONDS + matching.PROBE_SECONDS + matching.HEADROOM_SECONDS, timeout)
 
+    @FORK_ONLY
     def test_a_real_abort_in_the_library_is_classified_end_to_end(self) -> None:
         stub = self.tmp / "stub"
         stub.mkdir()

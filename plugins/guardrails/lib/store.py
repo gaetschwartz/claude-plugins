@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import contextlib
 import datetime
-import fcntl
 import json
 import os
 import sys
@@ -37,6 +36,8 @@ class Layers(NamedTuple):
 
 
 def managed_path_for(platform: str) -> Path:
+    if platform == "win32":
+        return Path(os.environ.get("ProgramFiles", "C:/Program Files")) / "ClaudeCode" / "guardrails.json"
     return Path("/Library/Application Support/ClaudeCode/guardrails.json" if platform == "darwin"
                 else "/etc/claude-code/guardrails.json")
 
@@ -94,7 +95,9 @@ def presence(path: Path) -> str:
 
 def trust_problems(path: Path) -> list[str]:
     """POSIX only: the managed file and its directory should be root-owned and not writable by others."""
-    problems = []
+    problems: list[str] = []
+    if sys.platform == "win32":
+        return problems
     for what, target in (("file", path), ("directory", path.parent)):
         try:
             info = target.stat()
@@ -194,16 +197,19 @@ def write(path: Path, doc: Doc, public: bool = False) -> None:
     import tempfile
 
     path.parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile("w", dir=path.parent, suffix=".tmp", delete=False) as tmp:
-        try:
+    staged: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile("w", dir=path.parent, suffix=".tmp", delete=False) as tmp:
+            staged = Path(tmp.name)
             json.dump(doc, tmp, indent=2, sort_keys=True)
             tmp.write("\n")
-            if public:
-                os.fchmod(tmp.fileno(), 0o644)
-            Path(tmp.name).replace(path)
-        except BaseException:
-            Path(tmp.name).unlink(missing_ok=True)
-            raise
+        if public:
+            staged.chmod(0o644)
+        staged.replace(path)
+    except BaseException:
+        if staged is not None:
+            staged.unlink(missing_ok=True)
+        raise
 
 
 def write_state(state: Doc) -> None:
@@ -216,9 +222,10 @@ def write_state(state: Doc) -> None:
 @contextlib.contextmanager
 def locked(lock: Path) -> Generator[None]:
     lock.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(lock, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o666)
+    fd = os.open(lock, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o666)
     try:
-        fcntl.flock(fd, fcntl.LOCK_EX)
+        if not bootstrap.lock_exclusive(fd, True):
+            raise OSError(f"cannot lock {lock}")
         yield
     finally:
         os.close(fd)

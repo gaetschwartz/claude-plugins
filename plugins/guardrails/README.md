@@ -45,7 +45,7 @@ of tested rules by shape; a test runs every example in it against the real engin
 (about 140 MB: a hash-pinned portable `uv`, CPython 3.13, the pinned library). Nobody runs an install command: SessionStart
 installs it (3 to 10 s the first time), a hook that finds it missing allows the command with a loud notice and installs in the
 background, and every `guardrails` CLI call ensures it first. A failed install backs off 10 minutes, then 1 hour, then 6 hours.
-Runtimes of other pins are removed after 30 days. macOS (arm64, x86_64) and Linux glibc 2.28+ (x86_64, aarch64) are supported.
+Runtimes of other pins are removed after 30 days. macOS (arm64, x86_64), Linux glibc 2.28+ (x86_64, aarch64) and Windows (x86_64, under Git Bash) are supported.
 **While the runtime is not ready, no rule is enforced**, and the notice says so. The install steps, hosts, trust model and
 failure behaviour are in [references/runtime.md](references/runtime.md); `guardrails engine status` shows the state offline.
 
@@ -57,7 +57,7 @@ command the parser cannot finish or understand is allowed with a short notice th
 
 | file | holds |
 |---|---|
-| managed: `/Library/Application Support/ClaudeCode/guardrails.json` (macOS), `/etc/claude-code/guardrails.json` (Linux); POSIX only | config |
+| managed: `/Library/Application Support/ClaudeCode/guardrails.json` (macOS), `/etc/claude-code/guardrails.json` (Linux), `%ProgramFiles%\ClaudeCode\guardrails.json` (Windows); the owner and mode check is POSIX only | config |
 | global: `$XDG_CONFIG_HOME/dev.gaetans.guardrails/claude-plugin/config.json` (an absolute `XDG_CONFIG_HOME` only, else `~/.config/…`) | config |
 | project: `<project>/.claude/guardrails.json`, meant to be committed like `settings.json` (none when the project is the home directory) | config |
 | state: `${CLAUDE_PLUGIN_DATA}/state.json` (default `~/.claude/plugins/data/guardrails-gaetans-claude-plugins/`) | state |

@@ -1,11 +1,12 @@
 """The one place a command is matched against rules: the hook and every CLI path call evaluate().
 
-Anything that needs the parser is matched in a forked child with a hard deadline, because a call into ast-grep cannot
+Anything that needs the parser is matched in a child process with a hard deadline, because a call into ast-grep cannot
 be interrupted and a hook that runs out of time lets the command through.
 """
 
 from __future__ import annotations
 
+import functools
 import time
 from collections.abc import Callable, Mapping
 from enum import StrEnum
@@ -171,6 +172,10 @@ def compute(command: str, rules: dict[str, policy.Rule], env: conditions.Env = c
                     result.details, result.unparsed)
 
 
+def compute_json(command: str, rules: dict[str, policy.Rule], env: conditions.Env) -> object:
+    return compute(command, rules, env)._asdict()
+
+
 class Matched(NamedTuple):
     """The top-level statement the rule matched, with its range in the text that was parsed (the command itself for a
     direct hit; a wrapper's variant or a shell string otherwise)."""
@@ -221,7 +226,7 @@ def matched_statement(command: str, rule: policy.Rule) -> Replay:
     if len(command.encode("utf-8", "replace")) > MAX_COMMAND_BYTES:
         return Replay(None, "the command is too large to replay")
     try:
-        result = bounded.call(lambda: locate(command, rule), DEADLINE_SECONDS)
+        result = bounded.call(functools.partial(locate, command, rule), DEADLINE_SECONDS)
     except OSError as exc:
         return Replay(None, f"the matcher could not be started ({type(exc).__name__})")
     if result.outcome is not bounded.Outcome.DONE:
@@ -237,12 +242,12 @@ def matched_statement(command: str, rule: policy.Rule) -> Replay:
 
 
 def evaluate(command: str, rules: dict[str, policy.Rule], env: conditions.Env = conditions.DEFAULT,
-             after_fork: Callable[[], None] | None = None) -> Evaluation:
+             after_start: Callable[[], None] | None = None) -> Evaluation:
     """How each rule's matcher selects the command: "direct", "wrapped" or None, and for a hit what its message
     needs (`details`).
 
     What could not be judged (`unevaluated`) and why (`failure`, `unchecked`) is kept for the caller to report. Hits
-    already found always stand. Never raises. `after_fork` runs in this process once the checker child exists.
+    already found always stand. Never raises. `after_start` runs in this process once the checker child exists.
     """
     ev = Evaluation(kinds=dict.fromkeys(rules))
     if not rules:
@@ -256,7 +261,7 @@ def evaluate(command: str, rules: dict[str, policy.Rule], env: conditions.Env = 
     started = time.monotonic()
     state = Health.HEALTHY
     try:
-        result = bounded.call(lambda: compute(command, rules, env)._asdict(), DEADLINE_SECONDS, after_fork)
+        result = bounded.call(functools.partial(compute_json, command, rules, env), DEADLINE_SECONDS, after_start)
         if result.outcome is bounded.Outcome.CRASHED:
             state = health(started)
             ev.runtime_broken = state is Health.BROKEN

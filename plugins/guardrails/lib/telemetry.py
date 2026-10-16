@@ -65,7 +65,7 @@ def connect(path: Path) -> sqlite3.Connection:
     import sqlite3
 
     for attempt in (1, 2):
-        os.close(os.open(path, os.O_RDWR | os.O_CREAT | os.O_NOFOLLOW, 0o600))
+        os.close(os.open(path, os.O_RDWR | os.O_CREAT | getattr(os, "O_NOFOLLOW", 0), 0o600))
         conn = sqlite3.connect(path, timeout=BUSY_SECONDS, isolation_level=None, check_same_thread=False)
         try:
             conn.execute("PRAGMA journal_mode=WAL")
@@ -101,7 +101,7 @@ class Recorder:
         self.ready, self.go, self.done = threading.Event(), threading.Event(), threading.Event()
 
     def start(self) -> None:
-        """Only after the checker is forked: a thread alive at fork time can leave a lock held in the child."""
+        """Only after the checker has started: a thread alive at fork time can leave a lock held in the child."""
         with contextlib.suppress(RuntimeError):
             if self.thread is None:
                 LIVE.add(self)
@@ -116,7 +116,7 @@ class Recorder:
             if self.go.wait(IDLE_SECONDS):
                 upsert(conn, hour_now(), self.samples)
         except Exception:  # noqa: BLE001
-            return  # telemetry is disposable: any failure drops the sample
+            return
         finally:
             self.ready.set()
             self.done.set()
@@ -139,7 +139,8 @@ def settle() -> None:
         recorder.ready.wait(SETTLE_SECONDS)
 
 
-os.register_at_fork(before=settle)
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(before=settle)
 
 
 def prune(data: Path) -> None:

@@ -4,7 +4,7 @@
 runtime lives in `${CLAUDE_PLUGIN_DATA}/runtime/<id>/` (about 140 MB on disk, 46 MB downloaded): a portable `uv` (`bin/`), a
 managed CPython 3.13 (`python/`), a venv with the hash-pinned library (`venv/`) and a `marker.json` written last. `<id>` is
 `lib/runtime-id`, a digest of `lib/runtime-manifest.json` and `lib/runtime-requirements.txt`, so a pin change installs a new
-runtime. `runtime/<id>` is a symlink to the current build.
+runtime.
 
 ## Install: automatic, no user command
 
@@ -23,14 +23,16 @@ try, they say when the next attempt is. `guardrails engine ensure --retry-now` i
 phrase per failure class (DNS, connection, timeout, TLS, HTTP status, hash mismatch, disk, tool failure, library crash),
 never text from the network, the environment or the repository; the raw detail goes to `runtime/install.log`.
 
-An install builds in a fresh directory next to the link, self-tests it (the library must import and match a pipeline),
-swaps the link with one atomic rename and only then removes the old build: a failed or interrupted install never touches
-the runtime in use. Installs hold a `flock` (the OS releases it if the installer dies). Cleanup runs only inside an
-install, under that lock: builds nobody points at go at once, runtimes of other pins once they are 30 days old (two plugin
-versions sharing a data dir never delete each other's runtime; nothing is deleted on the hot path).
+An install builds `runtime/<id>` from scratch and self-tests it (the library must import and match a pipeline); the marker
+is written last, so a failed or interrupted install leaves a directory that is never used and the next install replaces
+it. Only a runtime that is missing, incomplete or marked broken is rebuilt, so nothing in use is replaced. Installs hold an
+exclusive file lock (the OS releases it if the installer dies). Cleanup runs only inside an install, under that lock:
+runtimes of other pins go once they are 30 days old (two plugin versions sharing a data dir never delete each other's
+runtime; nothing is deleted on the hot path).
 
-Platforms: macOS arm64 and x86_64, Linux glibc 2.28+ x86_64 and aarch64. Linux musl, older glibc, other architectures and
-Windows get an "unsupported platform" notice and no install attempt.
+Platforms: macOS arm64 and x86_64, Linux glibc 2.28+ x86_64 and aarch64, Windows x86_64 (the hook is a `sh` script, so it
+needs Git Bash, which Claude Code requires on Windows anyway). Linux musl, older glibc and other architectures get an
+"unsupported platform" notice and no install attempt.
 
 ## Trust model
 
@@ -52,7 +54,7 @@ in the data dir. Configuration does not: the global config is under the XDG conf
 Only `lib/bootstrap.py`, `lib/installer.py` and `lib/hostcli.py` run on the host's Python (3.9 or newer, standard
 library only). The installer downloads the pinned `uv` wheel from the one `files.pythonhosted.org` URL in the manifest
 (sha256 checked before the file is read, exactly one member unpacked), then runs that uv with a scrubbed environment
-(HOME, LANG, TMPDIR, proxy and `SSL_CERT_*` variables; `PATH=/usr/bin:/bin`; `UV_*` pointing inside the runtime dir;
+(HOME, LANG, TMPDIR, proxy and `SSL_CERT_*` variables, plus the few Windows needs to run a process; the default `PATH`; `UV_*` pointing inside the runtime dir;
 `UV_NO_CONFIG`; the runtime dir as cwd): `uv python install 3.13`, `uv venv`, `uv pip install --require-hashes
 --only-binary :all: --no-deps`. A repository's `uv.toml`, `UV_*`, `PATH`, `PYTHONPATH` or `pip.conf` never influence what
 runs. uv checks the Python distribution against the sha256 compiled into the uv binary, so the manifest pins uv, uv pins
@@ -62,7 +64,7 @@ Network hosts: `pypi.org`, `files.pythonhosted.org`, `releases.astral.sh`, and `
 `release-assets.githubusercontent.com` as the Python fallback. `HTTPS_PROXY`, `ALL_PROXY`, `NO_PROXY` and `SSL_CERT_FILE/DIR`
 are passed through; mirror and index variables are not.
 
-The hook wrapper starts the runtime's Python, with `python -I`, only when `CLAUDE_PLUGIN_DATA` is an absolute path,
+The hook wrapper starts the runtime's Python, with `python -I -X utf8`, only when `CLAUDE_PLUGIN_DATA` is an absolute path,
 `marker.json` exists and no `broken` file is next to it (shell builtins only: nothing is spawned to decide); each `ensure`
 also checks that the files the marker lists exist, and reinstalls otherwise. A relative `CLAUDE_PLUGIN_DATA` gets the notice
 "the plugin data directory is not an absolute path" on every call and nothing runs from it. No notice, hook answer or
@@ -70,8 +72,8 @@ also checks that the files the marker lists exist, and reinstalls otherwise. A r
 paths go to the stderr of `guardrails engine status` only. The project directory and the cwd never decide where the runtime
 is.
 
-The wrapper picks the host Python from fixed absolute locations first, then `PATH` entries that are absolute and outside
-the project and cwd; each candidate is smoke-tested, and a broken one is reported (its path on stderr), never skipped
+The wrapper picks the host Python (`python3`, then `python`) from fixed absolute locations first, then `PATH` entries that
+are absolute and outside the project and cwd; each candidate is smoke-tested, and a broken one is reported (its path on stderr), never skipped
 silently. A hook Python that dies is reported ("failed to run (exit N)").
 
 ## When the engine fails
@@ -84,12 +86,12 @@ There is no degraded parsing and no rule runs outside the engine; the hook allow
 - **A crash of the library**: the checker runs a health probe on a trivial command in a fresh child. Probe passes: that
   command "crashes the parser" ("this command crashes the parser") and is allowed alone with a notice. Probe crashes or answers wrongly: the
   library is broken, the command is allowed with a loud notice, the runtime is marked broken and rebuilt in the background
-  (same backoff as an install; the old build stays until the new one is swapped in). Probe silent for 3 s: retried once with
+  (same backoff as an install). Probe silent for 3 s: retried once with
   a longer deadline (both bounded by the hook's 10 s budget minus 2 s headroom); still silent means unverified, not broken:
   allowed with "could not verify the matcher (timed out)", nothing is rebuilt. A checker that cannot be started is a loud
   allow that leaves the runtime alone.
 - **A command the parser does not finish in 5 s is allowed with a notice**: everything that needs the
-  parser, whole-text regex rules included, runs in a forked child killed at that deadline, because a native call into ast-grep holds
+  parser, whole-text regex rules included, runs in a child process killed at that deadline, because a native call into ast-grep holds
   the GIL and a hook that outlives its timeout lets the command through. A hit already found stands.
 - **A rule that does not compile** (a `match` ast-grep rejects) is skipped and named once
   per session. So is a rule with a regex Rust cannot compile (checked when the rule is loaded, with its path), with a field this version does not know, a malformed atom, or a `match` in the removed format
@@ -119,7 +121,7 @@ included), `@parse` (calls, and the time spent parsing and unwrapping, shared by
 **Never recorded:** the command or any part of it, arguments, paths, the project or working directory, session ids, host
 names, message text, who enabled a mode. Only rule ids, counts, times and the hour.
 
-The hook forks the checker first, then starts one thread that opens the database while the checker works; the counts are
+The hook starts the checker first, then starts one thread that opens the database while the checker works; the counts are
 written only after the answer is out, and the hook waits at most 20 ms for that write. A busy lock, a read-only or full disk,
 a missing `sqlite3` or any error drops the sample silently and never changes an answer or an exit code; a file that is not a
 database is renamed `telemetry.db.corrupt` and recreated. A hook whose runtime is not ready records nothing.

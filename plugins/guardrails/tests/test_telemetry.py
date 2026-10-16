@@ -12,11 +12,13 @@ import time
 import unittest
 import warnings
 from concurrent.futures import ThreadPoolExecutor
+from multiprocessing.process import BaseProcess
 from typing import Any
 from unittest import mock
 
-from helpers import HOOKS, AstIsolated, RealRuntime
+from helpers import HOOKS, REAL_CALL, AstIsolated, RealRuntime
 
+import bounded
 import guard
 import telemetry
 
@@ -95,9 +97,9 @@ class Counted(Fixture):
         self.assertTrue(all(len(i) <= 64 and i.isprintable() and (i[0] != "@" or i in ("@parse", "@hook")) for i in ids))
         self.assertLessEqual({"_parse", "x" * 64, "evil'); DROP TABLE rule_hours;--", "n", "@hook"}, ids)
 
-    def test_the_checker_forks_first_then_the_thread_starts_and_writes_only_after_the_output_is_flushed(self) -> None:
+    def test_the_checker_starts_first_then_the_thread_starts_and_writes_only_after_the_output_is_flushed(self) -> None:
         events: list[str] = []
-        real_fork, real_start, real_upsert = os.fork, telemetry.Recorder.start, telemetry.upsert
+        real_spawn, real_start, real_upsert = BaseProcess.start, telemetry.Recorder.start, telemetry.upsert
 
         class Tape(io.StringIO):
             def write(self, text: str) -> int:
@@ -107,9 +109,9 @@ class Counted(Fixture):
             def flush(self) -> None:
                 events.append("flush")
 
-        def fork() -> int:
+        def spawn(self: BaseProcess) -> None:
+            real_spawn(self)
             events.append("fork")
-            return real_fork()
 
         def start(self: telemetry.Recorder) -> None:
             events.append("start")
@@ -120,8 +122,9 @@ class Counted(Fixture):
             real_upsert(*args)
 
         payload = {"session_id": "s", "cwd": str(self.proj), "tool_name": "Bash", "tool_input": {"command": "kill 1"}}
-        with (mock.patch.object(sys, "stdout", Tape()), mock.patch.object(os, "fork", fork),
-              mock.patch.object(telemetry.Recorder, "start", start), mock.patch.object(telemetry, "upsert", upsert)):
+        with (mock.patch.object(sys, "stdout", Tape()), mock.patch.object(BaseProcess, "start", spawn),
+              mock.patch.object(bounded, "call", REAL_CALL), mock.patch.object(telemetry.Recorder, "start", start),
+              mock.patch.object(telemetry, "upsert", upsert)):
             guard.hook(json.dumps(payload))
         self.assertLess(events.index("fork"), events.index("start"))
         self.assertLess(events.index("start"), events.index("stdout"))
@@ -168,7 +171,7 @@ class Harmless(Fixture):
         self.assertEqual(self.run_hook("kill 1"), expected)
         self.assertTrue((self.data / "telemetry.db.corrupt").exists())
         self.assertEqual(self.table()["no-kill"], (1, 0, 0, 0))
-        if os.geteuid() != 0:
+        if hasattr(os, "geteuid") and os.geteuid() != 0:
             self.data.chmod(0o500)
             self.addCleanup(self.data.chmod, 0o700)
             self.assertEqual(self.run_hook("kill 1", "ro"), expected)
@@ -205,7 +208,7 @@ class Parallel(RealRuntime):
                               "tool_input": {"command": "echo hi"}})
 
         def call(_: int) -> str:
-            return subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+            return subprocess.run(["sh", (HOOKS / "guardrails.sh").as_posix()], input=payload, capture_output=True, text=True,
                                   check=False, env=dict(os.environ)).stderr
 
         with ThreadPoolExecutor(30) as pool:

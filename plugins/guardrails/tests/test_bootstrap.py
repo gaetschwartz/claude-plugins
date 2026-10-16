@@ -33,6 +33,7 @@ import hostcli
 import installer
 
 REAL_URLOPEN = urllib.request.urlopen
+STUB_UV_IS_A_SHELL_SCRIPT = unittest.skipIf(sys.platform == "win32", "the stub uv is a shell script")
 
 STUB_UV = """#!/bin/sh
 log="${0%/*}/uv.log"
@@ -150,12 +151,12 @@ class Manifest(unittest.TestCase):
                          (gen.PYTHON, gen.AST_GREP_PY, gen.UV))
         self.assertEqual((ROOT / "lib" / "runtime-id").read_text().strip(), sha((document + requirements).encode())[:12])
         self.assertIn("ast-grep-py==" + gen.AST_GREP_PY, requirements)
-        self.assertEqual(len(re.findall(r"--hash=sha256:[0-9a-f]{64}", requirements)), 4)
-        self.assertEqual(set(manifest["uv"]["wheels"]), {"darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-aarch64"})
-        for entry in manifest["uv"]["wheels"].values():
+        self.assertEqual(len(re.findall(r"--hash=sha256:[0-9a-f]{64}", requirements)), 5)
+        self.assertEqual(set(manifest["uv"]["wheels"]), {"darwin-arm64", "darwin-x86_64", "linux-x86_64", "linux-aarch64", "windows-x86_64"})
+        for key, entry in manifest["uv"]["wheels"].items():
             self.assertTrue(entry["url"].startswith(installer.DOWNLOAD_PREFIX))
             self.assertRegex(entry["sha256"], r"^[0-9a-f]{64}$")
-            self.assertEqual(entry["member"], f"uv-{gen.UV}.data/scripts/uv")
+            self.assertEqual(entry["member"], f"uv-{gen.UV}.data/scripts/uv" + (".exe" if key.startswith("windows") else ""))
             self.assertIn(f"uv-{gen.UV}-", entry["url"])
         pins = bootstrap.load_pins()
         self.assertEqual((pins.python, pins.runtime_id), ("3.13", (ROOT / "lib" / "runtime-id").read_text().strip()))
@@ -170,7 +171,7 @@ class Manifest(unittest.TestCase):
             ("Linux", "aarch64", lambda n: "glibc 2.28", "linux-aarch64", None),
             ("Linux", "x86_64", lambda n: "glibc 2.27", "", "older than glibc 2.28"),
             ("Linux", "x86_64", lambda n: None, "", "musl"), ("Linux", "x86_64", musl, "", "musl"),
-            ("Linux", "armv7l", lambda n: "glibc 2.36", "", "Linux armv7l"), ("Windows", "AMD64", None, "", "Windows"),
+            ("Linux", "armv7l", lambda n: "glibc 2.36", "", "Linux armv7l"), ("Windows", "AMD64", None, "windows-x86_64", None), ("Windows", "ARM64", None, "", "Windows ARM64"),
             ("FreeBSD", "amd64", None, "", "FreeBSD"),
         ]
         for system, machine, libc, key, why in cases:
@@ -188,6 +189,7 @@ class Manifest(unittest.TestCase):
 
 
 class Ready(Pinned):
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_a_valid_marker_is_the_fast_path_and_touches_neither_network_nor_lock(self) -> None:
         self.install_fake()
         self.served.clear()
@@ -195,6 +197,7 @@ class Ready(Pinned):
             self.assertEqual(self.ensure().state, "ready")
         self.assertEqual(self.served, [])
 
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_a_damaged_runtime_is_not_ready_and_the_next_ensure_repairs_it(self) -> None:
         python, marker = "venv/bin/python", "marker.json"
         cases = {
@@ -214,34 +217,24 @@ class Ready(Pinned):
                 self.ensure(retry_now=True)
                 self.assertIsNone(bootstrap.marker_problem(self.rt, self.pins), "repaired")
 
-    def test_a_rebuild_swaps_in_a_fresh_build_and_only_then_removes_the_old_one(self) -> None:
+    @STUB_UV_IS_A_SHELL_SCRIPT
+    def test_a_rebuild_replaces_a_broken_runtime_with_a_fresh_one(self) -> None:
         self.install_fake()
-        old = self.rt.resolve()
-        leftover = self.rt.parent / "r1-test.leftover"
-        (leftover / "bin").mkdir(parents=True)
+        (self.rt / "stale").write_text("")
         bootstrap.mark_broken(self.data)
-        seen: list[bool] = []
-        real = installer.build
+        self.assertEqual(self.ensure().state, "installed")
+        self.assertIsNone(bootstrap.marker_problem(self.rt, self.pins))
+        self.assertFalse((self.rt / "stale").exists() or (self.rt / "broken").exists())
+        self.assertEqual(self.builds(), [self.rt.name])
 
-        def watching(rt: Path, pins: bootstrap.Pins, plat: str) -> None:
-            seen.append(old.is_dir() and (old / "marker.json").exists())
-            real(rt, pins, plat)
-
-        with mock.patch.object(installer, "build", watching):
-            self.assertEqual(self.ensure().state, "installed")
-        self.assertEqual(seen, [True])
-        self.assertNotEqual(self.rt.resolve(), old)
-        self.assertEqual(self.builds(), [self.rt.resolve().name], "the old build and the leftover are gone")
-
-    def test_a_failed_rebuild_leaves_the_runtime_in_place_and_no_build_behind(self) -> None:
+    @STUB_UV_IS_A_SHELL_SCRIPT
+    def test_a_failed_rebuild_leaves_no_half_built_runtime_behind(self) -> None:
         self.install_fake()
-        old = self.rt.resolve()
         bootstrap.mark_broken(self.data)
         (self.data / "fail-pip").write_text("boom: no network\n")
         self.assertEqual(self.ensure(retry_now=True).state, "failed")
-        self.assertEqual(self.rt.resolve(), old)
-        self.assertTrue((old / "marker.json").exists() and (old / "venv" / "bin" / "python").exists())
-        self.assertEqual(self.builds(), [old.name])
+        self.assertEqual(bootstrap.diagnose(self.data).state, "backoff")
+        self.assertEqual(self.builds(), [])
 
 
 class Relative(Pinned):
@@ -267,6 +260,7 @@ class Relative(Pinned):
 
 
 class Install(Pinned):
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_the_install_runs_uv_from_the_runtime_with_a_scrubbed_environment_and_cleans_up(self) -> None:
         (self.tmp / "evilbin").mkdir()
         (self.tmp / "evilbin" / "uv").write_text("#!/bin/sh\ntouch " + str(self.tmp / "pwned") + "\n")
@@ -278,11 +272,11 @@ class Install(Pinned):
             outcome = self.ensure(retry_now=True)
         self.assertEqual(outcome.state, "installed", outcome)
         self.assertFalse((self.tmp / "pwned").exists())
-        build = self.rt.resolve()
+        build = self.rt
         lines = (build / "bin" / "uv.log").read_text().splitlines()
-        self.assertEqual((len(lines), build.parent, build.name.startswith("r1-test.")), (3, self.rt.parent.resolve(), True))
+        self.assertEqual((len(lines), build.parent, build.name), (3, self.rt.parent, "r1-test"))
         for line in lines:
-            for expected in (f"cwd={build} ", "PATH=/usr/bin:/bin ", f"CACHE={build}/uv-cache ", "NOCONFIG=1 ",
+            for expected in (f"cwd={build} ", f"PATH={os.defpath} ", f"CACHE={build}/uv-cache ", "NOCONFIG=1 ",
                              "INDEX=unset PYPATH=unset"):
                 self.assertIn(expected, line)
         self.assertTrue(lines[2].endswith(f"-r {ROOT / 'lib' / 'runtime-requirements.txt'}"))
@@ -293,6 +287,7 @@ class Install(Pinned):
         self.assertEqual((marker["runtimeId"], marker["python"]), ("r1-test", "3.13.99"))
         self.assertEqual(oct((build / "bin" / "uv").stat().st_mode & 0o777), "0o700")
 
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_a_failed_step_leaves_no_marker_keeps_the_raw_text_in_the_log_and_a_later_install_recovers(self) -> None:
         self.data.mkdir(parents=True)
         (self.data / "fail-pip").write_text("error: dns error: certificate proxy ATTACKER-TEXT\n")
@@ -317,6 +312,7 @@ class Install(Pinned):
             installer.download({**entry, "url": "https://evil.example/uv.whl"}, time.monotonic() + 30)
         self.assertEqual(self.served, [])
 
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_the_installed_version_must_be_the_pinned_one(self) -> None:
         self.data.mkdir(parents=True)
         (self.data / "wrong-version").write_text("")
@@ -329,12 +325,14 @@ class Install(Pinned):
         self.assertIn("musl", hostcli.notice(found))
         self.assertFalse(self.data.exists())
 
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_a_second_ensure_does_not_install_twice(self) -> None:
         with bootstrap.locked(self.data, False) as mine:
             self.assertTrue(mine)
             self.assertEqual(self.ensure(wait=False).state, "busy")
         self.assertEqual(self.ensure(wait=False).state, "installed")
 
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_a_tool_that_never_finishes_is_killed_at_the_deadline(self) -> None:
         script = self.tmp / "slow.sh"
         script.write_text("#!/bin/sh\nsleep 30\n")
@@ -377,6 +375,7 @@ class Failures(Pinned):
                 self.assertNotIn("ATTACKER", hostcli.notice(found) + hostcli.status_text(self.data))
                 self.assertIn("ATTACKER", (self.data / "runtime" / "install.log").read_text())
 
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_the_backoff_is_ten_minutes_then_an_hour_then_six_hours_and_a_success_resets_it(self) -> None:
         refused = urllib.error.URLError(ConnectionRefusedError())
         delays = []
@@ -396,13 +395,14 @@ class Failures(Pinned):
 
 
 class Cleanup(Pinned):
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_runtimes_of_other_pins_survive_until_they_are_old_and_the_hook_never_deletes(self) -> None:
         other = self.make_pins("r2-other")
         for pins in (self.pins, other, self.pins, other):
             with mock.patch.object(bootstrap, "load_pins", lambda pins=pins: pins):
                 self.assertIn(bootstrap.ensure(self.data).state, ("installed", "ready"))
         runtime = self.data / "runtime"
-        self.assertEqual(sorted(p.name for p in runtime.iterdir() if p.is_symlink()), ["r1-test", "r2-other"])
+        self.assertEqual(sorted(p.name for p in runtime.iterdir() if p.is_dir()), ["r1-test", "r2-other"])
         old, young = runtime / "r0-ancient", runtime / "r0-young"
         old.mkdir()
         young.mkdir()
@@ -469,6 +469,7 @@ class Hook(Pinned):
 
 
 class Entry(Pinned):
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_session_start_installs_synchronously_is_quiet_when_ready_and_does_not_try_in_backoff(self) -> None:
         with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(self.data)}):
             self.assertIn("installed", json.loads(hostcli.session_start())["systemMessage"])
@@ -489,17 +490,20 @@ class Entry(Pinned):
                     mock.patch.object(bootstrap, "ensure", return_value=outcome), mock.patch("sys.stderr", new_callable=io.StringIO):
                 self.assertEqual(hostcli.ensure_command([]), code)
 
+    @STUB_UV_IS_A_SHELL_SCRIPT
     def test_a_ready_runtime_runs_the_guard_at_once_whatever_the_backoff_stamp_says(self) -> None:
         self.install_fake()
         self.stamp(3, installer.DNS)
         with mock.patch.dict(os.environ, {"CLAUDE_PLUGIN_DATA": str(self.data)}), \
                 mock.patch.object(bootstrap, "ensure", side_effect=AssertionError("ensure ran")), \
-                mock.patch.object(hostcli.os, "execv") as execv, contextlib.redirect_stdout(io.StringIO()), \
+                mock.patch.object(hostcli.subprocess, "run") as run, contextlib.redirect_stdout(io.StringIO()), \
                 mock.patch("sys.stderr", new_callable=io.StringIO):
             hostcli.run_command(["engine", "status"])
-            hostcli.run_command(["status", "--problems"])
+            with self.assertRaises(SystemExit):
+                hostcli.run_command(["status", "--problems"])
         python = str(self.rt / "venv" / "bin" / "python")
-        self.assertEqual(execv.call_args_list[-1].args, (python, [python, "-I", str(ROOT / "lib" / "guard.py"), "status", "--problems"]))
+        self.assertEqual(run.call_args_list[-1].args,
+                         ([python, "-I", "-X", "utf8", str(ROOT / "lib" / "guard.py"), "status", "--problems"],))
 
     def test_engine_status_and_other_verbs_without_a_runtime_work_offline_and_never_show_a_traceback(self) -> None:
         self.data.mkdir()

@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from helpers import AstIsolated, caught, Isolated, plain
+from helpers import AstIsolated, caught, executable, Isolated, plain
 
 import conditions
 import engine
@@ -24,8 +24,7 @@ def rule(**fields: Any) -> dict[str, Any]:
 def stub_path(folder: Path, *names: str) -> str:
     folder.mkdir(parents=True, exist_ok=True)
     for name in names:
-        (folder / name).write_text("#!/bin/sh\n")
-        (folder / name).chmod(0o755)
+        executable(folder / name)
     return str(folder)
 
 
@@ -132,7 +131,7 @@ class Validation(unittest.TestCase):
         bad: list[tuple[object, str]] = [
             ({"bin": ""}, "when.bin"), ({"bin": []}, "when.bin"), ({"bin": "a/b"}, "when.bin"),
             ({"bin": "a b"}, "when.bin"), ({"bin": ["fd", 3]}, "when.bin"), ({"bin": True}, "when.bin"),
-            ({"os": "windows"}, "when.os"), ({"os": "darwin"}, "when.os"), ({"arch": "aarch64"}, "when.arch"),
+            ({"os": "plan9"}, "when.os"), ({"os": "darwin"}, "when.os"), ({"arch": "aarch64"}, "when.arch"),
             ({"arch": 64}, "when.arch"), ({"host": ""}, "when.host"), ({"host": "a b"}, "when.host"),
             ({"host": ["a"]}, "when.host"), ({"env": "1X"}, "when.env"), ({"env": "A-B"}, "when.env"),
             ({"env": {"A": 1}}, "when.env"), ({"env": {"A": "1", "B": "2"}}, "when.env"), ({"env": {}}, "when.env"),

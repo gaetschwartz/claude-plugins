@@ -5,6 +5,7 @@ from __future__ import annotations
 import contextlib
 import io
 import json
+import multiprocessing
 import os
 import re
 import subprocess
@@ -22,6 +23,7 @@ LIB = ROOT / "lib"
 sys.path.insert(0, str(LIB))
 
 import bootstrap
+import bounded
 import policy
 import render  # noqa: F401
 import store
@@ -73,6 +75,30 @@ def plain(text: str) -> str:
     return re.sub(r"#[0-9a-f]{8}(?=[\],]| \()", "", text)
 
 
+REAL_CALL = bounded.call
+
+
+def in_process_call(work: Any, seconds: float, after_start: Any = None) -> bounded.Result:
+    if after_start is not None:
+        after_start()
+    try:
+        return bounded.Result(bounded.Outcome.DONE, json.loads(json.dumps(work())))
+    except Exception:  # noqa: BLE001
+        return bounded.Result(bounded.Outcome.CRASHED)
+
+
+FORK_ONLY = unittest.skipUnless("fork" in multiprocessing.get_all_start_methods(),
+                                "the child must inherit the parent's patched state")
+POSIX_PERMISSIONS = unittest.skipIf(sys.platform == "win32", "needs POSIX permission bits")
+
+
+def executable(path: Path) -> Path:
+    target = path.with_name(path.name + ".cmd") if sys.platform == "win32" else path
+    target.write_text("#!/bin/sh\n", newline="\n")
+    target.chmod(0o755)
+    return target
+
+
 SCRUBBED = ("CLAUDECODE", "CLAUDE_CODE_SESSION_ID", "CLAUDE_PLUGIN_DATA", "CLAUDE_PROJECT_DIR", "XDG_CONFIG_HOME")
 
 
@@ -81,6 +107,7 @@ class Isolated(unittest.TestCase):
     project root <tmp>/proj, no agent markers."""
 
     silent_telemetry = True
+    inline_children = True
 
     def setUp(self) -> None:
         tmp = tempfile.TemporaryDirectory()
@@ -102,10 +129,14 @@ class Isolated(unittest.TestCase):
         self.home = self.tmp / "home"
         self.home.mkdir()
         env.update(CLAUDE_PLUGIN_DATA=str(self.data), CLAUDE_PROJECT_DIR=str(self.proj),
-                   XDG_CONFIG_HOME=str(self.tmp / "xdg"), HOME=str(self.home))
+                   XDG_CONFIG_HOME=str(self.tmp / "xdg"), HOME=str(self.home), USERPROFILE=str(self.home))
         patcher = mock.patch.dict(os.environ, env, clear=True)
         patcher.start()
         self.addCleanup(patcher.stop)
+        if self.inline_children and "fork" not in multiprocessing.get_all_start_methods():
+            inline = mock.patch.object(bounded, "call", in_process_call)
+            inline.start()
+            self.addCleanup(inline.stop)
         guard = mock.patch.object(urllib.request, "urlopen", no_network)
         guard.start()
         self.addCleanup(guard.stop)
@@ -157,7 +188,7 @@ class Isolated(unittest.TestCase):
         return self.cli("rule", "set", rid, "--json", json.dumps(fields), *extra, agent=agent)
 
     def run_guard(self, payload: str) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+        return subprocess.run(["sh", (HOOKS / "guardrails.sh").as_posix()], input=payload, capture_output=True, text=True,
                               check=False, env=dict(os.environ))
 
 

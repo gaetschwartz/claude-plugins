@@ -34,7 +34,7 @@ class RealInstall(Isolated):
                                                       "action": "deny"}}})
         payload = json.dumps({"session_id": "real", "cwd": str(self.proj), "tool_name": "Bash",
                               "tool_input": {"command": "sudo -u bob pkill -f x"}})
-        proc = subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+        proc = subprocess.run(["sh", (HOOKS / "guardrails.sh").as_posix()], input=payload, capture_output=True, text=True,
                               check=False, env=dict(os.environ), cwd=self.proj)
         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["permissionDecision"], "deny")
 

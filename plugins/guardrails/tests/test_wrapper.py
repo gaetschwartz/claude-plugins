@@ -17,7 +17,11 @@ from helpers import DEV_DATA, HOOKS, LIB, ROOT, Isolated, RealRuntime
 
 SCRIPT = (HOOKS / "guardrails.sh").read_text()
 RUNTIME_ID = (LIB / "runtime-id").read_text().strip()
-SHELLS = [[path] for path in ("/bin/sh", "/bin/dash") if os.path.exists(path)]
+def posix(path: Path) -> str:
+    return re.sub(r"^([A-Za-z]):", lambda m: "/" + m.group(1).lower(), path.as_posix())
+
+
+SHELLS = [[path] for path in dict.fromkeys(p for p in ("/bin/sh", "/bin/dash", shutil.which("sh")) if p and os.path.exists(p))]
 if shutil.which("busybox"):
     SHELLS.append([str(shutil.which("busybox")), "sh"])
 NOW = time.time
@@ -42,7 +46,7 @@ class Source(Isolated):
     def test_it_parses_under_every_available_shell(self) -> None:
         for shell in SHELLS:
             with self.subTest(shell=shell):
-                proc = subprocess.run([*shell, "-n", str(HOOKS / "guardrails.sh")], capture_output=True, text=True,
+                proc = subprocess.run([*shell, "-n", (HOOKS / "guardrails.sh").as_posix()], capture_output=True, text=True,
                                       check=False)
                 self.assertEqual((proc.returncode, proc.stderr), (0, ""))
 
@@ -59,17 +63,17 @@ class StubbedCases(Base):
         self.lib = self.tmp / "plugin" / "lib"
         (self.tmp / "plugin" / "hooks").mkdir(parents=True)
         self.lib.mkdir()
-        (self.lib / "runtime-id").write_text(RUNTIME_ID + "\n")
+        (self.lib / "runtime-id").write_text(RUNTIME_ID + "\n", newline="\n")
         replaced = (SCRIPT.replace("/opt/homebrew/bin/python3 /usr/local/bin/python3 /usr/bin/python3",
                                    "/nonexistent/a /nonexistent/b /nonexistent/c").replace("/usr/bin/uname -s", "echo Darwin"))
         self.script = self.tmp / "plugin" / "hooks" / "guardrails.sh"
-        self.script.write_text(replaced)
+        self.script.write_text(replaced, newline="\n")
         self.data.mkdir(exist_ok=True)
         self.rt = self.data / "runtime" / RUNTIME_ID
 
     def stub(self, path: Path, label: str, body: str = "") -> Path:
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_text(f'#!/bin/sh\n{body}echo "{label} $*"\n')
+        path.write_text(f'#!/bin/sh\n{body}echo "{label} $*"\n', newline="\n")
         path.chmod(0o755)
         return path
 
@@ -86,22 +90,22 @@ class StubbedCases(Base):
             env["CLAUDE_PLUGIN_DATA"] = str(self.data)
         elif data is not None:
             env["CLAUDE_PLUGIN_DATA"] = data
-        return subprocess.run([*self.SHELL, str(self.script), *args], input="{}", capture_output=True, text=True,
+        return subprocess.run([*self.SHELL, posix(self.script), *args], input="{}", capture_output=True, text=True,
                               check=False, env=env, cwd=cwd or self.proj)
 
     def host_stub(self) -> str:
         self.stub(self.tmp / "a" / "python3", "HOST")
-        return f"{self.tmp}/a"
+        return f"{posix(self.tmp)}/a"
 
     def test_a_ready_runtime_runs_the_guard_on_its_own_python_and_nothing_else(self) -> None:
         self.ready_runtime()
         out = self.run_script(self.host_stub()).stdout
-        self.assertEqual(out, f"READY -I {self.script.parent}/../lib/guard.py\n")
+        self.assertEqual(out, f"READY -I -X utf8 {posix(self.script.parent)}/../lib/guard.py\n")
         cli = self.run_script(self.host_stub(), "cli", "status", "--problems").stdout
-        self.assertEqual(cli, f"READY -I {self.script.parent}/../lib/guard.py status --problems\n")
+        self.assertEqual(cli, f"READY -I -X utf8 {posix(self.script.parent)}/../lib/guard.py status --problems\n")
 
     def test_a_runtime_that_is_not_ready_goes_to_the_bootstrap_on_the_host_python(self) -> None:
-        boot = f"HOST -I -S {self.script.parent}/../lib/bootstrap.py hook\n"
+        boot = f"HOST -I -S -X utf8 {posix(self.script.parent)}/../lib/bootstrap.py hook\n"
         cases = {"no marker": lambda: self.stub(self.rt / "venv" / "bin" / "python", "READY"),
                  "no python": lambda: (self.rt.mkdir(parents=True), (self.rt / "marker.json").write_text("{}")),
                  "marked broken": lambda: (self.ready_runtime(), (self.rt / "broken").touch())}
@@ -110,10 +114,10 @@ class StubbedCases(Base):
                 shutil.rmtree(self.data / "runtime", ignore_errors=True)
                 setup()
                 self.assertEqual(self.run_script(self.host_stub()).stdout, boot)
-        self.assertTrue(self.run_script(self.host_stub(), data=None).stdout.startswith("HOST -I -S "), "no data dir variable")
+        self.assertTrue(self.run_script(self.host_stub(), data=None).stdout.startswith("HOST -I -S -X utf8 "), "no data dir variable")
 
     def test_a_relative_data_dir_never_runs_anything_from_it(self) -> None:
-        boot = f"HOST -I -S {self.script.parent}/../lib/bootstrap.py hook\n"
+        boot = f"HOST -I -S -X utf8 {posix(self.script.parent)}/../lib/bootstrap.py hook\n"
         repo = self.proj / ".rt"
         self.ready_runtime(repo)
         for name, value in {"relative": ".rt", "relative from the project root": "./.rt"}.items():
@@ -130,43 +134,43 @@ class StubbedCases(Base):
     def test_the_first_trusted_python3_on_path_is_used_and_each_mode_passes_its_arguments(self) -> None:
         self.stub(self.tmp / "a" / "python3", "a")
         self.stub(self.tmp / "b" / "python3", "b")
-        path = f"{self.tmp}/none:{self.tmp}/a:{self.tmp}/b"
-        boot = f"{self.script.parent}/../lib/bootstrap.py"
-        self.assertEqual(self.run_script(path, "session-start").stdout, f"a -I -S {boot} session-start\n")
+        path = f"{posix(self.tmp)}/none:{posix(self.tmp)}/a:{posix(self.tmp)}/b"
+        boot = f"{posix(self.script.parent)}/../lib/bootstrap.py"
+        self.assertEqual(self.run_script(path, "session-start").stdout, f"a -I -S -X utf8 {boot} session-start\n")
         self.assertEqual(self.run_script(path, "cli", "status", "--problems", data=None).stdout,
-                         f"a -I -S {boot} run status --problems\n")
+                         f"a -I -S -X utf8 {boot} run status --problems\n")
 
     def test_path_entries_inside_the_project_or_relative_are_skipped(self) -> None:
         self.stub(self.proj / "bin" / "python3", "evil")
         self.stub(self.proj / "python3", "evil-cwd")
         self.stub(self.tmp / "ok" / "python3", "ok")
-        for path in (f"{self.proj}/bin:{self.tmp}/ok", f".:bin:{self.tmp}/ok", f":{self.tmp}/ok"):
+        for path in (f"{posix(self.proj)}/bin:{posix(self.tmp)}/ok", f".:bin:{posix(self.tmp)}/ok", f":{posix(self.tmp)}/ok"):
             with self.subTest(path=path):
                 out = self.run_script(path, "session-start").stdout
-                self.assertTrue(out.startswith("ok -I -S "), out)
+                self.assertTrue(out.startswith("ok -I -S -X utf8 "), out)
 
     def test_a_python_that_cannot_run_is_named_not_ignored(self) -> None:
         cases = {"exits 1": "exit 1\n", "too old": "exit 1\n"}
         for name, body in cases.items():
             broken = self.tmp / name.replace(" ", "-") / "py thon" / "python3"
             broken.parent.mkdir(parents=True)
-            broken.write_text("#!/bin/sh\n" + body)
+            broken.write_text("#!/bin/sh\n" + body, newline="\n")
             broken.chmod(0o755)
             for mode in ("hook", "session-start", "cli"):
                 with self.subTest(name=name, mode=mode):
-                    proc = self.run_script(str(broken.parent), *([] if mode == "hook" else [mode]), data=None)
+                    proc = self.run_script(posix(broken.parent), *([] if mode == "hook" else [mode]), data=None)
                     text = proc.stdout + proc.stderr
                     self.assertIn("is broken", text)
                     self.assertIn("python3", text)
                     self.assertIn("NOT enforced", text)
-                    self.assertNotIn(str(broken.parent), proc.stdout)
+                    self.assertNotIn(posix(broken.parent), proc.stdout)
                     self.assertEqual(proc.returncode, 2 if mode == "cli" else 0)
                     if mode == "hook":
                         self.assertEqual(json.loads(proc.stdout)["hookSpecificOutput"]["additionalContext"],
                                          json.loads(proc.stdout)["systemMessage"])
         self.stub(self.tmp / "ok" / "python3", "ok")
-        both = f"{self.tmp}/exits-1/py thon:{self.tmp}/ok"
-        self.assertTrue(self.run_script(both, "session-start").stdout.startswith("ok -I -S "), "a working python after a broken one")
+        both = f"{posix(self.tmp)}/exits-1/py thon:{posix(self.tmp)}/ok"
+        self.assertTrue(self.run_script(both, "session-start").stdout.startswith("ok -I -S -X utf8 "), "a working python after a broken one")
 
     def test_a_hook_python_that_dies_is_never_silent(self) -> None:
         self.ready_runtime(body="exit 7\n")
@@ -175,7 +179,7 @@ class StubbedCases(Base):
         self.assertIn("failed to run (exit 7)", json.loads(proc.stdout)["systemMessage"])
 
     def test_without_any_python_every_mode_says_so_and_never_fails_silently(self) -> None:
-        empty = str(self.tmp / "empty")
+        empty = posix(self.tmp / "empty")
         hook = self.run_script(empty)
         self.assertEqual(hook.returncode, 0)
         output = json.loads(hook.stdout)
@@ -194,10 +198,7 @@ def make_shell_class(shell: list[str]) -> type:
     return type(name, (StubbedCases, Isolated), {"SHELL": shell})
 
 
-for _shell in SHELLS:
-    _cls = make_shell_class(_shell)
-    globals()[_cls.__name__] = _cls
-del _cls
+globals().update({cls.__name__: cls for cls in map(make_shell_class, SHELLS)})
 
 
 class RealWrapperNotReady(Isolated):
@@ -210,7 +211,7 @@ class RealWrapperNotReady(Isolated):
 
     def run_script(self, *args: str, session: str = "s1") -> subprocess.CompletedProcess[str]:
         payload = json.dumps({"session_id": session, "tool_name": "Bash", "tool_input": {"command": "ls"}})
-        return subprocess.run(["sh", str(HOOKS / "guardrails.sh"), *args], input=payload, capture_output=True,
+        return subprocess.run(["sh", (HOOKS / "guardrails.sh").as_posix(), *args], input=payload, capture_output=True,
                               text=True, check=False, env=dict(os.environ), cwd=self.proj)
 
     def test_the_hook_allows_loudly_once_per_session_and_never_silently_fails(self) -> None:
@@ -231,13 +232,13 @@ class RealWrapperNotReady(Isolated):
     def test_the_cli_stops_with_one_line_but_engine_status_always_works(self) -> None:
         for argv in (("status",), ("rule", "list")):
             with self.subTest(argv=argv):
-                proc = subprocess.run(["sh", str(ROOT / "bin" / "guardrails"), *argv], capture_output=True, text=True,
+                proc = subprocess.run(["sh", (ROOT / "bin" / "guardrails").as_posix(), *argv], capture_output=True, text=True,
                                       check=False, env=dict(os.environ), cwd=self.proj)
                 self.assertEqual(proc.returncode, 2)
                 self.assertEqual(len(proc.stderr.strip().splitlines()), 1)
                 self.assertIn("connection to a download host failed", proc.stderr)
                 self.assertEqual(proc.stdout, "")
-        proc = subprocess.run(["sh", str(ROOT / "bin" / "guardrails"), "engine", "status"], capture_output=True, text=True,
+        proc = subprocess.run(["sh", (ROOT / "bin" / "guardrails").as_posix(), "engine", "status"], capture_output=True, text=True,
                               check=False, env=dict(os.environ), cwd=self.proj)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         self.assertIn("runtime: NOT ready (backoff)", proc.stdout)
@@ -247,7 +248,7 @@ class RealWrapperNotReady(Isolated):
 class RealWrapperReady(RealRuntime):
     def run_script(self, *args: str, env: dict[str, str] | None = None, cwd: Path | None = None
                    ) -> subprocess.CompletedProcess[str]:
-        return subprocess.run(["sh", str(HOOKS / "guardrails.sh"), *args], input="{}", capture_output=True, text=True,
+        return subprocess.run(["sh", (HOOKS / "guardrails.sh").as_posix(), *args], input="{}", capture_output=True, text=True,
                               check=False, env=env or dict(os.environ), cwd=cwd or self.proj)
 
     def test_session_start_is_quiet_and_the_cli_runs_on_the_managed_python_through_the_wrapper(self) -> None:
@@ -255,7 +256,7 @@ class RealWrapperReady(RealRuntime):
         self.assertEqual((proc.returncode, proc.stdout), (0, ""))
         for argv, needles in ((("engine", "status"), ("runtime: ready", "pins: uv ", "ast-grep-py 0.45.3", "platform: ",
                                                         "installed: Python 3.13.")), (("preset", "list"), ("process-safety",))):
-            proc = subprocess.run(["sh", str(ROOT / "bin" / "guardrails"), *argv], capture_output=True, text=True,
+            proc = subprocess.run(["sh", (ROOT / "bin" / "guardrails").as_posix(), *argv], capture_output=True, text=True,
                                   check=False, env=dict(os.environ), cwd=self.proj)
             self.assertEqual(proc.returncode, 0, proc.stderr)
             for needle in needles:
@@ -268,14 +269,14 @@ class RealWrapperReady(RealRuntime):
                            "tool_input": {"command": "sudo pkill x"}})
 
     def enforced(self, payload: str, env: dict[str, str], cwd: Path) -> bool:
-        proc = subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+        proc = subprocess.run(["sh", (HOOKS / "guardrails.sh").as_posix()], input=payload, capture_output=True, text=True,
                               check=False, env=env, cwd=cwd)
         return proc.returncode == 0 and '"permissionDecision": "deny"' in proc.stdout
 
     def test_a_relative_data_dir_gets_the_notice_and_nothing_runs_from_it(self) -> None:
         payload = self.deny_rule()
         (self.tmp / "data").mkdir(exist_ok=True)
-        proc = subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+        proc = subprocess.run(["sh", (HOOKS / "guardrails.sh").as_posix()], input=payload, capture_output=True, text=True,
                               check=False, env={**os.environ, "CLAUDE_PLUGIN_DATA": "data"}, cwd=self.tmp)
         self.assertEqual(proc.returncode, 0, proc.stderr)
         output = json.loads(proc.stdout)
@@ -286,7 +287,7 @@ class RealWrapperReady(RealRuntime):
         payload = self.deny_rule()
         self.put(self.spath, {"rules": self.get(self.gpath)["rules"]})
         self.gpath.unlink()
-        proc = subprocess.run(["sh", str(HOOKS / "guardrails.sh")], input=payload, capture_output=True, text=True,
+        proc = subprocess.run(["sh", (HOOKS / "guardrails.sh").as_posix()], input=payload, capture_output=True, text=True,
                               check=False, env=dict(os.environ), cwd=self.proj)
         output = json.loads(proc.stdout)
         self.assertIn(f"the state file {self.spath} still holds rules", output["systemMessage"])

@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, ClassVar
 from unittest import mock
 
-from helpers import Isolated
+from helpers import POSIX_PERMISSIONS, Isolated
 
 import store
 
@@ -113,6 +113,7 @@ class LoadWrite(Isolated):
         self.assertEqual(sorted(p.name for p in self.ppath.parent.iterdir()), ["guardrails.json"])
         self.assertEqual(sorted(p.name for p in self.data.iterdir()), ["config.lock"])
 
+    @POSIX_PERMISSIONS
     def test_the_first_rule_add_creates_the_config_dir_and_a_private_file(self) -> None:
         self.assertFalse((self.tmp / "xdg").exists())
         self.assertEqual(self.cli("rule", "add", "r", "--json", RULE)[0], 0)
@@ -284,6 +285,7 @@ class ManagedPath(Isolated):
             self.assertIn("NOT enforced", problems[0])
             self.assertIn("by hand", problems[0])
 
+    @POSIX_PERMISSIONS
     def test_unreadable_file_or_directory_is_reported_not_absent(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root can read anything")
@@ -318,6 +320,7 @@ class ManagedPath(Isolated):
         self.assertIn("managed rule bad is invalid and ignored", problems[0])
         self.assertIn("managed rule ghosty lists mode 'ghost'", problems[1])
 
+    @POSIX_PERMISSIONS
     def test_trust_problems(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("everything is owned by root")
@@ -333,6 +336,7 @@ class ManagedPath(Isolated):
 
 
 class ManagedWrite(Isolated):
+    @POSIX_PERMISSIONS
     def test_lock_file_is_not_followed_through_a_symlink(self) -> None:
         target = self.tmp / "victim"
         self.mpath.parent.mkdir()
@@ -341,6 +345,7 @@ class ManagedWrite(Isolated):
             pass
         self.assertFalse(target.exists())
 
+    @POSIX_PERMISSIONS
     def test_write_is_private_unless_public(self) -> None:
         store.write(self.gpath, {})
         store.write(self.mpath, {}, public=True)

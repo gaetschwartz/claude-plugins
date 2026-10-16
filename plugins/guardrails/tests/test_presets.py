@@ -3,7 +3,7 @@ from __future__ import annotations  # noqa: I001
 import os
 from typing import Any
 
-from helpers import AstIsolated, plain
+from helpers import AstIsolated, executable, plain
 
 import cli
 import engine
@@ -115,8 +115,7 @@ class Presets(AstIsolated):
         folder = self.tmp / ("bin-" + "-".join(names))
         folder.mkdir()
         for name in names:
-            (folder / name).write_text("#!/bin/sh\n")
-            (folder / name).chmod(0o755)
+            executable(folder / name)
         return str(folder)
 
     def warning(self, command: str) -> str | None:
@@ -485,8 +484,7 @@ class Installed(AstIsolated):
         folder = self.tmp / ("bin-" + "-".join(names))
         folder.mkdir()
         for name in names:
-            (folder / name).write_text("#!/bin/sh\n")
-            (folder / name).chmod(0o755)
+            executable(folder / name)
         return str(folder)
 
     def warned(self, command: str) -> str | None:

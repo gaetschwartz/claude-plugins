@@ -18,8 +18,10 @@ UV_WHEELS = {
     "darwin-x86_64": "macosx_10_12_x86_64",
     "linux-x86_64": "manylinux_2_17_x86_64.manylinux2014_x86_64",
     "linux-aarch64": "manylinux_2_17_aarch64.manylinux2014_aarch64.musllinux_1_1_aarch64",
+    "windows-x86_64": "win_amd64",
 }
-AST_GREP_WHEELS = ("macosx_10_12_x86_64", "macosx_11_0_arm64", "manylinux_2_28_aarch64", "manylinux_2_28_x86_64")
+AST_GREP_WHEELS = ("macosx_10_12_x86_64", "macosx_11_0_arm64", "manylinux_2_28_aarch64", "manylinux_2_28_x86_64",
+                   "win_amd64")
 LIB = Path(__file__).resolve().parent.parent / "lib"
 
 
@@ -43,7 +45,7 @@ def manifest(wheels: dict[str, dict[str, Any]]) -> dict[str, object]:
         name = f"uv-{UV}-py3-none-{tag}.whl"
         item = wheels[name]
         platforms[key] = {"url": item["url"], "sha256": item["digests"]["sha256"], "size": item["size"],
-                          "member": f"uv-{UV}.data/scripts/uv"}
+                          "member": f"uv-{UV}.data/scripts/uv{'.exe' if key.startswith('windows') else ''}"}
     return {"python": PYTHON, "astGrepPy": AST_GREP_PY,
             "uv": {"version": UV, "wheels": platforms}}
 
@@ -52,9 +54,9 @@ def main() -> None:
     document = json.dumps(manifest(release("uv", UV)), indent=2, sort_keys=True) + "\n"
     pinned = requirements(release("ast-grep-py", AST_GREP_PY))
     digest = hashlib.sha256((document + pinned).encode()).hexdigest()[:12]
-    (LIB / "runtime-manifest.json").write_text(document)
-    (LIB / "runtime-requirements.txt").write_text(pinned)
-    (LIB / "runtime-id").write_text(f"{digest}\n")
+    (LIB / "runtime-manifest.json").write_text(document, newline="\n")
+    (LIB / "runtime-requirements.txt").write_text(pinned, newline="\n")
+    (LIB / "runtime-id").write_text(f"{digest}\n", newline="\n")
 
 
 if __name__ == "__main__":

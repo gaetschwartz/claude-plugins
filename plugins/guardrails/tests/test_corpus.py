@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 
-from helpers import RealRuntime
+from helpers import RealRuntime, executable
 
 DENY = [
     "pkill foo",
@@ -118,9 +118,7 @@ class Corpus(RealRuntime):
         bin_dir = self.tmp / "bin"
         bin_dir.mkdir()
         for tool in ("fd", "rg"):
-            path = bin_dir / tool
-            path.write_text("#!/bin/sh\n")
-            path.chmod(0o755)
+            executable(bin_dir / tool)
         os.environ["PATH"] = f"{bin_dir}{os.pathsep}{os.environ.get('PATH', '')}"
         for preset in ("modern-cli", "process-safety", "docs-first"):
             self.assertEqual(self.cli("preset", "install", preset)[0], 0)

@@ -5,7 +5,7 @@ import os
 import unittest
 from typing import Any
 
-from helpers import AstIsolated, GREP_RECURSIVE, HOOKS, plain, RealRuntime
+from helpers import POSIX_PERMISSIONS, AstIsolated, GREP_RECURSIVE, HOOKS, plain, RealRuntime
 
 import matching
 import store
@@ -354,6 +354,7 @@ class ManagedHook(AstIsolated):
         self.assertEqual(decision(out), "deny")
         self.assertIn("no-pkill lists mode 'ghost'", out["systemMessage"])
 
+    @POSIX_PERMISSIONS
     def test_unreadable_parent_directory_warns_and_keeps_other_layers(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root can read anything")

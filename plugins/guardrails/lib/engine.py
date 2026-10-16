@@ -135,8 +135,8 @@ def report_broken() -> None:
 
 
 def judge(command: str, rules: dict[str, policy.Rule], env: conditions.Env,
-          after_fork: Callable[[], None] | None = None) -> Evaluation:
-    evaluation = matching.evaluate(command, rules, env, after_fork)
+          after_start: Callable[[], None] | None = None) -> Evaluation:
+    evaluation = matching.evaluate(command, rules, env, after_start)
     if evaluation.runtime_broken:
         report_broken()
     return evaluation

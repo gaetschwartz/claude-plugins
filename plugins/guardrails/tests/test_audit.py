@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import Any
 from unittest import mock
 
-from helpers import LIB, AstIsolated
+from helpers import FORK_ONLY, LIB, POSIX_PERMISSIONS, AstIsolated
 
 import audit
 import policy
@@ -219,6 +219,7 @@ class Ordering(Fixture):
             names.append(rel)
         return names
 
+    @POSIX_PERMISSIONS
     def test_early_stop_does_not_open_files_beyond_the_stopping_point(self) -> None:
         names = self.build_chain()
         straggler = self.write("p/zz-old.jsonl", denied("late", BASE - 5000), mtime=BASE - 4000)
@@ -346,6 +347,7 @@ class Robustness(Fixture):
         report = self.find()
         self.assertEqual((len(report.hits), report.corrupt), (1, 1))
 
+    @POSIX_PERMISSIONS
     def test_unreadable_and_empty_files_are_skipped(self) -> None:
         self.write("p/a.jsonl", denied("t1", BASE))
         self.write("p/empty.jsonl", [], mtime=BASE + 20_000).write_text("")
@@ -569,6 +571,7 @@ audit.attach_matched(report, {{}})
 print(json.dumps({{"before": before, "hits": len(report.hits), "after": {self.loaded()}}}))""")
         self.assertEqual(out, {"before": [], "hits": 0, "after": []})
 
+    @FORK_ONLY
     def test_workers_never_load_the_engine_and_the_main_process_loads_only_the_matcher_for_surviving_hits(self) -> None:
         self.write("p/a.jsonl", denied("t1", BASE))
         self.write("p/b.jsonl", denied("t2", BASE + 5), mtime=BASE + 20_000)

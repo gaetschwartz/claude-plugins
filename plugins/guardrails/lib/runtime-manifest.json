@@ -27,6 +27,12 @@
         "sha256": "680769ef701922dd93426b73476073411941f51ac46991a6e5c5a6efbf68a713",
         "size": 20587257,
         "url": "https://files.pythonhosted.org/packages/7a/b0/4cceeef80da0e8627bf3afb628930d5ea8e857f9c2aacbcda8598a5b82aa/uv-0.12.22-py3-none-manylinux_2_17_x86_64.manylinux2014_x86_64.whl"
+      },
+      "windows-x86_64": {
+        "member": "uv-0.12.22.data/scripts/uv.exe",
+        "sha256": "1c45b1e544901b9eef14806ad964cd1aca49338748e3d8030e41c4aed8b17b00",
+        "size": 18114353,
+        "url": "https://files.pythonhosted.org/packages/c0/a4/2cc0b670ac86d2cce4758126f06cc44a821a7d289e1cc73bbb485d77f135/uv-0.12.22-py3-none-win_amd64.whl"
       }
     }
   }

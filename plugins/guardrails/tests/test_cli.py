@@ -9,7 +9,7 @@ import unicodedata
 from unittest import mock
 
 import store
-from helpers import AstIsolated, caught
+from helpers import POSIX_PERMISSIONS, AstIsolated, caught
 
 RULE = ('{"match": {"command": "strings"}, "message": "Read the docs.", "retry": "same-command", '
         '"modes": ["reverse-engineering"]}')
@@ -176,6 +176,7 @@ class ManagedScope(AstIsolated):
     def managed(self, *argv: str, agent: bool = False) -> tuple[int, str, str]:
         return self.cli(*argv, "--scope", "managed", agent=agent)
 
+    @POSIX_PERMISSIONS
     def test_rules_round_trip_with_the_always_enforced_note_and_the_umask_ignored(self) -> None:
         old = os.umask(0o077)
         self.addCleanup(os.umask, old)
@@ -307,6 +308,7 @@ class ManagedScope(AstIsolated):
         self.assertIn("global and project rules are not enforced, managed rules still are", out)
         self.assertNotIn("fails open", out)
 
+    @POSIX_PERMISSIONS
     def test_status_names_an_unreadable_or_untrusted_managed_location(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root can read anything and owns everything")
@@ -321,6 +323,7 @@ class ManagedScope(AstIsolated):
         self.assertIn(f"`{self.mpath}` unreadable", out)
         self.assertIn("unreadable managed file", out)
 
+    @POSIX_PERMISSIONS
     def test_an_unwritable_managed_target_exits_2_with_a_sudo_hint_and_writes_nothing(self) -> None:
         if os.geteuid() == 0:
             self.skipTest("root ignores permissions")
@@ -521,7 +524,7 @@ class RuleTest(AstIsolated):
         self.assertEqual(self.cli("rule", "add", "a", "--json", f"@{spaced}")[0], 0)
         with stdin(self.DRAFT):
             self.assertEqual(self.cli("rule", "add", "b", "--json", "-")[0], 0)
-        with mock.patch.dict(os.environ, {"HOME": str(self.tmp / "my rules")}):
+        with mock.patch.dict(os.environ, {"HOME": str(self.tmp / "my rules"), "USERPROFILE": str(self.tmp / "my rules")}):
             self.assertEqual(self.cli("rule", "add", "c", "--json", "@~/rule.json")[0], 0)
         for rid in "abc":
             self.assertEqual(self.get(self.gpath)["rules"][rid]["message"], "docs")

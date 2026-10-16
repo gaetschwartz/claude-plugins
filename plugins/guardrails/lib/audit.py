@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import json
-import multiprocessing
 import os
 from collections import deque
 from collections.abc import Mapping
@@ -13,6 +12,8 @@ from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, NamedTuple, TypedDict
+
+import bounded
 
 if TYPE_CHECKING:
     import policy
@@ -408,7 +409,7 @@ def transcripts(root: Path) -> list[tuple[float, str, str]]:
             if name.endswith(".jsonl"):
                 full = os.path.join(folder, name)
                 try:
-                    found.append((os.stat(full).st_mtime, full, os.path.relpath(full, root)))
+                    found.append((os.stat(full).st_mtime, full, Path(os.path.relpath(full, root)).as_posix()))
                 except OSError:
                     continue
     found.sort(key=lambda f: (-f[0], f[2]))
@@ -430,7 +431,7 @@ def find_denials(root: Path, limit: int, query: Query, workers: int | None = Non
     count = worker_count(workers)
     window = 2 * count if count > 1 else 1
     held: dict[str, Found] = {}
-    pool = ProcessPoolExecutor(count, mp_context=multiprocessing.get_context("fork")) if count > 1 and len(files) > 1 else None
+    pool = ProcessPoolExecutor(count, mp_context=bounded.start_context()) if count > 1 and len(files) > 1 else None
     try:
         for first in range(0, len(files), window):
             batch = files[first:first + window]

@@ -1,17 +1,27 @@
 #!/bin/sh
-# guardrails.sh: no argument = the PreToolUse hook, `session-start`, or `cli ARGS...`
 mode=hook
 case ${1-} in session-start | cli) mode=$1; shift ;; esac
 lib=${0%/*}/../lib
-proj=${CLAUDE_PROJECT_DIR:-/nonexistent}
+proj=$(cd "${CLAUDE_PROJECT_DIR:-/nonexistent}" 2>/dev/null && pwd) || proj=/nonexistent
 here=$PWD
 for dir in / "$HOME"; do
-  if [ "$proj" = "$dir" ]; then proj=/nonexistent; fi
-  if [ "$here" = "$dir" ]; then here=/nonexistent; fi
+  if [ "$proj" -ef "$dir" ]; then proj=/nonexistent; fi
+  if [ "$here" -ef "$dir" ]; then here=/nonexistent; fi
 done
 
 usable() {
   case $1 in /*) [ -x "$1" ] ;; *) return 1 ;; esac
+}
+
+within() {
+  d=$1
+  while [ -n "$d" ]; do
+    if [ "$d" -ef "$2" ]; then return 0; fi
+    if [ "$d" = / ]; then return 1; fi
+    d=${d%/*}
+    : "${d:=/}"
+  done
+  return 1
 }
 
 works() { "$1" -I -S -c 'import sys; sys.exit(sys.version_info < (3, 9))' >/dev/null 2>&1; }
@@ -32,11 +42,13 @@ find_python() {
   oldifs=$IFS
   IFS=:
   for dir in $PATH; do
-    case $dir/ in "$proj"/* | "$here"/*) continue ;; esac
-    if usable "$dir/python3"; then
-      if works "$dir/python3"; then py=$dir/python3; break; fi
-      : "${broken:=$dir/python3}"
-    fi
+    for name in python3 python; do
+      if usable "$dir/$name"; then
+        if within "$dir" "$proj" || within "$dir" "$here"; then continue; fi
+        if works "$dir/$name"; then py=$dir/$name; break 2; fi
+        : "${broken:=$dir/$name}"
+      fi
+    done
   done
   IFS=$oldifs
 }
@@ -53,16 +65,18 @@ say() {
 if [ "$mode" != session-start ] && [ -n "${CLAUDE_PLUGIN_DATA-}" ] && read -r id < "$lib/runtime-id"; then
   rt=$CLAUDE_PLUGIN_DATA/runtime/$id
   case $rt in
-    /*)
-      if [ -f "$rt/marker.json" ] && [ ! -e "$rt/broken" ] && [ -x "$rt/venv/bin/python" ]; then
-        "$rt/venv/bin/python" -I "$lib/guard.py" "$@"
-        code=$?
-        if [ "$mode" = cli ]; then exit "$code"; fi
-        if [ "$code" -ne 0 ]; then
-          say "[guardrails plugin notice] the guardrails hook failed to run (exit $code), so guardrails rules are NOT enforced and this command was not checked. Tell the user about this now."
+    /* | [A-Za-z]:[\\/]*)
+      for venv_python in "$rt/venv/bin/python" "$rt/venv/Scripts/python.exe"; do
+        if [ -f "$rt/marker.json" ] && [ ! -e "$rt/broken" ] && [ -x "$venv_python" ]; then
+          "$venv_python" -I -X utf8 "$lib/guard.py" "$@"
+          code=$?
+          if [ "$mode" = cli ]; then exit "$code"; fi
+          if [ "$code" -ne 0 ]; then
+            say "[guardrails plugin notice] the guardrails hook failed to run (exit $code), so guardrails rules are NOT enforced and this command was not checked. Tell the user about this now."
+          fi
+          exit 0
         fi
-        exit 0
-      fi
+      done
       ;;
   esac
 fi
@@ -77,4 +91,4 @@ if [ -z "$py" ]; then
   say "[guardrails plugin notice] No usable python3 (3.9 or newer) was found, so the guardrails runtime cannot be installed and guardrails rules are NOT enforced. Tell the user about this now."
 fi
 if [ "$mode" = cli ]; then mode=run; fi
-exec "$py" -I -S "$lib/bootstrap.py" "$mode" "$@"
+exec "$py" -I -S -X utf8 "$lib/bootstrap.py" "$mode" "$@"

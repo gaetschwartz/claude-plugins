@@ -311,7 +311,7 @@ rule whose `when` does not hold costs nothing, writes no telemetry row, is `inac
 
 - `{"bin": "fd"}` or `{"bin": ["fd", "fdfind"]}`: one of these names is an executable on PATH (looked up once per name
   and PATH in a process). Names have no `/` and no spaces.
-- `{"os": "linux"}` or `{"os": "macos"}`; `{"arch": "arm64"}` or `{"arch": "x86_64"}` (`aarch64` reads as `arm64`,
+- `{"os": "linux"}`, `{"os": "macos"}` or `{"os": "windows"}`; `{"arch": "arm64"}` or `{"arch": "x86_64"}` (`aarch64` reads as `arm64`,
   `amd64` as `x86_64`).
 - `{"host": "box"}`: the host name, or its short form before the first dot, is exactly this.
 - `{"env": "CI"}`: the variable is set and not empty; `{"env": {"CI": "true"}}`: it equals this value (one variable per

@@ -41,7 +41,8 @@ def notice(found: Outcome) -> str:
 
 def spawn_ensure() -> None:
     """Start an ensure in the background, detached from the hook that asked for it."""
-    argv = [sys.executable, "-I", "-S", str(Path(bootstrap.__file__).resolve()), "ensure", "--quiet", "--no-wait"]
+    argv = [sys.executable, "-I", "-S", "-X", "utf8", str(Path(bootstrap.__file__).resolve()), "ensure", "--quiet",
+            "--no-wait"]
     env = {key: os.environ[key] for key in (*installer.ENV_ALLOWED, "CLAUDE_PLUGIN_DATA") if key in os.environ}
     with contextlib.suppress(OSError):
         subprocess.Popen(argv, stdin=subprocess.DEVNULL, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
@@ -107,10 +108,11 @@ def status_text(data: Path) -> str:
     return "\n".join(lines)
 
 
-def exec_guard(args: list[str]) -> None:
+def run_guard(args: list[str]) -> None:
     data = bootstrap.data_dir()
-    python = str(bootstrap.runtime_dir(data, bootstrap.load_pins()) / "venv" / "bin" / "python")
-    os.execv(python, [python, "-I", str(bootstrap.LIB / "guard.py"), *args])
+    python = str(bootstrap.venv_python(bootstrap.runtime_dir(data, bootstrap.load_pins())))
+    guard = str(bootstrap.LIB / "guard.py")
+    sys.exit(subprocess.run([python, "-I", "-X", "utf8", guard, *args], check=False).returncode)
 
 
 def say(text: str) -> None:
@@ -146,7 +148,7 @@ def run_command(args: list[str]) -> int:
     if found.state != "ready":
         found = bootstrap.ensure(data)
     if found.state in ("ready", "installed"):
-        exec_guard(args)
+        run_guard(args)
     say("another install is still running" if found.state == "busy" else notice(found).removeprefix(HEAD).split(TELL)[0])
     return 2
 
@@ -171,7 +173,7 @@ def main(argv: list[str]) -> int:
             return 0
         if command == "hook":
             if bootstrap.diagnose(bootstrap.data_dir()).state == "ready":
-                exec_guard([])
+                run_guard([])
             sys.stdout.write(hook(sys.stdin.read(), bootstrap.data_dir()))
             return 0
     except Exception as exc:  # noqa: BLE001
