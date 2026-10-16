@@ -1,0 +1,14 @@
+{
+  "name": "catppuccin",
+  "version": "0.1.0",
+  "author": {
+    "name": "Gaëtan Schwartz"
+  },
+  "description": "Catppuccin themes for Claude Code: Latte, Frappé, Macchiato and Mocha, selectable from /theme.",
+  "keywords": [
+    "catppuccin",
+    "theme",
+    "colors",
+    "appearance"
+  ]
+}
