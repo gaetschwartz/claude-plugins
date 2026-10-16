@@ -1,0 +1,16 @@
+{
+  "name": "themes",
+  "version": "0.1.0",
+  "author": {
+    "name": "Gaëtan Schwartz"
+  },
+  "description": "Colour themes for Claude Code, selectable from /theme: Catppuccin, Kanagawa and Rosé Pine.",
+  "keywords": [
+    "themes",
+    "catppuccin",
+    "kanagawa",
+    "rose-pine",
+    "colors",
+    "appearance"
+  ]
+}

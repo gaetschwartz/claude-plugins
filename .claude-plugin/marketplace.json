@@ -56,10 +56,10 @@
       "description": "Search with tgrep (Microsoft's trigram-indexed, ripgrep-compatible grep) instead of the Grep tool — a SessionStart hook keeps a tgrep server warm per repository without double-serving, a search skill that loads live index state and gets command shape, scoping and freshness right, and a hook skill to disable, exclude a repo, or stop a server."
     },
     {
-      "name": "catppuccin",
+      "name": "themes",
       "category": "appearance",
-      "source": "./plugins/catppuccin",
-      "description": "Catppuccin themes for Claude Code: Latte, Frappé, Macchiato and Mocha, selectable from /theme."
+      "source": "./plugins/themes",
+      "description": "Colour themes for Claude Code, selectable from /theme: Catppuccin, Kanagawa and Rosé Pine."
     }
   ]
 }
