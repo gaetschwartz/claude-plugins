@@ -207,6 +207,7 @@ if [ "$cfg_state" = stale ]; then
   items=$(python3 -I - "$cfg_old" "$cfg_new" "$fmt" <<'PY'
 import json, re, sys, tomllib
 
+sys.stdout.reconfigure(encoding="utf-8")  # stdout is captured by $(...); Windows would default to the locale code page
 old_p, new_p, fmt = sys.argv[1:4]
 if fmt != "toml":
     sys.exit(0)
