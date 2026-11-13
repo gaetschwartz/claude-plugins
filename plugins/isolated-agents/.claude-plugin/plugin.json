@@ -1,0 +1,6 @@
+{
+  "name": "isolated-agents",
+  "version": "0.1.0",
+  "description": "An isolated_agent tool that runs a task with none of the session's CLAUDE.md files, rules, memory or codebase: either one bare model completion, or a subagent confined to a fresh temp directory, fed from text files, with a choice of tools and skills.",
+  "keywords": ["mod", "subagent", "isolation", "context", "claude-md"]
+}

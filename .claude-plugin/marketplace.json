@@ -60,6 +60,12 @@
       "category": "appearance",
       "source": "./plugins/themes",
       "description": "Colour themes for Claude Code, selectable from /theme: Catppuccin, Kanagawa and Rosé Pine."
+    },
+    {
+      "name": "isolated-agents",
+      "category": "development",
+      "source": "./plugins/isolated-agents",
+      "description": "An isolated_agent tool that runs a task with none of the session's CLAUDE.md files, rules, memory or codebase: one bare model completion, or a subagent confined to a fresh temp directory, fed from text files via promptFile / @path, with a choice of tools and skills."
     }
   ]
 }
